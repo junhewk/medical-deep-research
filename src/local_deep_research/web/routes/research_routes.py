@@ -63,6 +63,13 @@ def progress_page(research_id):
     return render_template_with_defaults("pages/progress.html")
 
 
+@research_bp.route("/deep-progress/<string:research_id>")
+@login_required
+def deep_progress_page(research_id):
+    """Render the deep agent research progress page"""
+    return render_template_with_defaults("pages/deep_progress.html")
+
+
 @research_bp.route("/details/<string:research_id>")
 @login_required
 def research_details_page(research_id):
@@ -1302,12 +1309,12 @@ def get_research_report(research_id):
 )
 @login_required
 def export_research_report(research_id, format):
-    """Export research report to different formats (LaTeX, Quarto, RIS, or PDF)"""
+    """Export research report to different formats (LaTeX, Quarto, RIS, PDF, or Markdown)"""
     try:
-        if format not in ["latex", "quarto", "ris", "pdf"]:
+        if format not in ["latex", "quarto", "ris", "pdf", "markdown"]:
             return jsonify(
                 {
-                    "error": "Invalid format. Use 'latex', 'quarto', 'ris', or 'pdf'"
+                    "error": "Invalid format. Use 'latex', 'quarto', 'ris', 'pdf', or 'markdown'"
                 }
             ), 400
 

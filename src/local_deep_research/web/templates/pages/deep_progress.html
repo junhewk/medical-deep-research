@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+
+{% block title %}Deep Agent Research in Progress - Medical Deep Research{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/deep_agent.css">
+{% endblock %}
+
+{% block content %}
+<div class="ldr-page active" id="deep-research-progress">
+    <div class="ldr-page-header" id="research-progress-header">
+        <h1>Deep Agent Research</h1>
+    </div>
+
+    <!-- Research Query Card -->
+    <div class="ldr-card deep-agent-query-card" id="research-query-card">
+        <div class="ldr-card-content">
+            <div class="deep-agent-query-container">
+                <div class="deep-agent-query-label">Research Query:</div>
+                <div id="current-query" class="deep-agent-query-text"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Progress Panel -->
+    <div class="deep-agent-main-panel">
+        <!-- Left Column: Planning Steps -->
+        <div class="deep-agent-column deep-agent-planning-column">
+            <div class="ldr-card">
+                <div class="ldr-card-header">
+                    <h3><i class="fas fa-list-check"></i> Planning Steps</h3>
+                </div>
+                <div class="ldr-card-content">
+                    <div id="planning-steps-container" class="deep-agent-planning-steps">
+                        <div class="deep-agent-empty-state">
+                            <i class="fas fa-hourglass-start"></i>
+                            <p>Creating research plan...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Agent Status -->
+        <div class="deep-agent-column deep-agent-status-column">
+            <div class="ldr-card">
+                <div class="ldr-card-header">
+                    <h3><i class="fas fa-robot"></i> Agent Status</h3>
+                </div>
+                <div class="ldr-card-content">
+                    <div id="agent-status-container" class="deep-agent-status">
+                        <div class="deep-agent-status-card">
+                            <div class="deep-agent-status-header">
+                                <span class="deep-agent-name">Main Agent</span>
+                                <span class="deep-agent-state" id="agent-state">Idle</span>
+                            </div>
+                            <div class="deep-agent-status-details">
+                                <div class="deep-agent-detail-row">
+                                    <span class="deep-agent-detail-label">Current Tool:</span>
+                                    <span class="deep-agent-detail-value" id="agent-current-tool">-</span>
+                                </div>
+                                <div class="deep-agent-detail-row">
+                                    <span class="deep-agent-detail-label">Status:</span>
+                                    <span class="deep-agent-detail-value" id="agent-message">Initializing...</span>
+                                </div>
+                            </div>
+                            <div class="deep-agent-thinking-indicator" id="agent-thinking" style="display: none;">
+                                <span class="deep-agent-thinking-dot"></span>
+                                <span class="deep-agent-thinking-dot"></span>
+                                <span class="deep-agent-thinking-dot"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tool Execution Log -->
+    <div class="ldr-card deep-agent-tool-log-card">
+        <div class="ldr-card-header">
+            <h3><i class="fas fa-terminal"></i> Tool Execution Log</h3>
+            <div class="deep-agent-tool-log-controls">
+                <button class="btn ldr-btn-small" onclick="clearToolLog()">
+                    <i class="fas fa-trash"></i> Clear
+                </button>
+            </div>
+        </div>
+        <div class="ldr-card-content">
+            <div id="tool-log-container" class="deep-agent-tool-log">
+                <div class="deep-agent-tool-log-empty">
+                    <i class="fas fa-clock"></i>
+                    <span>Waiting for tool executions...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress Bar Section -->
+    <div class="ldr-card deep-agent-progress-card">
+        <div class="ldr-card-content">
+            <div class="deep-agent-progress-container">
+                <div class="deep-agent-progress-bar">
+                    <div id="progress-bar" class="deep-agent-progress-fill" style="width: 0%"></div>
+                </div>
+                <div class="deep-agent-progress-info">
+                    <span id="progress-percentage" class="deep-agent-progress-percentage">0%</span>
+                    <span id="progress-status" class="deep-agent-progress-status">Initializing...</span>
+                </div>
+            </div>
+            <div class="deep-agent-actions">
+                <button id="cancel-research-btn" class="btn ldr-btn-outline ldr-terminate-btn">
+                    <i class="fas fa-stop-circle"></i> Cancel Research
+                </button>
+                <a id="view-results-btn" class="btn btn-primary" style="display: none;">
+                    <i class="fas fa-eye"></i> View Results
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Collapsible Console Log -->
+    {% include "components/log_panel.html" %}
+</div>
+
+<!-- Planning Step Template -->
+<template id="planning-step-template">
+    <div class="deep-agent-step" data-step-id="">
+        <div class="deep-agent-step-indicator">
+            <span class="deep-agent-step-icon">
+                <i class="fas fa-circle"></i>
+            </span>
+        </div>
+        <div class="deep-agent-step-content">
+            <div class="deep-agent-step-header">
+                <span class="deep-agent-step-number"></span>
+                <span class="deep-agent-step-name"></span>
+            </div>
+            <div class="deep-agent-step-details">
+                <span class="deep-agent-step-action"></span>
+                <span class="deep-agent-step-duration"></span>
+            </div>
+        </div>
+    </div>
+</template>
+
+<!-- Tool Execution Entry Template -->
+<template id="tool-execution-template">
+    <div class="deep-agent-tool-entry" data-tool="">
+        <div class="deep-agent-tool-time"></div>
+        <div class="deep-agent-tool-name"></div>
+        <div class="deep-agent-tool-status">
+            <span class="deep-agent-tool-status-icon"></span>
+        </div>
+        <div class="deep-agent-tool-details"></div>
+    </div>
+</template>
+{% endblock %}
+
+{% block page_scripts %}
+<!-- Load required services -->
+<script src="/static/js/services/audio.js"></script>
+<script src="/static/js/services/formatting.js"></script>
+<script src="/static/js/services/api.js"></script>
+<script src="/static/js/services/socket.js"></script>
+
+<!-- Load deep agent components -->
+<script src="/static/js/components/planning_steps.js"></script>
+<script src="/static/js/components/agent_status.js"></script>
+<script src="/static/js/components/tool_log.js"></script>
+
+<!-- Deep progress controller -->
+<script>
+(function() {
+    'use strict';
+
+    // Get research ID from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const researchId = urlParams.get('id');
+
+    if (!researchId) {
+        console.error('No research ID provided');
+        return;
+    }
+
+    // Initialize components
+    const planningSteps = window.PlanningSteps ? new window.PlanningSteps('planning-steps-container') : null;
+    const agentStatus = window.AgentStatus ? new window.AgentStatus('agent-status-container') : null;
+    const toolLog = window.ToolLog ? new window.ToolLog('tool-log-container') : null;
+
+    // Set current query
+    const queryElement = document.getElementById('current-query');
+    if (queryElement && window.currentQuery) {
+        queryElement.textContent = window.currentQuery;
+    }
+
+    // Handle progress updates
+    function handleProgressUpdate(data) {
+        console.log('Deep progress update:', data);
+
+        // Update overall progress
+        if (data.progress !== undefined) {
+            updateProgressBar(data.progress);
+        }
+
+        // Update status message
+        if (data.message) {
+            updateStatus(data.message);
+        }
+
+        // Handle hierarchical progress data
+        if (data.hierarchical_progress || data.planning_steps) {
+            // Update planning steps
+            if (data.planning_steps && planningSteps) {
+                planningSteps.update(data.planning_steps);
+            }
+
+            // Update agent status
+            if (data.active_agents && agentStatus) {
+                agentStatus.update(data.active_agents);
+            }
+
+            // Update tool executions
+            if (data.tool_executions && toolLog) {
+                toolLog.update(data.tool_executions);
+            }
+        }
+
+        // Check for completion
+        if (data.status === 'completed' || data.status === 'failed') {
+            handleCompletion(data);
+        }
+    }
+
+    function updateProgressBar(progress) {
+        const bar = document.getElementById('progress-bar');
+        const percentage = document.getElementById('progress-percentage');
+        if (bar) {
+            bar.style.width = progress + '%';
+        }
+        if (percentage) {
+            percentage.textContent = progress + '%';
+        }
+    }
+
+    function updateStatus(message) {
+        const status = document.getElementById('progress-status');
+        if (status) {
+            status.textContent = message;
+        }
+        // Also update agent message if available
+        const agentMessage = document.getElementById('agent-message');
+        if (agentMessage) {
+            agentMessage.textContent = message;
+        }
+    }
+
+    function handleCompletion(data) {
+        const cancelBtn = document.getElementById('cancel-research-btn');
+        const viewBtn = document.getElementById('view-results-btn');
+
+        if (cancelBtn) {
+            cancelBtn.style.display = 'none';
+        }
+
+        if (viewBtn) {
+            viewBtn.style.display = 'inline-flex';
+            viewBtn.href = '/research/results?id=' + researchId;
+        }
+
+        // Update agent state
+        const agentState = document.getElementById('agent-state');
+        if (agentState) {
+            agentState.textContent = data.status === 'completed' ? 'Completed' : 'Failed';
+            agentState.className = 'deep-agent-state ' + (data.status === 'completed' ? 'state-completed' : 'state-failed');
+        }
+
+        // Hide thinking indicator
+        const thinking = document.getElementById('agent-thinking');
+        if (thinking) {
+            thinking.style.display = 'none';
+        }
+    }
+
+    // Subscribe to research updates
+    if (window.socket) {
+        window.socket.subscribeToResearch(researchId, handleProgressUpdate);
+
+        // Also listen for specific deep agent events
+        const socketInstance = window.socket.getSocketInstance();
+        if (socketInstance) {
+            socketInstance.on('planning_update_' + researchId, function(data) {
+                if (data.planning_steps && planningSteps) {
+                    planningSteps.update(data.planning_steps);
+                }
+            });
+
+            socketInstance.on('agent_status_' + researchId, function(data) {
+                if (data.active_agents && agentStatus) {
+                    agentStatus.update(data.active_agents);
+                }
+            });
+
+            socketInstance.on('tool_execution_' + researchId, function(data) {
+                if (data.tool_executions && toolLog) {
+                    toolLog.update(data.tool_executions);
+                }
+            });
+        }
+    }
+
+    // Cancel button handler
+    const cancelBtn = document.getElementById('cancel-research-btn');
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', function() {
+            if (confirm('Are you sure you want to cancel this research?')) {
+                // Call cancel API
+                fetch('/api/research/' + researchId + '/cancel', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').content
+                    }
+                }).then(function(response) {
+                    if (response.ok) {
+                        window.location.href = '/research/history';
+                    }
+                }).catch(function(error) {
+                    console.error('Cancel failed:', error);
+                });
+            }
+        });
+    }
+
+    // Global clear tool log function
+    window.clearToolLog = function() {
+        if (toolLog) {
+            toolLog.clear();
+        }
+    };
+
+    // Fetch initial status
+    if (window.api && window.api.getResearchStatus) {
+        window.api.getResearchStatus(researchId).then(function(data) {
+            if (data) {
+                handleProgressUpdate(data);
+                // Set the query
+                if (data.query && queryElement) {
+                    queryElement.textContent = data.query;
+                }
+            }
+        });
+    }
+})();
+</script>
+{% endblock %}

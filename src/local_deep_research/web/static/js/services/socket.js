@@ -186,6 +186,22 @@ window.socket = (function() {
                 socket.on(`progress_${researchId}`, (data) => {
                     handleProgressUpdate(researchId, data);
                 });
+
+                // Setup handlers for deep agent hierarchical progress events
+                socket.on(`planning_update_${researchId}`, (data) => {
+                    SafeLogger.log('Planning update for research', researchId);
+                    handleHierarchicalUpdate(researchId, 'planning', data);
+                });
+
+                socket.on(`agent_status_${researchId}`, (data) => {
+                    SafeLogger.log('Agent status update for research', researchId);
+                    handleHierarchicalUpdate(researchId, 'agent', data);
+                });
+
+                socket.on(`tool_execution_${researchId}`, (data) => {
+                    SafeLogger.log('Tool execution update for research', researchId);
+                    handleHierarchicalUpdate(researchId, 'tool', data);
+                });
             } catch (error) {
                 SafeLogger.error('Error subscribing to research:', error);
                 fallbackToPolling(researchId);
@@ -193,6 +209,42 @@ window.socket = (function() {
         } else {
             // If no socket connection, use polling
             fallbackToPolling(researchId);
+        }
+    }
+
+    /**
+     * Handle hierarchical progress updates from deep agent
+     * @param {string} researchId - The research ID
+     * @param {string} updateType - Type of update (planning, agent, tool)
+     * @param {Object} data - The update data
+     */
+    function handleHierarchicalUpdate(researchId, updateType, data) {
+        // Dispatch to registered handlers with hierarchical flag
+        const hierarchicalData = {
+            hierarchical_progress: true,
+            update_type: updateType
+        };
+
+        // Merge the specific data
+        if (updateType === 'planning' && data.planning_steps) {
+            hierarchicalData.planning_steps = data.planning_steps;
+        }
+        if (updateType === 'agent' && data.active_agents) {
+            hierarchicalData.active_agents = data.active_agents;
+        }
+        if (updateType === 'tool' && data.tool_executions) {
+            hierarchicalData.tool_executions = data.tool_executions;
+        }
+
+        // Call all registered event handlers for this research
+        if (researchEventHandlers[researchId]) {
+            researchEventHandlers[researchId].forEach(handler => {
+                try {
+                    handler(hierarchicalData);
+                } catch (error) {
+                    SafeLogger.error('Error in hierarchical update handler:', error);
+                }
+            });
         }
     }
 

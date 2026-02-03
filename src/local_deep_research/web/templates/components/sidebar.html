@@ -95,13 +95,19 @@
         <div class="ldr-sidebar-section" role="group" aria-labelledby="sidebar-settings-label">
             <div class="ldr-sidebar-section-label" id="sidebar-settings-label" role="heading" aria-level="2">Settings</div>
             <ul>
-                <li {% if active_page == 'embedding-settings' %}class="active"{% endif %} data-page="embedding-settings">
+                <li {% if active_page == 'ai-settings' %}class="active"{% endif %} data-page="ai-settings">
+                    <a href="{{ url_for('settings.ai_settings_page') }}" title="AI Settings - API Keys & Model Selection">
+                        <i class="fas fa-robot"></i>
+                        <span class="ldr-nav-text">AI Settings</span>
+                    </a>
+                </li>
+                <li {% if active_page == 'embedding-settings' %}class="active ldr-sidebar-item--nested"{% else %}class="ldr-sidebar-item--nested"{% endif %} data-page="embedding-settings">
                     <a href="{{ url_for('rag.embedding_settings_page') }}" title="Embedding Settings">
                         <i class="fas fa-brain"></i>
                         <span class="ldr-nav-text">Embeddings</span>
                     </a>
                 </li>
-                <li {% if active_page == 'settings' %}class="active"{% endif %} data-page="settings">
+                <li {% if active_page == 'settings' %}class="active ldr-sidebar-item--nested"{% else %}class="ldr-sidebar-item--nested"{% endif %} data-page="settings">
                     <a href="{{ url_for('settings.settings_page') }}" title="Settings (Ctrl+Shift+4)">
                         <i class="fas fa-cog"></i>
                         <span class="ldr-nav-text">Configuration</span>

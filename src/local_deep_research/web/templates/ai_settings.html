@@ -1,0 +1,810 @@
+{% extends "base.html" %}
+
+{% set active_page = 'ai-settings' %}
+
+{% block title %}AI Settings - Deep Research System{% endblock %}
+
+{% block extra_head %}
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<link rel="stylesheet" href="/static/css/settings.css">
+<style>
+    .ai-settings-container {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 2rem;
+    }
+
+    .ai-settings-tabs {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1.5rem;
+        border-bottom: 2px solid var(--border-color, #e0e0e0);
+        padding-bottom: 0;
+    }
+
+    .ai-settings-tab {
+        padding: 0.75rem 1.5rem;
+        cursor: pointer;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary, #666);
+        font-size: 1rem;
+        font-weight: 500;
+        border-bottom: 3px solid transparent;
+        margin-bottom: -2px;
+        transition: all 0.2s ease;
+    }
+
+    .ai-settings-tab:hover {
+        color: var(--text-primary, #333);
+        background: var(--hover-bg, rgba(0,0,0,0.05));
+    }
+
+    .ai-settings-tab.active {
+        color: var(--primary-color, #007bff);
+        border-bottom-color: var(--primary-color, #007bff);
+    }
+
+    .ai-settings-panel {
+        display: none;
+        animation: fadeIn 0.2s ease;
+    }
+
+    .ai-settings-panel.active {
+        display: block;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .api-key-section {
+        background: var(--card-bg, #fff);
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+    }
+
+    .api-key-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
+
+    .api-key-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+
+    .api-key-header .provider-icon {
+        font-size: 1.5rem;
+    }
+
+    .api-key-row {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+    }
+
+    .api-key-input {
+        flex: 1;
+        padding: 0.75rem 1rem;
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: 6px;
+        font-size: 0.95rem;
+        font-family: monospace;
+        background: var(--input-bg, #fff);
+        color: var(--text-primary, #333);
+    }
+
+    .api-key-input:focus {
+        outline: none;
+        border-color: var(--primary-color, #007bff);
+        box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
+    }
+
+    .btn-test {
+        padding: 0.75rem 1.25rem;
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: 6px;
+        background: var(--button-bg, #f5f5f5);
+        color: var(--text-primary, #333);
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .btn-test:hover {
+        background: var(--button-hover-bg, #e8e8e8);
+    }
+
+    .btn-test:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .btn-test .spinner {
+        display: none;
+        width: 14px;
+        height: 14px;
+        border: 2px solid #ccc;
+        border-top-color: var(--primary-color, #007bff);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+
+    .btn-test.testing .spinner {
+        display: inline-block;
+    }
+
+    .btn-test.testing .btn-text {
+        display: none;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    .status-indicator {
+        margin-left: 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    .status-valid {
+        color: #28a745;
+    }
+
+    .status-invalid {
+        color: #dc3545;
+    }
+
+    .status-not-set {
+        color: #6c757d;
+    }
+
+    .api-key-help {
+        margin-top: 0.75rem;
+        font-size: 0.85rem;
+        color: var(--text-secondary, #666);
+    }
+
+    .api-key-help a {
+        color: var(--primary-color, #007bff);
+        text-decoration: none;
+    }
+
+    .api-key-help a:hover {
+        text-decoration: underline;
+    }
+
+    .model-selection-section {
+        background: var(--card-bg, #fff);
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+    }
+
+    .model-selection-section h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+
+    .form-group {
+        margin-bottom: 1.25rem;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+        color: var(--text-primary, #333);
+    }
+
+    .form-group select {
+        width: 100%;
+        padding: 0.75rem 1rem;
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: 6px;
+        font-size: 0.95rem;
+        background: var(--input-bg, #fff);
+        color: var(--text-primary, #333);
+        cursor: pointer;
+    }
+
+    .form-group select:focus {
+        outline: none;
+        border-color: var(--primary-color, #007bff);
+        box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
+    }
+
+    .btn-save {
+        padding: 0.875rem 2rem;
+        background: var(--primary-color, #007bff);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        font-size: 1rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s ease;
+    }
+
+    .btn-save:hover {
+        background: var(--primary-hover, #0056b3);
+    }
+
+    .btn-save:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .alert {
+        padding: 1rem 1.25rem;
+        border-radius: 6px;
+        margin-bottom: 1rem;
+        display: none;
+    }
+
+    .alert.show {
+        display: block;
+    }
+
+    .alert-success {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+
+    .alert-error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+
+    .ollama-url-group {
+        margin-top: 0.75rem;
+    }
+
+    .ollama-url-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-size: 0.9rem;
+        color: var(--text-secondary, #666);
+    }
+
+    .page-description {
+        color: var(--text-secondary, #666);
+        margin-bottom: 1.5rem;
+        line-height: 1.6;
+    }
+
+    .get-keys-section {
+        background: var(--card-bg-alt, #f8f9fa);
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: 8px;
+        padding: 1.25rem;
+        margin-top: 1.5rem;
+    }
+
+    .get-keys-section h4 {
+        margin: 0 0 0.75rem 0;
+        font-size: 1rem;
+        font-weight: 600;
+    }
+
+    .get-keys-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .get-keys-list li {
+        margin-bottom: 0.5rem;
+    }
+
+    .get-keys-list a {
+        color: var(--primary-color, #007bff);
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .get-keys-list a:hover {
+        text-decoration: underline;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ldr-page active" id="ai-settings">
+    <div class="ai-settings-container">
+        <div class="ldr-page-header">
+            <h1><i class="fas fa-robot"></i> AI Settings</h1>
+            <p class="page-description">
+                Configure your AI providers and model preferences. Add API keys to use cloud-based models,
+                or connect to local models via Ollama. Your API keys are stored encrypted in the database.
+            </p>
+        </div>
+
+        <div id="settings-alert" class="alert"></div>
+
+        <div class="ai-settings-tabs">
+            <button class="ai-settings-tab active" data-tab="api-keys">
+                <i class="fas fa-key"></i> API Keys
+            </button>
+            <button class="ai-settings-tab" data-tab="model-selection">
+                <i class="fas fa-sliders-h"></i> Model Selection
+            </button>
+        </div>
+
+        <!-- API Keys Panel -->
+        <div class="ai-settings-panel active" id="panel-api-keys">
+            <!-- OpenAI -->
+            <div class="api-key-section">
+                <div class="api-key-header">
+                    <span class="provider-icon">🤖</span>
+                    <h3>OpenAI</h3>
+                    <span class="status-indicator" id="status-openai"></span>
+                </div>
+                <div class="api-key-row">
+                    <input type="password"
+                           class="api-key-input"
+                           id="openai-api-key"
+                           placeholder="sk-..."
+                           autocomplete="off">
+                    <button class="btn-test" data-provider="openai">
+                        <span class="spinner"></span>
+                        <span class="btn-text">Test</span>
+                    </button>
+                </div>
+                <p class="api-key-help">
+                    Get your API key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a>
+                </p>
+            </div>
+
+            <!-- Anthropic (Claude) -->
+            <div class="api-key-section">
+                <div class="api-key-header">
+                    <span class="provider-icon">🎭</span>
+                    <h3>Claude (Anthropic)</h3>
+                    <span class="status-indicator" id="status-anthropic"></span>
+                </div>
+                <div class="api-key-row">
+                    <input type="password"
+                           class="api-key-input"
+                           id="anthropic-api-key"
+                           placeholder="sk-ant-..."
+                           autocomplete="off">
+                    <button class="btn-test" data-provider="anthropic">
+                        <span class="spinner"></span>
+                        <span class="btn-text">Test</span>
+                    </button>
+                </div>
+                <p class="api-key-help">
+                    Get your API key at <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a>
+                </p>
+            </div>
+
+            <!-- Google (Gemini) -->
+            <div class="api-key-section">
+                <div class="api-key-header">
+                    <span class="provider-icon">💎</span>
+                    <h3>Gemini (Google)</h3>
+                    <span class="status-indicator" id="status-google"></span>
+                </div>
+                <div class="api-key-row">
+                    <input type="password"
+                           class="api-key-input"
+                           id="google-api-key"
+                           placeholder="AIza..."
+                           autocomplete="off">
+                    <button class="btn-test" data-provider="google">
+                        <span class="spinner"></span>
+                        <span class="btn-text">Test</span>
+                    </button>
+                </div>
+                <p class="api-key-help">
+                    Get your API key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com/app/apikey</a>
+                </p>
+            </div>
+
+            <!-- Ollama (Local) -->
+            <div class="api-key-section">
+                <div class="api-key-header">
+                    <span class="provider-icon">🦙</span>
+                    <h3>Ollama (Local)</h3>
+                    <span class="status-indicator" id="status-ollama"></span>
+                </div>
+                <div class="ollama-url-group">
+                    <label for="ollama-url">Ollama Server URL</label>
+                    <div class="api-key-row">
+                        <input type="text"
+                               class="api-key-input"
+                               id="ollama-url"
+                               placeholder="http://localhost:11434"
+                               value="http://localhost:11434">
+                        <button class="btn-test" data-provider="ollama">
+                            <span class="spinner"></span>
+                            <span class="btn-text">Test</span>
+                        </button>
+                    </div>
+                </div>
+                <p class="api-key-help">
+                    Run models locally with <a href="https://ollama.ai/" target="_blank">Ollama</a>. No API key required.
+                </p>
+            </div>
+
+            <button class="btn-save" id="save-api-keys">
+                <i class="fas fa-save"></i> Save API Keys
+            </button>
+
+            <div class="get-keys-section">
+                <h4><i class="fas fa-external-link-alt"></i> Get API Keys</h4>
+                <ul class="get-keys-list">
+                    <li><a href="https://platform.openai.com/api-keys" target="_blank"><i class="fas fa-arrow-right"></i> OpenAI - GPT-4, GPT-4o, o1</a></li>
+                    <li><a href="https://console.anthropic.com/" target="_blank"><i class="fas fa-arrow-right"></i> Anthropic - Claude 3.5 Sonnet, Claude 3 Opus</a></li>
+                    <li><a href="https://aistudio.google.com/app/apikey" target="_blank"><i class="fas fa-arrow-right"></i> Google - Gemini Pro, Gemini Ultra</a></li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Model Selection Panel -->
+        <div class="ai-settings-panel" id="panel-model-selection">
+            <div class="model-selection-section">
+                <h3><i class="fas fa-microchip"></i> Default Model Configuration</h3>
+
+                <div class="form-group">
+                    <label for="llm-provider">AI Provider</label>
+                    <select id="llm-provider">
+                        <option value="">Loading providers...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="llm-model">Model</label>
+                    <select id="llm-model">
+                        <option value="">Select a provider first</option>
+                    </select>
+                </div>
+
+                <button class="btn-save" id="save-model-selection">
+                    <i class="fas fa-save"></i> Save Model Selection
+                </button>
+            </div>
+
+            <div class="model-selection-section">
+                <h3><i class="fas fa-info-circle"></i> Model Information</h3>
+                <p style="color: var(--text-secondary); line-height: 1.6;">
+                    The selected model will be used for all research tasks. Different models have different capabilities and pricing:
+                </p>
+                <ul style="margin-top: 0.5rem; padding-left: 1.5rem; color: var(--text-secondary); line-height: 1.8;">
+                    <li><strong>GPT-4o</strong> - Fast, capable, cost-effective (OpenAI)</li>
+                    <li><strong>Claude 3.5 Sonnet</strong> - Excellent at analysis and writing (Anthropic)</li>
+                    <li><strong>Gemini Pro</strong> - Good for general tasks (Google)</li>
+                    <li><strong>Local models (Ollama)</strong> - Free, private, runs on your machine</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block page_scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
+    // Tab switching
+    const tabs = document.querySelectorAll('.ai-settings-tab');
+    const panels = document.querySelectorAll('.ai-settings-panel');
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const targetTab = tab.dataset.tab;
+
+            tabs.forEach(t => t.classList.remove('active'));
+            panels.forEach(p => p.classList.remove('active'));
+
+            tab.classList.add('active');
+            document.getElementById('panel-' + targetTab).classList.add('active');
+        });
+    });
+
+    // Show alert message
+    function showAlert(message, type) {
+        const alert = document.getElementById('settings-alert');
+        alert.textContent = message;
+        alert.className = 'alert show alert-' + type;
+        setTimeout(() => {
+            alert.classList.remove('show');
+        }, 5000);
+    }
+
+    // Load current settings
+    async function loadCurrentSettings() {
+        try {
+            // Load API keys (masked)
+            const settingsResponse = await fetch('/settings/api', {
+                headers: { 'X-CSRFToken': csrfToken }
+            });
+            const settings = await settingsResponse.json();
+
+            // Check if keys are set (show status indicators)
+            if (settings['llm.openai.api_key']) {
+                document.getElementById('openai-api-key').placeholder = '••••••••••••••••';
+                updateStatus('openai', 'set');
+            }
+            if (settings['llm.anthropic.api_key']) {
+                document.getElementById('anthropic-api-key').placeholder = '••••••••••••••••';
+                updateStatus('anthropic', 'set');
+            }
+            if (settings['llm.google.api_key']) {
+                document.getElementById('google-api-key').placeholder = '••••••••••••••••';
+                updateStatus('google', 'set');
+            }
+            if (settings['llm.ollama.url']) {
+                document.getElementById('ollama-url').value = settings['llm.ollama.url'];
+            }
+
+            // Load provider/model selection
+            const currentProvider = settings['llm.provider'] || 'openai';
+            const currentModel = settings['llm.model'] || '';
+
+            // Load available models
+            await loadProviderOptions(currentProvider, currentModel);
+
+        } catch (error) {
+            console.error('Error loading settings:', error);
+        }
+    }
+
+    // Update status indicator
+    function updateStatus(provider, status) {
+        const indicator = document.getElementById('status-' + provider);
+        if (!indicator) return;
+
+        if (status === 'valid') {
+            indicator.innerHTML = '<i class="fas fa-check-circle status-valid"></i> Valid';
+            indicator.className = 'status-indicator status-valid';
+        } else if (status === 'invalid') {
+            indicator.innerHTML = '<i class="fas fa-times-circle status-invalid"></i> Invalid';
+            indicator.className = 'status-indicator status-invalid';
+        } else if (status === 'set') {
+            indicator.innerHTML = '<i class="fas fa-circle status-not-set"></i> Configured';
+            indicator.className = 'status-indicator status-not-set';
+        } else {
+            indicator.innerHTML = '';
+        }
+    }
+
+    // Test connection buttons
+    document.querySelectorAll('.btn-test').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            const provider = this.dataset.provider;
+            let apiKey = '';
+            let baseUrl = '';
+
+            if (provider === 'ollama') {
+                baseUrl = document.getElementById('ollama-url').value;
+            } else if (provider === 'openai') {
+                apiKey = document.getElementById('openai-api-key').value;
+            } else if (provider === 'anthropic') {
+                apiKey = document.getElementById('anthropic-api-key').value;
+            } else if (provider === 'google') {
+                apiKey = document.getElementById('google-api-key').value;
+            }
+
+            // Check if key is provided for cloud providers
+            if (provider !== 'ollama' && !apiKey) {
+                showAlert('Please enter an API key first', 'error');
+                return;
+            }
+
+            // Show loading state
+            this.classList.add('testing');
+            this.disabled = true;
+
+            try {
+                const response = await fetch('/settings/api/test-connection', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    },
+                    body: JSON.stringify({
+                        provider: provider,
+                        api_key: apiKey,
+                        base_url: baseUrl
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    updateStatus(provider, 'valid');
+                    showAlert(result.message, 'success');
+                } else {
+                    updateStatus(provider, 'invalid');
+                    showAlert(result.message, 'error');
+                }
+            } catch (error) {
+                updateStatus(provider, 'invalid');
+                showAlert('Connection test failed: ' + error.message, 'error');
+            } finally {
+                this.classList.remove('testing');
+                this.disabled = false;
+            }
+        });
+    });
+
+    // Save API keys
+    document.getElementById('save-api-keys').addEventListener('click', async function() {
+        this.disabled = true;
+        this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+
+        try {
+            const settings = {};
+
+            // Only save non-empty values
+            const openaiKey = document.getElementById('openai-api-key').value;
+            const anthropicKey = document.getElementById('anthropic-api-key').value;
+            const googleKey = document.getElementById('google-api-key').value;
+            const ollamaUrl = document.getElementById('ollama-url').value;
+
+            if (openaiKey) settings['llm.openai.api_key'] = openaiKey;
+            if (anthropicKey) settings['llm.anthropic.api_key'] = anthropicKey;
+            if (googleKey) settings['llm.google.api_key'] = googleKey;
+            if (ollamaUrl) settings['llm.ollama.url'] = ollamaUrl;
+
+            const response = await fetch('/settings/save_all_settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify(settings)
+            });
+
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                showAlert('API keys saved successfully!', 'success');
+                // Clear input fields after save (they're stored securely)
+                document.getElementById('openai-api-key').value = '';
+                document.getElementById('anthropic-api-key').value = '';
+                document.getElementById('google-api-key').value = '';
+
+                // Update placeholders to show keys are set
+                if (openaiKey) document.getElementById('openai-api-key').placeholder = '••••••••••••••••';
+                if (anthropicKey) document.getElementById('anthropic-api-key').placeholder = '••••••••••••••••';
+                if (googleKey) document.getElementById('google-api-key').placeholder = '••••••••••••••••';
+            } else {
+                showAlert('Error saving settings: ' + result.message, 'error');
+            }
+        } catch (error) {
+            showAlert('Error saving settings: ' + error.message, 'error');
+        } finally {
+            this.disabled = false;
+            this.innerHTML = '<i class="fas fa-save"></i> Save API Keys';
+        }
+    });
+
+    // Load provider options
+    async function loadProviderOptions(currentProvider, currentModel) {
+        try {
+            const response = await fetch('/settings/api/available-models', {
+                headers: { 'X-CSRFToken': csrfToken }
+            });
+            const data = await response.json();
+
+            const providerSelect = document.getElementById('llm-provider');
+            const modelSelect = document.getElementById('llm-model');
+
+            // Populate providers
+            providerSelect.innerHTML = '';
+            if (data.provider_options) {
+                data.provider_options.forEach(opt => {
+                    const option = document.createElement('option');
+                    option.value = opt.value;
+                    option.textContent = opt.label;
+                    if (opt.value.toLowerCase() === currentProvider.toLowerCase()) {
+                        option.selected = true;
+                    }
+                    providerSelect.appendChild(option);
+                });
+            }
+
+            // Store providers data for model updates
+            window.providersData = data.providers || {};
+
+            // Update models for current provider
+            updateModelOptions(currentProvider, currentModel);
+
+            // Handle provider change
+            providerSelect.addEventListener('change', function() {
+                updateModelOptions(this.value, '');
+            });
+
+        } catch (error) {
+            console.error('Error loading providers:', error);
+        }
+    }
+
+    // Update model options based on provider
+    function updateModelOptions(provider, currentModel) {
+        const modelSelect = document.getElementById('llm-model');
+        modelSelect.innerHTML = '';
+
+        const providerKey = provider.toLowerCase() + '_models';
+        const models = window.providersData[providerKey] || [];
+
+        if (models.length === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No models available for this provider';
+            modelSelect.appendChild(option);
+            return;
+        }
+
+        models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.value;
+            option.textContent = model.label;
+            if (model.value === currentModel) {
+                option.selected = true;
+            }
+            modelSelect.appendChild(option);
+        });
+    }
+
+    // Save model selection
+    document.getElementById('save-model-selection').addEventListener('click', async function() {
+        this.disabled = true;
+        this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+
+        try {
+            const settings = {
+                'llm.provider': document.getElementById('llm-provider').value,
+                'llm.model': document.getElementById('llm-model').value
+            };
+
+            const response = await fetch('/settings/save_all_settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify(settings)
+            });
+
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                showAlert('Model selection saved successfully!', 'success');
+            } else {
+                showAlert('Error saving model selection: ' + result.message, 'error');
+            }
+        } catch (error) {
+            showAlert('Error saving model selection: ' + error.message, 'error');
+        } finally {
+            this.disabled = false;
+            this.innerHTML = '<i class="fas fa-save"></i> Save Model Selection';
+        }
+    });
+
+    // Initial load
+    loadCurrentSettings();
+});
+</script>
+{% endblock %}

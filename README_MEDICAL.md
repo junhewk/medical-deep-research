@@ -74,7 +74,33 @@ Automatic tagging of studies based on evidence hierarchy:
 
 ## Installation
 
-### Option 1: Docker (Recommended)
+### Option 1: Easy Install (Recommended for Beginners)
+
+The easiest way to install Medical Deep Research is using the one-click installer:
+
+**macOS/Linux:**
+```bash
+# Download and run installer
+curl -O https://raw.githubusercontent.com/junhewk/medical-deep-research/main/install.py
+python3 install.py
+
+# Start the application
+./start.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+# Download and run installer
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/junhewk/medical-deep-research/main/install.py" -OutFile install.py
+python install.py
+
+# Start the application (double-click start.bat or run:)
+.\start.bat
+```
+
+Access the web interface at: **http://localhost:5000**
+
+### Option 2: Docker
 
 ```bash
 curl -O https://raw.githubusercontent.com/junhewk/medical-deep-research/main/docker-compose.yml
@@ -83,15 +109,43 @@ docker compose up -d
 
 Access at: http://localhost:5000
 
-### Option 2: pip
+### Option 3: Manual pip Install
 
 ```bash
-pip install local-deep-research
+# Clone the repository
+git clone https://github.com/junhewk/medical-deep-research.git
+cd medical-deep-research
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# Install
+pip install -e .
+
+# Run
+ldr-web
 ```
 
 ## Quick Start
 
-### 1. Configure Search Engine
+### 1. Configure AI Provider (New!)
+
+In the web UI, configure your AI provider and API keys:
+
+1. Open http://localhost:5000 and create an account
+2. Go to **AI Settings** in the sidebar (robot icon)
+3. Add your API key for OpenAI, Claude, or Gemini
+4. Click "Test" to verify your connection
+5. Select your preferred model in the "Model Selection" tab
+
+**Supported Providers:**
+- **OpenAI**: GPT-4o, GPT-4, o1 (requires API key)
+- **Claude**: Claude 3.5 Sonnet, Claude 3 Opus (requires API key)
+- **Gemini**: Gemini Pro, Gemini Ultra (requires API key)
+- **Ollama**: Run models locally, no API key needed
+
+### 2. Configure Search Engine
 
 In the web UI (http://localhost:5000), set PubMed Medical as your primary search engine:
 
@@ -99,7 +153,7 @@ In the web UI (http://localhost:5000), set PubMed Medical as your primary search
 2. Select "PubMed (Medical Research)"
 3. Optionally add your NCBI API key for higher rate limits
 
-### 2. PICO-Based Search
+### 3. PICO-Based Search
 
 Enter your clinical question in PICO format:
 
@@ -109,13 +163,23 @@ Intervention: Integrated oral health management
 Outcome: HbA1c levels
 ```
 
-### 3. Evidence-Focused Research
+### 4. Evidence-Focused Research
 
 The system will:
 1. Map terms to MeSH vocabulary
 2. Search PubMed, Semantic Scholar, and Cochrane
 3. Tag results by evidence level
 4. Prioritize systematic reviews and RCTs
+
+### 5. Export Your Results
+
+After completing research, export your results in multiple formats:
+
+- **Markdown** (.md) - Perfect for Obsidian and other note-taking apps
+- **PDF** - Professional reports for sharing
+- **LaTeX** (.tex) - For academic papers
+- **Quarto** (.qmd + .bib) - For reproducible research documents
+- **RIS** - Import citations into reference managers (Zotero, Mendeley, etc.)
 
 ## Configuration
 

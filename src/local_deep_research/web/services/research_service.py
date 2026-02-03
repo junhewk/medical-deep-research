@@ -19,6 +19,7 @@ from ...error_handling.report_generator import ErrorReportGenerator
 from ...utilities.thread_context import set_search_context
 from ...report_generator import IntegratedReportGenerator
 from ...search_system import AdvancedSearchSystem
+from ...deep_agent_system import DeepAgentResearchSystem
 from ...text_optimization import CitationFormatter, CitationMode
 from ...utilities.log_utils import log_for_research
 from ...utilities.search_utilities import extract_links_from_search_results
@@ -160,6 +161,33 @@ def export_report_to_memory(
 
         logger.info("Generated RIS in memory")
         return exported_content.encode("utf-8"), filename, "text/plain"
+
+    elif format == "markdown":
+        from datetime import datetime
+
+        # Generate safe filename
+        safe_title = (
+            re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "_")[:50]
+            if title
+            else "research_report"
+        )
+
+        # Escape title for YAML (handle quotes and special characters)
+        escaped_title = title.replace('"', '\\"') if title else "Research Report"
+
+        # Add YAML frontmatter with metadata
+        frontmatter = f'''---
+title: "{escaped_title}"
+date: "{datetime.now().strftime('%Y-%m-%d')}"
+source: "Medical Deep Research"
+---
+
+'''
+        exported_content = frontmatter + markdown_content
+        filename = f"{safe_title}.md"
+
+        logger.info("Generated Markdown with frontmatter in memory")
+        return exported_content.encode("utf-8"), filename, "text/markdown"
 
     else:
         raise ValueError(f"Unsupported export format: {format}")
@@ -663,18 +691,37 @@ def run_research_process(
                 # For other errors, re-raise to avoid silent failures
                 raise
 
-        # Set the progress callback in the system
-        system = AdvancedSearchSystem(
-            llm=use_llm,
-            search=use_search,
-            strategy_name=strategy,
-            max_iterations=iterations,
-            questions_per_iteration=questions_per_iteration,
-            username=username,
-            settings_snapshot=settings_snapshot,
-            research_id=research_id,
-            research_context=shared_research_context,
-        )
+        # Determine which system to use based on settings
+        # Check if deep agent mode is enabled (default to True for new architecture)
+        use_deep_agent = settings_context.get_setting("deep_agent.enabled", True)
+
+        if use_deep_agent:
+            # Use the new Deep Agent Research System
+            logger.info("Using DeepAgentResearchSystem for research")
+            system = DeepAgentResearchSystem(
+                llm=use_llm,
+                search=use_search,
+                max_iterations=iterations or 10,
+                enable_sub_agents=settings_context.get_setting("deep_agent.enable_sub_agents", True),
+                username=username,
+                settings_snapshot=settings_snapshot,
+                research_id=research_id,
+                research_context=shared_research_context,
+            )
+        else:
+            # Fallback to legacy AdvancedSearchSystem
+            logger.info("Using legacy AdvancedSearchSystem for research")
+            system = AdvancedSearchSystem(
+                llm=use_llm,
+                search=use_search,
+                strategy_name=strategy,
+                max_iterations=iterations,
+                questions_per_iteration=questions_per_iteration,
+                username=username,
+                settings_snapshot=settings_snapshot,
+                research_id=research_id,
+                research_context=shared_research_context,
+            )
         system.set_progress_callback(progress_callback)
 
         # Run the search

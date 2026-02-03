@@ -2569,3 +2569,159 @@ def api_test_notification_url():
                 "error": "Failed to test notification service. Check logs for details.",
             }
         ), 500
+
+
+@settings_bp.route("/ai", methods=["GET"])
+@login_required
+def ai_settings_page():
+    """Dedicated AI settings page for API keys and model selection"""
+    return render_template_with_defaults("ai_settings.html")
+
+
+@settings_bp.route("/api/test-connection", methods=["POST"])
+@login_required
+def test_llm_connection():
+    """Test an LLM provider connection with the given API key"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"status": "error", "message": "No data provided"}), 400
+
+        provider = data.get("provider", "").lower()
+        api_key = data.get("api_key", "")
+
+        if not provider:
+            return jsonify({"status": "error", "message": "Provider not specified"}), 400
+
+        # For local providers (Ollama), test without API key
+        if provider == "ollama":
+            try:
+                raw_base_url = data.get("base_url") or _get_setting_from_session(
+                    "llm.ollama.url", "http://localhost:11434"
+                )
+                base_url = (
+                    normalize_url(raw_base_url)
+                    if raw_base_url
+                    else "http://localhost:11434"
+                )
+
+                response = safe_get(
+                    f"{base_url}/api/tags",
+                    timeout=5,
+                    allow_localhost=True,
+                    allow_private_ips=True,
+                )
+
+                if response.status_code == 200:
+                    models = response.json().get("models", [])
+                    return jsonify({
+                        "status": "success",
+                        "message": f"Connected to Ollama. Found {len(models)} models.",
+                    })
+                else:
+                    return jsonify({
+                        "status": "error",
+                        "message": f"Ollama returned status {response.status_code}",
+                    })
+            except Exception as e:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Cannot connect to Ollama: {str(e)}",
+                })
+
+        # For cloud providers, require API key
+        if not api_key:
+            return jsonify({"status": "error", "message": "API key not provided"}), 400
+
+        # Test OpenAI
+        if provider == "openai":
+            try:
+                import openai
+                client = openai.OpenAI(api_key=api_key)
+                # Simple models list request to verify key
+                models = client.models.list()
+                model_count = len(list(models))
+                return jsonify({
+                    "status": "success",
+                    "message": f"OpenAI API key is valid. Access to {model_count} models.",
+                })
+            except openai.AuthenticationError:
+                return jsonify({
+                    "status": "error",
+                    "message": "Invalid OpenAI API key",
+                })
+            except Exception as e:
+                return jsonify({
+                    "status": "error",
+                    "message": f"OpenAI connection error: {str(e)}",
+                })
+
+        # Test Anthropic (Claude)
+        elif provider in ["anthropic", "claude"]:
+            try:
+                import anthropic
+                client = anthropic.Anthropic(api_key=api_key)
+                # Make a minimal request to verify key
+                # Using messages API with minimal tokens
+                response = client.messages.create(
+                    model="claude-3-haiku-20240307",
+                    max_tokens=1,
+                    messages=[{"role": "user", "content": "Hi"}]
+                )
+                return jsonify({
+                    "status": "success",
+                    "message": "Claude API key is valid.",
+                })
+            except anthropic.AuthenticationError:
+                return jsonify({
+                    "status": "error",
+                    "message": "Invalid Claude API key",
+                })
+            except Exception as e:
+                error_msg = str(e)
+                # Handle rate limits gracefully - key is still valid
+                if "rate" in error_msg.lower():
+                    return jsonify({
+                        "status": "success",
+                        "message": "Claude API key is valid (rate limited during test).",
+                    })
+                return jsonify({
+                    "status": "error",
+                    "message": f"Claude connection error: {error_msg}",
+                })
+
+        # Test Google (Gemini)
+        elif provider in ["google", "gemini"]:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+                # List models to verify key
+                models = list(genai.list_models())
+                return jsonify({
+                    "status": "success",
+                    "message": f"Gemini API key is valid. Access to {len(models)} models.",
+                })
+            except Exception as e:
+                error_msg = str(e)
+                if "API_KEY_INVALID" in error_msg or "invalid" in error_msg.lower():
+                    return jsonify({
+                        "status": "error",
+                        "message": "Invalid Gemini API key",
+                    })
+                return jsonify({
+                    "status": "error",
+                    "message": f"Gemini connection error: {error_msg}",
+                })
+
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"Unknown provider: {provider}",
+            }), 400
+
+    except Exception:
+        logger.exception("Error testing LLM connection")
+        return jsonify({
+            "status": "error",
+            "message": "Connection test failed. Check logs for details.",
+        }), 500

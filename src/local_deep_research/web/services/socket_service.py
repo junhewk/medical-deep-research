@@ -152,6 +152,25 @@ class SocketIOService:
             full_event = f"{event_base}_{research_id}"
             self.__socketio.emit(full_event, data)
 
+            # Handle hierarchical progress data for deep agent system
+            if data.get("hierarchical_progress"):
+                # Emit specialized events for different progress components
+                if "planning_steps" in data:
+                    self.__socketio.emit(
+                        f"planning_update_{research_id}",
+                        {"planning_steps": data["planning_steps"]}
+                    )
+                if "active_agents" in data:
+                    self.__socketio.emit(
+                        f"agent_status_{research_id}",
+                        {"active_agents": data["active_agents"]}
+                    )
+                if "tool_executions" in data:
+                    self.__socketio.emit(
+                        f"tool_execution_{research_id}",
+                        {"tool_executions": data["tool_executions"]}
+                    )
+
             # Emit to specific subscribers
             with self.__lock:
                 subscriptions = self.__socket_subscriptions.get(research_id)

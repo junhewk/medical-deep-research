@@ -1,32 +1,34 @@
 # Medical Deep Research
 
-Evidence-Based Medical Research Assistant powered by Local Deep Research
+Evidence-Based Medical Research Assistant
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
-Medical Deep Research is a **significantly updated fork** of [Local Deep Research](https://github.com/LearningCircuit/local-deep-research) optimized for **evidence-based medicine (EBM)** research.
+Medical Deep Research is an **evidence-based medicine (EBM)** research assistant for healthcare professionals and medical researchers.
 
-### Key Differences from Local Deep Research
+### Key Features
 
-| Feature | Local Deep Research | Medical Deep Research |
-|---------|--------------------|-----------------------|
-| **Architecture** | 30+ strategy patterns | **Deep Agent** with autonomous planning |
-| **Research Focus** | General-purpose | **Medical/Health** research optimized |
-| **Query System** | Free-form queries | **PICO framework** for clinical questions |
-| **Terminology** | Standard search | **MeSH term mapping** (60+ terms) |
-| **Evidence** | No classification | **Evidence level tagging** (Level I-V) |
-| **Installation** | Manual setup | **Easy installer** (one command) |
-| **Progress UI** | Basic progress bar | **Real-time** planning steps, agent status, tool log |
+| Feature | Description |
+|---------|-------------|
+| **Architecture** | **Deep Agent** with autonomous planning (LangChain) |
+| **Research Focus** | **Medical/Health** research optimized |
+| **Query System** | **PICO framework** for clinical questions |
+| **Terminology** | **MeSH term mapping** (60+ medical terms) |
+| **Evidence** | **Evidence level tagging** (Level I-V) |
+| **Web Stack** | **Next.js + FastAPI** (modern, easy to deploy) |
+| **Progress UI** | **Real-time** planning steps, agent status, tool log |
 
-### Why This Fork?
+### What Makes This Different?
 
-1. **Deep Agent Architecture**: Replaces the legacy 30+ strategy pattern with LangChain deep agents that autonomously plan and execute research. The agent decides which tools to use, in what order, and adapts based on intermediate results.
+1. **Deep Agent Architecture**: Uses LangChain deep agents that autonomously plan and execute research. The agent decides which tools to use, in what order, and adapts based on intermediate results.
 
 2. **Medical Research Focus**: Built specifically for healthcare professionals and medical researchers. Includes PICO query building, MeSH vocabulary mapping, PubMed-first search strategy, and automatic evidence level classification.
 
-3. **Improved User Experience**: Easy one-command installation, real-time progress visualization showing exactly what the agent is doing, and streamlined AI provider configuration. It provides medical researchers with:
+3. **Modern Web Stack**: Complete rewrite using Next.js (React), Lucia Auth, SQLite, TanStack Query, and FastAPI - replacing the original Flask/Jinja2/SQLCipher stack for easier installation and better developer experience.
+
+4. **Improved User Experience**: Easy installation, real-time progress visualization showing exactly what the agent is doing, and streamlined AI provider configuration. It provides medical researchers with:
 
 - **Deep Agent Architecture**: Autonomous research planning with LangChain agents
 - **PICO Query Builder**: Structured clinical question search
@@ -133,58 +135,38 @@ Automatic tagging of studies based on evidence hierarchy:
 
 ## Installation
 
-### Option 1: Easy Install (Recommended for Beginners)
+### Requirements
 
-The easiest way to install Medical Deep Research is using the one-click installer:
+- **Python 3.11+** - Download from [python.org](https://www.python.org/downloads/)
+- **macOS**: Homebrew recommended (`brew install sqlcipher`)
+- **Windows**: Check "Add Python to PATH" during installation
+
+### Quick Start (Modern Web Stack - Recommended)
+
+```bash
+cd medical-deep-research
+./start-web.sh
+```
+
+This starts both Next.js frontend (http://localhost:3000) and FastAPI backend (http://localhost:8000).
+
+See [README_WEB.md](README_WEB.md) for detailed documentation on the modern web stack.
+
+### Legacy Quick Start (Flask - Deprecated)
 
 **macOS/Linux:**
 ```bash
-# Download and run installer
-curl -O https://raw.githubusercontent.com/junhewk/medical-deep-research/main/install.py
-python3 install.py
-
-# Start the application
+cd medical-deep-research
 ./start.sh
 ```
 
-**Windows (PowerShell):**
-```powershell
-# Download and run installer
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/junhewk/medical-deep-research/main/install.py" -OutFile install.py
-python install.py
-
-# Start the application (double-click start.bat or run:)
-.\start.bat
+**Windows:**
 ```
-
-Access the web interface at: **http://localhost:5000**
-
-### Option 2: Docker
-
-```bash
-curl -O https://raw.githubusercontent.com/junhewk/medical-deep-research/main/docker-compose.yml
-docker compose up -d
-```
-
-Access at: http://localhost:5000
-
-### Option 3: Manual pip Install
-
-```bash
-# Clone the repository
-git clone https://github.com/junhewk/medical-deep-research.git
 cd medical-deep-research
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# Install
-pip install -e .
-
-# Run
-ldr-web
+start.bat
 ```
+
+Opens at **http://localhost:5001**.
 
 ## Quick Start
 
@@ -364,9 +346,9 @@ MIT License - see [LICENSE](LICENSE)
 
 ## Acknowledgments
 
-- Based on [Local Deep Research](https://github.com/LearningCircuit/local-deep-research) by LearningCircuit
-- See [README_UPSTREAM.md](README_UPSTREAM.md) for the original Local Deep Research documentation
-- PubMed and MeSH terms provided by [NCBI/NLM](https://www.ncbi.nlm.nih.gov/)
+- Original idea: [Local Deep Research](https://github.com/LearningCircuit/local-deep-research) by LearningCircuit
+- PubMed and MeSH terms: [NCBI/NLM](https://www.ncbi.nlm.nih.gov/)
+- Web UI components: [shadcn/ui](https://ui.shadcn.com/)
 
 ## Citation
 
@@ -376,12 +358,10 @@ If you use Medical Deep Research in your research, please cite:
 @software{medical_deep_research,
   title = {Medical Deep Research: Evidence-Based Medical Research Assistant},
   author = {Kim, Junhewk},
-  year = {2026},
-  url = {https://github.com/junhewk/medical-deep-research}
+  year = {2026}
 }
 ```
 
 ## Contact
 
-- GitHub Issues: [Report a bug](https://github.com/junhewk/medical-deep-research/issues)
 - Email: junhewk.kim@gmail.com

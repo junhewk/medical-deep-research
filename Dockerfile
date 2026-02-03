@@ -1,7 +1,7 @@
 ####
 # Used for building the LDR service dependencies.
 ####
-FROM python:3.14-slim@sha256:9b81fe9acff79e61affb44aaf3b6ff234392e8ca477cb86c9f7fd11732ce9b6a AS builder-base
+FROM python:3.14-slim@sha256:1a3c6dbfd2173971abba880c3cc2ec4643690901f6ad6742d0827bae6cefc925 AS builder-base
 
 # Set shell to bash with pipefail for safer pipe handling
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -185,7 +185,7 @@ ENV PATH="/install/.venv/bin:$PATH"
 ####
 # Runs the LDR service.
 ###
-FROM python:3.14-slim@sha256:9b81fe9acff79e61affb44aaf3b6ff234392e8ca477cb86c9f7fd11732ce9b6a AS ldr
+FROM python:3.14-slim@sha256:1a3c6dbfd2173971abba880c3cc2ec4643690901f6ad6742d0827bae6cefc925 AS ldr
 
 # Set shell to bash with pipefail for safer pipe handling
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]

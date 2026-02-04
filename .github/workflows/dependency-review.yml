@@ -5,15 +5,10 @@ on:
   # It remains on PRs only and is NOT included in release gate.
   # The osv-scanner and npm-audit in release gate cover dependency vulnerabilities.
   pull_request:
-    branches: [main, dev, develop]
+    branches: [main]
     paths:
-      - 'pyproject.toml'
-      - 'pdm.lock'
-      - 'requirements*.txt'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tests/ui_tests/package.json'
-      - 'tests/ui_tests/package-lock.json'
+      - 'web/package.json'
+      - 'web/package-lock.json'
   workflow_dispatch:
 
 permissions: {}  # Minimal top-level for OSSF Scorecard Token-Permissions

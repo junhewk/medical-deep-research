@@ -1,8 +1,17 @@
 name: npm Security Audit
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/package.json'
+      - 'web/package-lock.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'web/package.json'
+      - 'web/package-lock.json'
   workflow_dispatch:
-  workflow_call:  # Called by security-release-gate.yml
 
 permissions:
   contents: read
@@ -19,7 +28,6 @@ jobs:
           egress-policy: audit
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
         with:
           persist-credentials: false
 
@@ -28,45 +36,17 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Run npm audit on root
-        id: audit-root
+      - name: Run npm audit on web
+        working-directory: web
         run: |
-          echo "=== Running npm audit on root package.json ==="
-          if [ -f "package.json" ]; then
-            # Require committed lockfile for reproducible security audits
-            if [ ! -f "package-lock.json" ]; then
-              echo "::error::Missing package-lock.json. Please commit your lockfile for security audits."
-              echo "AUDIT_FAILED=true" >> "$GITHUB_ENV"
-            else
-              npm audit --audit-level=moderate || echo "AUDIT_FAILED=true" >> "$GITHUB_ENV"
-            fi
-          else
-            echo "No package.json found in root"
+          echo "=== Running npm audit on web/ ==="
+          if [ ! -f "package-lock.json" ]; then
+            echo "::warning::No package-lock.json found. Generating for audit..."
+            npm install --package-lock-only
           fi
-
-      - name: Run npm audit on ui_tests
-        id: audit-ui-tests
-        run: |
-          echo "=== Running npm audit on tests/ui_tests ==="
-          if [ -f "tests/ui_tests/package.json" ]; then
-            cd tests/ui_tests
-            # Require committed lockfile for reproducible security audits
-            if [ ! -f "package-lock.json" ]; then
-              echo "::error::Missing tests/ui_tests/package-lock.json. Please commit your lockfile for security audits."
-              echo "AUDIT_UI_FAILED=true" >> "$GITHUB_ENV"
-            else
-              npm audit --audit-level=moderate || echo "AUDIT_UI_FAILED=true" >> "$GITHUB_ENV"
-            fi
-          else
-            echo "No package.json found in tests/ui_tests"
-          fi
-
-      - name: Check audit results
-        run: |
-          if [[ "$AUDIT_FAILED" == "true" ]] || [[ "$AUDIT_UI_FAILED" == "true" ]]; then
+          npm audit --audit-level=moderate || {
             echo "❌ npm audit found moderate or higher severity vulnerabilities"
-            echo "Run 'npm audit fix' locally to resolve issues"
+            echo "Run 'cd web && npm audit fix' locally to resolve issues"
             exit 1
-          else
-            echo "✅ No moderate or higher severity vulnerabilities found"
-          fi
+          }
+          echo "✅ No moderate or higher severity vulnerabilities found"

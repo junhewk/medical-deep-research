@@ -19,6 +19,163 @@ export interface PicoQueryInput {
   outcome: string;
 }
 
+/**
+ * Parsed population criteria with numeric thresholds and exclusions
+ */
+export interface ParsedPopulationCriteria {
+  basePopulation: string;
+  numericCriteria: Array<{
+    parameter: string;
+    operator: string;
+    value: number;
+    unit?: string;
+  }>;
+  exclusions: string[];
+}
+
+/**
+ * Parse population string to extract numeric criteria like LVEF >= 50%, age > 65
+ */
+export function parsePopulationCriteria(population: string): ParsedPopulationCriteria {
+  const numericCriteria: ParsedPopulationCriteria["numericCriteria"] = [];
+
+  // Define all patterns with their parameter configurations
+  const patternConfigs = [
+    // LVEF patterns: "LVEF >= 50%", "LVEF>50", "EF < 40%", "ejection fraction >= 50"
+    {
+      patterns: [
+        /\b(?:LVEF|EF|ejection\s+fraction)\s*([><=]+)\s*(\d+)\s*%?/gi,
+        /\b(?:LVEF|EF)\s*(?:of\s+)?([><=]+)\s*(\d+)/gi,
+      ],
+      parameter: "LVEF",
+      unit: "%",
+      parseValue: (v: string) => parseInt(v, 10),
+    },
+    // Age patterns: "age > 65", "age >= 18", "adults > 60 years"
+    {
+      patterns: [
+        /\bage\s*([><=]+)\s*(\d+)\s*(?:years?|y)?/gi,
+        /\badults?\s*([><=]+)\s*(\d+)/gi,
+      ],
+      parameter: "age",
+      unit: "years",
+      parseValue: (v: string) => parseInt(v, 10),
+    },
+    // BMI patterns: "BMI > 30", "BMI >= 25"
+    {
+      patterns: [/\bBMI\s*([><=]+)\s*(\d+(?:\.\d+)?)/gi],
+      parameter: "BMI",
+      unit: "kg/m²",
+      parseValue: (v: string) => parseFloat(v),
+    },
+    // eGFR patterns: "eGFR < 60"
+    {
+      patterns: [/\beGFR\s*([><=]+)\s*(\d+)/gi],
+      parameter: "eGFR",
+      unit: "mL/min/1.73m²",
+      parseValue: (v: string) => parseInt(v, 10),
+    },
+  ];
+
+  // Extract numeric criteria from all pattern configurations
+  for (const config of patternConfigs) {
+    for (const pattern of config.patterns) {
+      const matches = Array.from(population.matchAll(pattern));
+      for (const match of matches) {
+        numericCriteria.push({
+          parameter: config.parameter,
+          operator: match[1],
+          value: config.parseValue(match[2]),
+          unit: config.unit,
+        });
+      }
+    }
+  }
+
+  // Generate exclusions based on criteria
+  const exclusions = generateExclusionKeywords(numericCriteria);
+
+  return {
+    basePopulation: population,
+    numericCriteria,
+    exclusions,
+  };
+}
+
+/**
+ * Generate exclusion keywords based on parsed numeric criteria
+ */
+export function generateExclusionKeywords(
+  criteria: ParsedPopulationCriteria["numericCriteria"]
+): string[] {
+  const exclusions: string[] = [];
+
+  for (const criterion of criteria) {
+    if (criterion.parameter === "LVEF") {
+      // If looking for preserved EF (>= 40-50%), exclude reduced EF terms
+      if (
+        (criterion.operator === ">=" || criterion.operator === ">") &&
+        criterion.value >= 40
+      ) {
+        exclusions.push(
+          "HFrEF",
+          "reduced ejection fraction",
+          "systolic dysfunction",
+          "LVEF<40",
+          "LVEF < 40",
+          "EF<40",
+          "severe LV dysfunction"
+        );
+      }
+      // If looking for reduced EF (< 40%), exclude preserved EF terms
+      if (
+        (criterion.operator === "<" || criterion.operator === "<=") &&
+        criterion.value <= 45
+      ) {
+        exclusions.push(
+          "HFpEF",
+          "preserved ejection fraction",
+          "diastolic dysfunction",
+          "LVEF>50",
+          "LVEF >= 50",
+          "normal ejection fraction"
+        );
+      }
+      // Mid-range EF (40-49%)
+      if (
+        criterion.value >= 40 &&
+        criterion.value <= 49 &&
+        (criterion.operator === ">=" || criterion.operator === "<=")
+      ) {
+        exclusions.push("HFrEF", "severe systolic dysfunction");
+      }
+    }
+
+    if (criterion.parameter === "eGFR") {
+      // If looking for normal kidney function (>= 60), exclude CKD terms
+      if (
+        (criterion.operator === ">=" || criterion.operator === ">") &&
+        criterion.value >= 60
+      ) {
+        exclusions.push(
+          "end-stage renal disease",
+          "ESRD",
+          "dialysis",
+          "CKD stage 4",
+          "CKD stage 5"
+        );
+      }
+      // If looking for reduced kidney function, exclude normal
+      if (criterion.operator === "<" && criterion.value <= 60) {
+        exclusions.push("normal renal function", "preserved kidney function");
+      }
+    }
+  }
+
+  // Remove duplicates
+  return Array.from(new Set(exclusions));
+}
+
 export interface GeneratedPicoQuery {
   pubmedQuery: string;
   professionalQuery: string;
@@ -32,6 +189,9 @@ export interface GeneratedPicoQuery {
 function buildPubMedQuery(components: PicoQueryInput): GeneratedPicoQuery {
   const meshTerms: string[] = [];
   const queryBlocks: QueryBlock[] = [];
+
+  // Parse population for numeric criteria and exclusions
+  const parsedPopulation = parsePopulationCriteria(components.population);
 
   // Population (P)
   const populationMesh = findMeshTerms(components.population);
@@ -89,7 +249,15 @@ function buildPubMedQuery(components: PicoQueryInput): GeneratedPicoQuery {
 
   // Build the professional query by combining all blocks
   const validBlocks = queryBlocks.filter((b) => b.combined);
-  const professionalQuery = validBlocks.map((b) => b.combined).join(" AND ");
+  let professionalQuery = validBlocks.map((b) => b.combined).join(" AND ");
+
+  // Add exclusion clause using NOT operator if we have population-based exclusions
+  if (parsedPopulation.exclusions.length > 0) {
+    const exclusionClause = parsedPopulation.exclusions
+      .map((term) => `"${term}"[tiab]`)
+      .join(" OR ");
+    professionalQuery = `(${professionalQuery}) NOT (${exclusionClause})`;
+  }
 
   // Format for display with proper line breaks
   const formattedQuery = formatQueryForDisplay(professionalQuery);
@@ -126,6 +294,17 @@ function buildPubMedQuery(components: PicoQueryInput): GeneratedPicoQuery {
     `${professionalQuery} AND (systematic review[pt] OR meta-analysis[pt])`
   );
 
+  // Include numeric criteria info if found
+  const numericCriteriaInfo = parsedPopulation.numericCriteria.length > 0
+    ? `\nNumeric Criteria Detected:\n${parsedPopulation.numericCriteria
+        .map((c) => `  - ${c.parameter} ${c.operator} ${c.value}${c.unit || ""}`)
+        .join("\n")}`
+    : "";
+
+  const exclusionsInfo = parsedPopulation.exclusions.length > 0
+    ? `\nExclusion Terms (population mismatch prevention):\n${parsedPopulation.exclusions.map((e) => `  - "${e}"`).join("\n")}`
+    : "";
+
   const searchStrategy = `
 PICO Search Strategy:
 
@@ -133,6 +312,8 @@ P (Population): ${components.population}
 I (Intervention): ${components.intervention}
 C (Comparison): ${components.comparison || "N/A"}
 O (Outcome): ${components.outcome}
+${numericCriteriaInfo}
+${exclusionsInfo}
 
 Primary PubMed Query:
 ${formattedQuery}

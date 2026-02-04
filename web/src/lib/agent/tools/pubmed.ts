@@ -4,6 +4,54 @@ import { EVIDENCE_LEVELS } from "./mesh-mapping";
 
 const NCBI_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
+/**
+ * Landmark medical journals - papers from these sources get scoring bonus
+ */
+const LANDMARK_JOURNALS = [
+  "New England Journal of Medicine",
+  "NEJM",
+  "N Engl J Med",
+  "Lancet",
+  "The Lancet",
+  "JAMA",
+  "Journal of the American Medical Association",
+  "BMJ",
+  "British Medical Journal",
+  "Circulation",
+  "European Heart Journal",
+  "Eur Heart J",
+  "JACC",
+  "Journal of the American College of Cardiology",
+  "Annals of Internal Medicine",
+  "Ann Intern Med",
+  "Nature Medicine",
+  "Nat Med",
+  "Cell",
+  "Science",
+];
+
+/**
+ * Check if a journal is a landmark journal
+ */
+export function isLandmarkJournal(journal: string): boolean {
+  if (!journal) return false;
+  const journalLower = journal.toLowerCase();
+  return LANDMARK_JOURNALS.some((lj) => journalLower.includes(lj.toLowerCase()));
+}
+
+/**
+ * Search strategy types
+ */
+export type SearchStrategy = "standard" | "comprehensive";
+
+/**
+ * Date range for search filtering
+ */
+export interface DateRange {
+  start?: string; // YYYY/MM/DD or YYYY
+  end?: string;   // YYYY/MM/DD or YYYY
+}
+
 export interface PubMedArticle {
   pmid: string;
   title: string;
@@ -15,6 +63,7 @@ export interface PubMedArticle {
   meshTerms: string[];
   doi?: string;
   evidenceLevel?: string;
+  isLandmarkJournal?: boolean;
 }
 
 interface ESearchResult {
@@ -75,15 +124,30 @@ interface EFetchResult {
 async function searchPubMed(
   query: string,
   maxResults: number = 20,
-  apiKey?: string
+  apiKey?: string,
+  options?: {
+    sort?: "relevance" | "pub_date";
+    dateRange?: DateRange;
+  }
 ): Promise<string[]> {
   const params = new URLSearchParams({
     db: "pubmed",
     term: query,
     retmax: maxResults.toString(),
     retmode: "json",
-    sort: "relevance",
+    sort: options?.sort || "relevance",
   });
+
+  // Add date range filtering
+  if (options?.dateRange) {
+    if (options.dateRange.start) {
+      params.append("mindate", options.dateRange.start);
+    }
+    if (options.dateRange.end) {
+      params.append("maxdate", options.dateRange.end);
+    }
+    params.append("datetype", "pdat"); // Publication date
+  }
 
   if (apiKey) {
     params.append("api_key", apiKey);
@@ -143,27 +207,18 @@ async function fetchPubMedDetails(
     const journal = articleXml.match(/<Title[^>]*>([\s\S]*?)<\/Title>/)?.[1] || "";
 
     // Extract authors
-    const authors: string[] = [];
     const authorMatches = Array.from(articleXml.matchAll(
       /<Author[^>]*>[\s\S]*?<LastName>([^<]+)<\/LastName>[\s\S]*?<ForeName>([^<]+)<\/ForeName>[\s\S]*?<\/Author>/g
     ));
-    for (const authorMatch of authorMatches) {
-      authors.push(`${authorMatch[2]} ${authorMatch[1]}`);
-    }
+    const authors = authorMatches.map((match) => `${match[2]} ${match[1]}`);
 
     // Extract publication types
-    const pubTypes: string[] = [];
     const pubTypeMatches = Array.from(articleXml.matchAll(/<PublicationType[^>]*>([^<]+)<\/PublicationType>/g));
-    for (const ptMatch of pubTypeMatches) {
-      pubTypes.push(ptMatch[1]);
-    }
+    const pubTypes = pubTypeMatches.map((match) => match[1]);
 
     // Extract MeSH terms
-    const meshTerms: string[] = [];
     const meshMatches = Array.from(articleXml.matchAll(/<DescriptorName[^>]*>([^<]+)<\/DescriptorName>/g));
-    for (const meshMatch of meshMatches) {
-      meshTerms.push(meshMatch[1]);
-    }
+    const meshTerms = meshMatches.map((match) => match[1]);
 
     // Extract DOI
     const doi = articleXml.match(/<ArticleId IdType="doi">([^<]+)<\/ArticleId>/)?.[1];
@@ -186,32 +241,136 @@ async function fetchPubMedDetails(
       }
     }
 
+    const cleanJournal = journal.replace(/<[^>]+>/g, "");
     articles.push({
       pmid,
       title: title.replace(/<[^>]+>/g, ""), // Strip any remaining HTML
       abstract: abstract.replace(/<[^>]+>/g, ""),
       authors,
-      journal: journal.replace(/<[^>]+>/g, ""),
+      journal: cleanJournal,
       publicationDate,
       publicationType: pubTypes,
       meshTerms,
       doi,
       evidenceLevel,
+      isLandmarkJournal: isLandmarkJournal(cleanJournal),
     });
   }
 
   return articles;
 }
 
+/**
+ * Comprehensive multi-phase search strategy for clinical questions
+ *
+ * Phase 1: Recent RCTs (40% of results) - last 3 years, sorted by date
+ * Phase 2: Recent systematic reviews (20% of results) - last 5 years
+ * Phase 3: Relevance-based (40% of results) - no date filter, standard relevance
+ *
+ * This addresses the recency failure problem where older high-relevance papers
+ * overshadow recent landmark trials (e.g., REDUCE-AMI 2024)
+ */
+async function comprehensivePubMedSearch(
+  query: string,
+  maxResults: number = 30,
+  apiKey?: string
+): Promise<PubMedArticle[]> {
+  const currentYear = new Date().getFullYear();
+  const allPmids = new Set<string>();
+
+  // Calculate allocation
+  const recentRctCount = Math.floor(maxResults * 0.4);
+  const systematicReviewCount = Math.floor(maxResults * 0.2);
+  const relevanceCount = maxResults - recentRctCount - systematicReviewCount;
+
+  // Phase 1: Recent RCTs (last 3 years)
+  const rctQuery = `${query} AND (randomized controlled trial[pt] OR clinical trial[pt])`;
+  try {
+    const rctPmids = await searchPubMed(rctQuery, recentRctCount, apiKey, {
+      sort: "pub_date",
+      dateRange: {
+        start: `${currentYear - 3}/01/01`,
+        end: `${currentYear}/12/31`,
+      },
+    });
+    rctPmids.forEach((pmid) => allPmids.add(pmid));
+  } catch (error) {
+    console.warn("Phase 1 (RCT) search failed:", error);
+  }
+
+  // Phase 2: Recent systematic reviews (last 5 years)
+  const srQuery = `${query} AND (systematic review[pt] OR meta-analysis[pt])`;
+  try {
+    const srPmids = await searchPubMed(srQuery, systematicReviewCount, apiKey, {
+      sort: "pub_date",
+      dateRange: {
+        start: `${currentYear - 5}/01/01`,
+        end: `${currentYear}/12/31`,
+      },
+    });
+    srPmids.forEach((pmid) => allPmids.add(pmid));
+  } catch (error) {
+    console.warn("Phase 2 (SR) search failed:", error);
+  }
+
+  // Phase 3: Relevance-based (standard search, no date filter)
+  try {
+    const relevancePmids = await searchPubMed(query, relevanceCount, apiKey, {
+      sort: "relevance",
+    });
+    relevancePmids.forEach((pmid) => allPmids.add(pmid));
+  } catch (error) {
+    console.warn("Phase 3 (relevance) search failed:", error);
+  }
+
+  // Fetch details for all unique PMIDs
+  const uniquePmids = Array.from(allPmids);
+  if (uniquePmids.length === 0) {
+    return [];
+  }
+
+  const articles = await fetchPubMedDetails(uniquePmids, apiKey);
+
+  // Sort: prioritize recent landmark journal articles, then by recency
+  articles.sort((a, b) => {
+    // Landmark journal bonus
+    const aLandmark = a.isLandmarkJournal ? 1 : 0;
+    const bLandmark = b.isLandmarkJournal ? 1 : 0;
+    if (aLandmark !== bLandmark) return bLandmark - aLandmark;
+
+    // Then by date (more recent first)
+    const aDate = new Date(a.publicationDate || "1900").getTime();
+    const bDate = new Date(b.publicationDate || "1900").getTime();
+    return bDate - aDate;
+  });
+
+  return articles;
+}
+
 export const pubmedSearchTool = tool(
-  async ({ query, maxResults, apiKey }) => {
+  async ({ query, maxResults, apiKey, searchStrategy, dateRange }) => {
     try {
-      const pmids = await searchPubMed(query, maxResults || 20, apiKey);
-      const articles = await fetchPubMedDetails(pmids, apiKey);
+      let articles: PubMedArticle[];
+
+      if (searchStrategy === "comprehensive") {
+        // Use multi-phase comprehensive search for clinical questions
+        articles = await comprehensivePubMedSearch(query, maxResults || 30, apiKey);
+      } else {
+        // Standard single-phase search
+        const pmids = await searchPubMed(query, maxResults || 20, apiKey, {
+          sort: "relevance",
+          dateRange: dateRange ? {
+            start: dateRange.start,
+            end: dateRange.end,
+          } : undefined,
+        });
+        articles = await fetchPubMedDetails(pmids, apiKey);
+      }
 
       return JSON.stringify({
         success: true,
         count: articles.length,
+        searchStrategy: searchStrategy || "standard",
         articles: articles.map((a) => ({
           pmid: a.pmid,
           title: a.title,
@@ -221,6 +380,7 @@ export const pubmedSearchTool = tool(
           publicationDate: a.publicationDate,
           publicationType: a.publicationType.join(", "),
           evidenceLevel: a.evidenceLevel,
+          isLandmarkJournal: a.isLandmarkJournal,
           doi: a.doi,
           url: `https://pubmed.ncbi.nlm.nih.gov/${a.pmid}/`,
         })),
@@ -235,13 +395,18 @@ export const pubmedSearchTool = tool(
   {
     name: "pubmed_search",
     description:
-      "Searches PubMed/MEDLINE for medical literature. Supports MeSH terms, Boolean operators (AND, OR, NOT), and field tags like [ti] for title, [ab] for abstract, [mh] for MeSH.",
+      "Searches PubMed/MEDLINE for medical literature. Supports MeSH terms, Boolean operators (AND, OR, NOT), and field tags like [ti] for title, [ab] for abstract, [mh] for MeSH. Use 'comprehensive' strategy for clinical questions to prioritize recent RCTs and landmark trials.",
     schema: z.object({
       query: z.string().describe("PubMed search query (supports MeSH terms and Boolean operators)"),
-      maxResults: z.number().optional().default(20).describe("Maximum number of results (default: 20)"),
+      maxResults: z.number().optional().default(20).describe("Maximum number of results (default: 20, use 30 for comprehensive)"),
       apiKey: z.string().optional().describe("Optional NCBI API key for higher rate limits"),
+      searchStrategy: z.enum(["standard", "comprehensive"]).optional().default("standard").describe("Search strategy: 'standard' for relevance-based, 'comprehensive' for multi-phase clinical search prioritizing recent RCTs"),
+      dateRange: z.object({
+        start: z.string().optional().describe("Start date (YYYY/MM/DD or YYYY)"),
+        end: z.string().optional().describe("End date (YYYY/MM/DD or YYYY)"),
+      }).optional().describe("Optional date range filter (only for standard strategy)"),
     }),
   }
 );
 
-export { searchPubMed, fetchPubMedDetails };
+export { searchPubMed, fetchPubMedDetails, comprehensivePubMedSearch };

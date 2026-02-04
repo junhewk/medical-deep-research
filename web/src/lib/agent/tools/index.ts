@@ -1,5 +1,14 @@
 // Search engine tools
-export { pubmedSearchTool, searchPubMed, fetchPubMedDetails, type PubMedArticle } from "./pubmed";
+export {
+  pubmedSearchTool,
+  searchPubMed,
+  fetchPubMedDetails,
+  comprehensivePubMedSearch,
+  isLandmarkJournal,
+  type PubMedArticle,
+  type SearchStrategy,
+  type DateRange,
+} from "./pubmed";
 export { scopusSearchTool, searchScopus, type ScopusArticle, type ScopusSortBy } from "./scopus";
 export { cochraneSearchTool, searchCochrane, type CochraneReview } from "./cochrane";
 
@@ -7,8 +16,11 @@ export { cochraneSearchTool, searchCochrane, type CochraneReview } from "./cochr
 export {
   picoQueryBuilderTool,
   buildPubMedQuery,
+  parsePopulationCriteria,
+  generateExclusionKeywords,
   type PicoQueryInput,
   type GeneratedPicoQuery,
+  type ParsedPopulationCriteria,
 } from "./pico-query";
 export { pccQueryBuilderTool, buildPccPubMedQuery, type PccQueryInput, type GeneratedPccQuery } from "./pcc-query";
 
@@ -28,15 +40,28 @@ export {
 // Scoring utilities
 export {
   calculateCompositeScore,
+  calculateContextAwareScore,
   scoreAndSortResults,
   getEvidenceLevelScore,
   getCitationScore,
   getRecencyScore,
   formatScoreBreakdown,
   type EvidenceLevel,
+  type ScoringContext,
   type ScoredResult,
   type UnifiedSearchResult,
+  type CompositeScore,
+  type ContextAwareScoringOptions,
 } from "./scoring";
+
+// Population validation tools
+export {
+  populationValidatorTool,
+  validatePopulationWithLLM,
+  batchValidatePopulations,
+  type TargetCriteria,
+  type PopulationValidationResult,
+} from "./population-validator";
 
 // Utility tools
 export {
@@ -53,6 +78,7 @@ import { cochraneSearchTool } from "./cochrane";
 import { picoQueryBuilderTool } from "./pico-query";
 import { pccQueryBuilderTool } from "./pcc-query";
 import { meshMappingTool, evidenceLevelTool } from "./mesh-mapping";
+import { populationValidatorTool } from "./population-validator";
 
 export const allMedicalTools = [
   pubmedSearchTool,
@@ -62,4 +88,5 @@ export const allMedicalTools = [
   pccQueryBuilderTool,
   meshMappingTool,
   evidenceLevelTool,
+  populationValidatorTool,
 ];

@@ -1,11 +1,19 @@
 /**
  * Composite scoring algorithm for search results ranking
  *
- * Scoring formula:
+ * Standard scoring formula:
  * compositeScore = (evidenceLevel × 0.4) + (citationScore × 0.3) + (recencyScore × 0.3)
+ *
+ * Clinical context scoring formula:
+ * compositeScore = (evidenceLevel × 0.3) + (citationScore × 0.15) + (recencyScore × 0.4) + (landmarkBonus × 0.08) + (populationMatch × 0.07)
  */
 
 export type EvidenceLevel = "Level I" | "Level II" | "Level III" | "Level IV" | "Level V";
+
+/**
+ * Scoring context determines weight distribution
+ */
+export type ScoringContext = "general" | "clinical";
 
 export interface ScoredResult {
   id: string;
@@ -15,10 +23,13 @@ export interface ScoredResult {
   evidenceLevel?: EvidenceLevel;
   citationCount?: number;
   publicationDate?: string;
+  isLandmarkJournal?: boolean;
   // Calculated scores
   evidenceLevelScore: number;
   citationScore: number;
   recencyScore: number;
+  landmarkBonus?: number;
+  populationMatchScore?: number;
   compositeScore: number;
   // Reference tracking
   referenceNumber?: number;
@@ -85,9 +96,10 @@ export function getCitationScore(citationCount?: number): number {
 
 /**
  * Calculate recency score with exponential decay
- * Half-life of 5 years - papers 5 years old get 0.5 score
+ * @param publicationDate - Publication date string
+ * @param halfLifeYears - Half-life in years (default: 5, use 3 for clinical context)
  */
-export function getRecencyScore(publicationDate?: string): number {
+export function getRecencyScore(publicationDate?: string, halfLifeYears: number = 5): number {
   if (!publicationDate) return 0.5; // Default for unknown
 
   const pubDate = new Date(publicationDate);
@@ -97,14 +109,14 @@ export function getRecencyScore(publicationDate?: string): number {
 
   const yearsOld = (now.getTime() - pubDate.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
 
-  // 0.5^(yearsOld / 5) - exponential decay, 5-year half-life
+  // 0.5^(yearsOld / halfLife) - exponential decay
   // Minimum score of 0.1 for very old papers
-  const score = Math.pow(0.5, yearsOld / 5);
+  const score = Math.pow(0.5, yearsOld / halfLifeYears);
   return Math.max(score, 0.1);
 }
 
 /**
- * Calculate composite score for a single result
+ * Calculate composite score for a single result (standard weighting)
  */
 export function calculateCompositeScore(
   evidenceLevel?: EvidenceLevel | string,
@@ -125,6 +137,92 @@ export function calculateCompositeScore(
     evidenceLevelScore: Math.round(evidenceLevelScore * 100) / 100,
     citationScore: Math.round(citationScore * 100) / 100,
     recencyScore: Math.round(recencyScore * 100) / 100,
+    compositeScore: Math.round(compositeScore * 100) / 100,
+  };
+}
+
+/**
+ * Context-aware scoring options
+ */
+export interface ContextAwareScoringOptions {
+  context?: ScoringContext;
+  isLandmarkJournal?: boolean;
+  populationMatchScore?: number; // 0.0 - 1.0 from AI validator
+}
+
+/**
+ * Extended composite score result for clinical context
+ */
+export interface CompositeScore {
+  evidenceLevelScore: number;
+  citationScore: number;
+  recencyScore: number;
+  landmarkBonus: number;
+  populationMatchScore: number;
+  compositeScore: number;
+}
+
+/**
+ * Calculate context-aware composite score
+ *
+ * Clinical context uses different weights to prioritize:
+ * - Recency (40%): Recent studies more important for clinical decisions
+ * - Evidence (30%): Still important but reduced from 40%
+ * - Citations (15%): Reduced to prevent old highly-cited papers from dominating
+ * - Landmark Journal (8%): Bonus for NEJM, Lancet, JAMA, etc.
+ * - Population Match (7%): AI-validated population match score
+ *
+ * General context uses standard weights (40/30/30)
+ */
+export function calculateContextAwareScore(
+  evidenceLevel?: EvidenceLevel | string,
+  citationCount?: number,
+  publicationDate?: string,
+  options?: ContextAwareScoringOptions
+): CompositeScore {
+  const context = options?.context || "general";
+  const isLandmark = options?.isLandmarkJournal || false;
+  const populationMatch = options?.populationMatchScore ?? 1.0; // Default to 1.0 (full match)
+
+  // Calculate base scores
+  const evidenceLevelScore = getEvidenceLevelScore(evidenceLevel);
+  const citationScore = getCitationScore(citationCount);
+
+  // Use different half-life based on context
+  // Clinical: 3-year half-life (more aggressive decay for older papers)
+  // General: 5-year half-life (standard)
+  const halfLifeYears = context === "clinical" ? 3 : 5;
+  const recencyScore = getRecencyScore(publicationDate, halfLifeYears);
+
+  // Landmark journal bonus (0 or 1)
+  const landmarkBonus = isLandmark ? 1.0 : 0.0;
+
+  let compositeScore: number;
+
+  if (context === "clinical") {
+    // Clinical context weights
+    // Evidence: 30%, Citations: 15%, Recency: 40%, Landmark: 8%, Population: 7%
+    compositeScore =
+      (evidenceLevelScore * 0.30) +
+      (citationScore * 0.15) +
+      (recencyScore * 0.40) +
+      (landmarkBonus * 0.08) +
+      (populationMatch * 0.07);
+  } else {
+    // General context weights (standard)
+    // Evidence: 40%, Citations: 30%, Recency: 30%
+    compositeScore =
+      (evidenceLevelScore * 0.40) +
+      (citationScore * 0.30) +
+      (recencyScore * 0.30);
+  }
+
+  return {
+    evidenceLevelScore: Math.round(evidenceLevelScore * 100) / 100,
+    citationScore: Math.round(citationScore * 100) / 100,
+    recencyScore: Math.round(recencyScore * 100) / 100,
+    landmarkBonus: Math.round(landmarkBonus * 100) / 100,
+    populationMatchScore: Math.round(populationMatch * 100) / 100,
     compositeScore: Math.round(compositeScore * 100) / 100,
   };
 }
@@ -151,18 +249,33 @@ export interface UnifiedSearchResult {
   publicationType?: string;
   citationCount?: number;
   meshTerms?: string[];
+  isLandmarkJournal?: boolean;
+  populationMatchScore?: number; // From AI validator (0.0 - 1.0)
 }
 
 /**
  * Score and sort results from multiple sources
+ * @param results - Array of unified search results
+ * @param context - Scoring context ('general' or 'clinical')
  */
-export function scoreAndSortResults(results: UnifiedSearchResult[]): ScoredResult[] {
+export function scoreAndSortResults(
+  results: UnifiedSearchResult[],
+  context: ScoringContext = "general"
+): ScoredResult[] {
   // Calculate scores for each result
   const scoredResults: ScoredResult[] = results.map((result) => {
-    const scores = calculateCompositeScore(
+    const publicationDate = result.publicationDate || result.publicationYear;
+
+    // Use context-aware scoring which handles both contexts
+    const scores = calculateContextAwareScore(
       result.evidenceLevel,
       result.citationCount,
-      result.publicationDate || result.publicationYear
+      publicationDate,
+      {
+        context,
+        isLandmarkJournal: result.isLandmarkJournal,
+        populationMatchScore: result.populationMatchScore,
+      }
     );
 
     return {
@@ -172,7 +285,8 @@ export function scoreAndSortResults(results: UnifiedSearchResult[]): ScoredResul
       source: result.source,
       evidenceLevel: result.evidenceLevel as EvidenceLevel | undefined,
       citationCount: result.citationCount,
-      publicationDate: result.publicationDate || result.publicationYear,
+      publicationDate,
+      isLandmarkJournal: result.isLandmarkJournal,
       ...scores,
     };
   });
@@ -192,5 +306,19 @@ export function scoreAndSortResults(results: UnifiedSearchResult[]): ScoredResul
  * Get score breakdown as a human-readable string
  */
 export function formatScoreBreakdown(result: ScoredResult): string {
-  return `Evidence: ${Math.round(result.evidenceLevelScore * 100)}% | Citations: ${Math.round(result.citationScore * 100)}% | Recency: ${Math.round(result.recencyScore * 100)}% | Total: ${Math.round(result.compositeScore * 100)}%`;
+  let breakdown = `Evidence: ${Math.round(result.evidenceLevelScore * 100)}% | Citations: ${Math.round(result.citationScore * 100)}% | Recency: ${Math.round(result.recencyScore * 100)}%`;
+
+  // Add landmark bonus if present
+  if (result.landmarkBonus !== undefined && result.landmarkBonus > 0) {
+    breakdown += ` | Landmark: +${Math.round(result.landmarkBonus * 100)}%`;
+  }
+
+  // Add population match if present and not 100%
+  if (result.populationMatchScore !== undefined && result.populationMatchScore < 1.0) {
+    breakdown += ` | Pop.Match: ${Math.round(result.populationMatchScore * 100)}%`;
+  }
+
+  breakdown += ` | Total: ${Math.round(result.compositeScore * 100)}%`;
+
+  return breakdown;
 }

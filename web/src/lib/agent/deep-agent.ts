@@ -12,6 +12,17 @@ import { generateId } from "@/lib/utils";
 import { exportStateToMarkdown } from "../state-export";
 import { formatVancouverCitation, type CitationData } from "@/lib/citation/vancouver";
 
+// Tool execution tracking
+interface ToolExecution {
+  tool: string;
+  status: "running" | "completed" | "failed";
+  query?: string;
+  resultCount?: number;
+  duration?: number;
+  error?: string;
+  startTime?: number;
+}
+
 // Agent state annotation
 const AgentState = Annotation.Root({
   messages: Annotation<(HumanMessage | AIMessage | SystemMessage)[]>({
@@ -29,6 +40,24 @@ const AgentState = Annotation.Root({
   }),
   planningSteps: Annotation<Array<{ id: string; name: string; status: string }>>({
     value: (_, update) => update,
+    default: () => [],
+  }),
+  toolExecutions: Annotation<ToolExecution[]>({
+    reducer: (current, update) => {
+      // Merge: update existing or add new
+      const merged = [...current];
+      for (const exec of update) {
+        const existingIdx = merged.findIndex(
+          (e) => e.tool === exec.tool && e.startTime === exec.startTime
+        );
+        if (existingIdx >= 0) {
+          merged[existingIdx] = exec;
+        } else {
+          merged.push(exec);
+        }
+      }
+      return merged;
+    },
     default: () => [],
   }),
   searchResults: Annotation<unknown[]>({
@@ -233,6 +262,16 @@ async function updateProgress(
     })
     .where(eq(research.id, researchId));
 
+  // Determine active agents based on phase
+  const activeAgents = [];
+  if (phase === "planning") {
+    activeAgents.push({ name: "Query Builder", status: "active" });
+  } else if (phase === "searching") {
+    activeAgents.push({ name: "Database Search", status: "active" });
+  } else if (phase === "synthesizing") {
+    activeAgents.push({ name: "Report Generator", status: "active" });
+  }
+
   // Save agent state
   await db.insert(agentStates).values({
     id: stateId,
@@ -241,8 +280,8 @@ async function updateProgress(
     message,
     overallProgress: progress,
     planningSteps: JSON.stringify(state.planningSteps || []),
-    activeAgents: JSON.stringify([]),
-    toolExecutions: JSON.stringify([]),
+    activeAgents: JSON.stringify(activeAgents),
+    toolExecutions: JSON.stringify(state.toolExecutions || []),
     createdAt: now,
     updatedAt: now,
   });
@@ -260,8 +299,62 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
   const llm = createLLM(config.llmProvider, config.model, config.apiKey);
   const llmWithTools = llm.bindTools(allMedicalTools);
 
-  // Tool node
-  const toolNode = new ToolNode(allMedicalTools);
+  // Original tool node
+  const baseToolNode = new ToolNode(allMedicalTools);
+
+  // Wrapped tool node that tracks executions
+  async function toolNodeWithTracking(state: AgentStateType): Promise<Partial<AgentStateType>> {
+    const lastMessage = state.messages[state.messages.length - 1];
+    const toolCalls = ("tool_calls" in lastMessage && Array.isArray(lastMessage.tool_calls))
+      ? lastMessage.tool_calls
+      : [];
+
+    // Create execution entries for tools about to run
+    const startTime = Date.now();
+    const newExecutions: ToolExecution[] = toolCalls.map((tc: { name: string; args?: Record<string, unknown> }) => ({
+      tool: tc.name,
+      status: "running" as const,
+      query: tc.args?.query as string || tc.args?.term as string || JSON.stringify(tc.args || {}).substring(0, 100),
+      startTime,
+    }));
+
+    // Update progress to show tools running
+    await updateProgress(
+      config.researchId,
+      "searching",
+      Math.min(30 + toolCallCount * 5, 60),
+      `Running ${toolCalls.map((tc: { name: string }) => tc.name).join(", ")}`,
+      { ...state, toolExecutions: [...(state.toolExecutions || []), ...newExecutions] },
+      config.onProgress
+    );
+
+    // Run the actual tools
+    const result = await baseToolNode.invoke(state);
+    const endTime = Date.now();
+    const duration = (endTime - startTime) / 1000;
+
+    // Update executions with results
+    const completedExecutions: ToolExecution[] = newExecutions.map((exec) => ({
+      ...exec,
+      status: "completed" as const,
+      duration,
+    }));
+
+    // Update progress with completed tools
+    await updateProgress(
+      config.researchId,
+      "searching",
+      Math.min(35 + toolCallCount * 5, 65),
+      `Completed ${toolCalls.map((tc: { name: string }) => tc.name).join(", ")}`,
+      { ...state, toolExecutions: [...(state.toolExecutions || []), ...completedExecutions] },
+      config.onProgress
+    );
+
+    return {
+      ...result,
+      toolExecutions: completedExecutions,
+    };
+  }
 
   // Agent node - decides what to do next
   async function agentNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
@@ -519,7 +612,7 @@ Focus on:
   const workflow = new StateGraph(AgentState)
     .addNode("planning", planningNode)
     .addNode("agent", agentNode)
-    .addNode("tools", toolNode)
+    .addNode("tools", toolNodeWithTracking)
     .addNode("search", searchNode)
     .addNode("synthesis", synthesisNode)
     .addNode("completion", completionNode)
@@ -549,6 +642,7 @@ export async function runMedicalResearch(config: MedicalResearchConfig): Promise
     phase: "init",
     progress: 0,
     planningSteps: [],
+    toolExecutions: [],
     searchResults: [],
     synthesizedContent: "",
   };

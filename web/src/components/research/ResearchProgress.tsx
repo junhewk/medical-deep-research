@@ -406,10 +406,10 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
               {data.report && (
                 <div className="flex items-center gap-3 text-sm text-muted-foreground">
                   <span className="px-2 py-1 rounded-md bg-muted">
-                    {data.report.wordCount.toLocaleString()} words
+                    {(data.report.wordCount ?? 0).toLocaleString()} words
                   </span>
                   <span className="px-2 py-1 rounded-md bg-muted">
-                    {data.report.referenceCount} refs
+                    {data.report.referenceCount ?? 0} refs
                   </span>
                 </div>
               )}

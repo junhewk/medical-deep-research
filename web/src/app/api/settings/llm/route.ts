@@ -5,8 +5,8 @@ import { NextResponse } from "next/server";
 import { generateId } from "@/lib/utils";
 import { z } from "zod";
 
-// Available models by provider
-export const MODEL_OPTIONS = {
+// Available models by provider (internal to this route)
+const MODEL_OPTIONS = {
   openai: [
     { id: "gpt-5.2", name: "GPT-5.2 (Recommended)", description: "Latest flagship model" },
     { id: "gpt-5-mini", name: "GPT-5 Mini", description: "Compact, efficient" },

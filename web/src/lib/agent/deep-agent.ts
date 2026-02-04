@@ -11,6 +11,8 @@ import {
   pubmedSearchTool,
   scopusSearchTool,
   cochraneSearchTool,
+  convertToScopusQuery,
+  buildScopusQueryFromPICO,
 } from "./tools";
 import { db } from "@/db";
 import { research, agentStates, reports, picoQueries, pccQueries, searchResults } from "@/db/schema";
@@ -207,7 +209,16 @@ Never conflate:
 - Results (organized by evidence level, note population characteristics)
 - Discussion (address population-specific considerations)
 - Conclusions
-- References (with PMIDs/DOIs, note journal)`;
+- References (with PMIDs/DOIs, note journal)
+
+## Post-Synthesis Verification
+
+After synthesizing findings into a report, consider using the claim_verifier tool to validate your claims:
+- Verifies PMIDs exist in PubMed
+- Fetches actual abstracts and compares against your claims
+- Flags any directional mismatches (e.g., claiming "benefit" when study found "no benefit")
+
+This is especially important for clinical questions where accurate representation of findings is critical.`;
 
 function createLLM(
   provider: "openai" | "anthropic" | "google",
@@ -417,6 +428,22 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
         }
         if (!args.model) {
           args.model = FAST_MODELS[config.llmProvider] || FAST_MODELS.openai;
+        }
+      }
+
+      // Inject API key and provider for claim verifier
+      if (tc.name === "claim_verifier") {
+        if (!args.apiKey) {
+          args.apiKey = config.apiKey;
+        }
+        if (!args.llmProvider) {
+          args.llmProvider = config.llmProvider;
+        }
+        if (!args.model) {
+          args.model = FAST_MODELS[config.llmProvider] || FAST_MODELS.openai;
+        }
+        if (!args.ncbiApiKey && config.ncbiApiKey) {
+          args.ncbiApiKey = config.ncbiApiKey;
         }
       }
 
@@ -780,9 +807,22 @@ Then build the appropriate query and search multiple databases.`;
     if (config.scopusApiKey) {
       try {
         const scopusStartTime = Date.now();
-        executions.push({ tool: "scopus_search", status: "running", query: searchQuery, startTime: scopusStartTime });
+
+        // Build Scopus-native query (PubMed syntax like [tiab] doesn't work in Scopus)
+        // Prefer PICO components when available for best results
+        const scopusQuery = config.picoComponents
+          ? buildScopusQueryFromPICO(config.picoComponents)
+          : convertToScopusQuery(searchQuery);
+
+        // Skip Scopus search if query conversion failed
+        if (!scopusQuery) {
+          console.warn("Could not build Scopus query, skipping Scopus search");
+          throw new Error("Empty Scopus query");
+        }
+
+        executions.push({ tool: "scopus_search", status: "running", query: scopusQuery, startTime: scopusStartTime });
         const scopusResult = await scopusSearchTool.invoke({
-          query: searchQuery,
+          query: scopusQuery,
           maxResults: 20,
           apiKey: config.scopusApiKey,
           sortBy: "pubyear", // Sort by recent publications

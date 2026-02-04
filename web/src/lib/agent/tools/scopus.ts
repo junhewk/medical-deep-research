@@ -3,6 +3,124 @@ import { tool } from "@langchain/core/tools";
 
 const SCOPUS_BASE_URL = "https://api.elsevier.com/content/search/scopus";
 
+/**
+ * Convert PubMed query syntax to Scopus query syntax
+ *
+ * PubMed uses tags like [tiab], [mh], [pt] while Scopus uses TITLE-ABS-KEY(), KEY(), DOCTYPE()
+ *
+ * Examples:
+ * - "heart attack[tiab]" → TITLE-ABS-KEY("heart attack")
+ * - "myocardial infarction[mh]" → KEY("myocardial infarction")
+ * - "randomized controlled trial[pt]" → DOCTYPE(ar)
+ */
+export function convertToScopusQuery(pubmedQuery: string): string {
+  if (!pubmedQuery?.trim()) return "";
+
+  // Remove all PubMed field tags: [tiab], [mh], [pt], [tw], [majr], [mesh], [all]
+  const query = pubmedQuery
+    .replace(/\[(tiab|mh|pt|tw|majr|mesh|all)\]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const terms = extractKeyTerms(query);
+  if (terms.length === 0) return "";
+
+  // Quote multi-word terms for Scopus
+  const scopusTerms = terms.map(term => term.includes(" ") ? `"${term}"` : term);
+
+  return `TITLE-ABS-KEY(${scopusTerms.join(" AND ")})`;
+}
+
+const STOP_WORDS = new Set(["and", "or", "not", "the", "for", "with", "none"]);
+
+function isValidTerm(term: string): boolean {
+  const cleaned = term.trim().toLowerCase();
+  return cleaned.length > 2 && !STOP_WORDS.has(cleaned);
+}
+
+/**
+ * Extract key terms from a query string, preserving quoted phrases
+ */
+function extractKeyTerms(query: string): string[] {
+  const terms: string[] = [];
+  const seenLower = new Set<string>();
+
+  // Extract quoted phrases first
+  const quotedPhrases = query.match(/"[^"]+"/g) || [];
+  for (const phrase of quotedPhrases) {
+    const cleanPhrase = phrase.replace(/"/g, "").trim();
+    if (cleanPhrase && !seenLower.has(cleanPhrase.toLowerCase())) {
+      terms.push(cleanPhrase);
+      seenLower.add(cleanPhrase.toLowerCase());
+    }
+  }
+
+  // Remove quoted phrases and boolean operators, then extract individual terms
+  const remaining = query
+    .replace(/"[^"]+"/g, "")
+    .replace(/\b(AND|OR|NOT)\b/gi, " ")
+    .replace(/[()]/g, " ");
+
+  for (const word of remaining.split(/\s+/)) {
+    const cleaned = word.trim();
+    if (cleaned && isValidTerm(cleaned) && !seenLower.has(cleaned.toLowerCase())) {
+      terms.push(cleaned);
+      seenLower.add(cleaned.toLowerCase());
+    }
+  }
+
+  return terms;
+}
+
+/**
+ * Build a native Scopus query from PICO components
+ *
+ * This creates an optimized Scopus query directly from PICO structure
+ * without going through PubMed syntax
+ */
+export interface PICOComponents {
+  population?: string;
+  intervention?: string;
+  comparison?: string;
+  outcome?: string;
+}
+
+function buildComponentClause(value: string | undefined, skipValues: string[] = []): string | null {
+  if (!value?.trim()) return null;
+  if (skipValues.some(skip => value.toLowerCase() === skip)) return null;
+
+  const terms = extractMedicalTerms(value);
+  if (terms.length === 0) return null;
+
+  return `(${terms.map(t => `"${t}"`).join(" OR ")})`;
+}
+
+export function buildScopusQueryFromPICO(pico: PICOComponents): string {
+  const parts = [
+    buildComponentClause(pico.population),
+    buildComponentClause(pico.intervention),
+    buildComponentClause(pico.comparison, ["none"]),
+    buildComponentClause(pico.outcome),
+  ].filter((part): part is string => part !== null);
+
+  if (parts.length === 0) return "";
+
+  return `TITLE-ABS-KEY(${parts.join(" AND ")})`;
+}
+
+/**
+ * Extract medical terms from a PICO component string
+ * Handles comma-separated lists and common medical phrases
+ */
+function extractMedicalTerms(input: string): string[] {
+  if (!input) return [];
+
+  return input
+    .split(/[,;]|\bOR\b/i)
+    .map(part => part.replace(/^\s*-\s*/, "").replace(/[()]/g, "").trim())
+    .filter(isValidTerm);
+}
+
 export interface ScopusArticle {
   scopusId: string;
   title: string;

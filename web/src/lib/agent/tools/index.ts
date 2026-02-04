@@ -9,7 +9,14 @@ export {
   type SearchStrategy,
   type DateRange,
 } from "./pubmed";
-export { scopusSearchTool, searchScopus, type ScopusArticle, type ScopusSortBy } from "./scopus";
+export {
+  scopusSearchTool,
+  searchScopus,
+  convertToScopusQuery,
+  buildScopusQueryFromPICO,
+  type ScopusArticle,
+  type ScopusSortBy,
+} from "./scopus";
 export { cochraneSearchTool, searchCochrane, type CochraneReview } from "./cochrane";
 
 // Query builder tools
@@ -64,11 +71,15 @@ export {
 } from "./population-validator";
 
 // Claim verification tools (post-synthesis safety net)
+// Uses PubMed as ground truth, not LLM knowledge
 export {
   claimVerifierTool,
   verifyReportClaims,
   extractCitationsFromReport,
+  verifyPmidInPubMed,
+  fetchAbstractFromPubMed,
   type Citation,
+  type PmidValidation,
   type VerificationResult,
   type ClaimVerificationReport,
 } from "./claim-verifier";
@@ -89,6 +100,7 @@ import { picoQueryBuilderTool } from "./pico-query";
 import { pccQueryBuilderTool } from "./pcc-query";
 import { meshMappingTool, evidenceLevelTool } from "./mesh-mapping";
 import { populationValidatorTool } from "./population-validator";
+import { claimVerifierTool } from "./claim-verifier";
 
 export const allMedicalTools = [
   pubmedSearchTool,
@@ -99,4 +111,5 @@ export const allMedicalTools = [
   meshMappingTool,
   evidenceLevelTool,
   populationValidatorTool,
+  claimVerifierTool,
 ];

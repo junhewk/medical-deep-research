@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useResearch } from "@/lib/research";
+import { useResearch, useDeleteResearch } from "@/lib/research";
 import { ResearchProgressView } from "@/components/research/ResearchProgress";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -27,24 +26,16 @@ interface ResearchPageProps {
 export default function ResearchPage({ params }: ResearchPageProps) {
   const router = useRouter();
   const { data, isLoading, error } = useResearch(params.id);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const deleteResearch = useDeleteResearch();
 
   const handleDelete = async () => {
-    setIsDeleting(true);
     try {
-      const response = await fetch(`/api/research/${params.id}`, {
-        method: "DELETE",
-      });
-      // Redirect on success or if already deleted (404)
-      if (response.ok || response.status === 404) {
-        router.push("/research");
-      }
+      await deleteResearch.mutateAsync(params.id);
+      router.push("/research");
     } catch (err) {
       console.error("Failed to delete research:", err);
       // Redirect anyway on error
       router.push("/research");
-    } finally {
-      setIsDeleting(false);
     }
   };
 
@@ -128,10 +119,10 @@ export default function ResearchPage({ params }: ResearchPageProps) {
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={handleDelete}
-                disabled={isDeleting}
+                disabled={deleteResearch.isPending}
                 className="bg-destructive hover:bg-destructive/90"
               >
-                {isDeleting ? (
+                {deleteResearch.isPending ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     Deleting...

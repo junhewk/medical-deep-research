@@ -4,48 +4,99 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Medical-inspired palette: Deep teal primary, warm accents */
+    --background: 210 20% 98%;
+    --foreground: 220 25% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 220 25% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    --popover-foreground: 220 25% 10%;
+
+    /* Primary: Deep medical teal */
+    --primary: 187 60% 32%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary: Warm slate */
+    --secondary: 220 14% 92%;
+    --secondary-foreground: 220 25% 20%;
+
+    /* Muted backgrounds */
+    --muted: 210 20% 96%;
+    --muted-foreground: 220 10% 45%;
+
+    /* Accent: Medical gold */
+    --accent: 45 80% 50%;
+    --accent-foreground: 220 25% 10%;
+
+    /* Destructive: Medical alert red */
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders and inputs */
+    --border: 220 13% 87%;
+    --input: 220 13% 87%;
+    --ring: 187 60% 32%;
+    --radius: 0.625rem;
+
+    /* Evidence level colors */
+    --evidence-1: 160 60% 40%;  /* Level I - Strong green */
+    --evidence-2: 145 50% 45%;  /* Level II - Green */
+    --evidence-3: 45 70% 50%;   /* Level III - Amber */
+    --evidence-4: 25 80% 55%;   /* Level IV - Orange */
+    --evidence-5: 0 65% 55%;    /* Level V - Red */
+
+    /* PICO component colors */
+    --pico-p: 200 70% 45%;  /* Population - Blue */
+    --pico-i: 160 60% 40%;  /* Intervention - Teal */
+    --pico-c: 280 50% 55%;  /* Comparison - Purple */
+    --pico-o: 25 80% 50%;   /* Outcome - Orange */
+
+    /* PCC component colors */
+    --pcc-p: 200 70% 45%;  /* Population - Blue */
+    --pcc-c1: 320 60% 50%; /* Concept - Magenta */
+    --pcc-c2: 45 70% 50%;  /* Context - Gold */
+
+    /* Status colors */
+    --status-pending: 220 10% 60%;
+    --status-running: 187 60% 45%;
+    --status-completed: 160 60% 40%;
+    --status-failed: 0 72% 51%;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --background: 220 25% 8%;
+    --foreground: 210 20% 95%;
+    --card: 220 20% 12%;
+    --card-foreground: 210 20% 95%;
+    --popover: 220 20% 12%;
+    --popover-foreground: 210 20% 95%;
+
+    /* Primary: Brighter teal for dark mode */
+    --primary: 175 55% 50%;
+    --primary-foreground: 220 25% 8%;
+
+    --secondary: 220 15% 18%;
+    --secondary-foreground: 210 20% 90%;
+
+    --muted: 220 15% 15%;
+    --muted-foreground: 220 10% 60%;
+
+    --accent: 45 75% 55%;
+    --accent-foreground: 220 25% 8%;
+
+    --destructive: 0 65% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 20%;
+    --input: 220 15% 20%;
+    --ring: 175 55% 50%;
+
+    /* Adjusted evidence colors for dark mode */
+    --evidence-1: 160 55% 50%;
+    --evidence-2: 145 45% 50%;
+    --evidence-3: 45 65% 55%;
+    --evidence-4: 25 75% 55%;
+    --evidence-5: 0 60% 55%;
   }
 }
 
@@ -53,7 +104,176 @@
   * {
     @apply border-border;
   }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Improved focus styles */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /* Selection color */
+  ::selection {
+    @apply bg-primary/20 text-foreground;
+  }
+}
+
+@layer components {
+  /* Evidence level badge variants */
+  .evidence-level-1 {
+    @apply bg-[hsl(var(--evidence-1))] text-white;
+  }
+  .evidence-level-2 {
+    @apply bg-[hsl(var(--evidence-2))] text-white;
+  }
+  .evidence-level-3 {
+    @apply bg-[hsl(var(--evidence-3))] text-white;
+  }
+  .evidence-level-4 {
+    @apply bg-[hsl(var(--evidence-4))] text-white;
+  }
+  .evidence-level-5 {
+    @apply bg-[hsl(var(--evidence-5))] text-white;
+  }
+
+  /* PICO component badges */
+  .pico-population {
+    @apply bg-[hsl(var(--pico-p))]/15 text-[hsl(var(--pico-p))] border-[hsl(var(--pico-p))]/30;
+  }
+  .pico-intervention {
+    @apply bg-[hsl(var(--pico-i))]/15 text-[hsl(var(--pico-i))] border-[hsl(var(--pico-i))]/30;
+  }
+  .pico-comparison {
+    @apply bg-[hsl(var(--pico-c))]/15 text-[hsl(var(--pico-c))] border-[hsl(var(--pico-c))]/30;
+  }
+  .pico-outcome {
+    @apply bg-[hsl(var(--pico-o))]/15 text-[hsl(var(--pico-o))] border-[hsl(var(--pico-o))]/30;
+  }
+
+  /* Status badges */
+  .status-pending {
+    @apply bg-[hsl(var(--status-pending))]/15 text-[hsl(var(--status-pending))];
+  }
+  .status-running {
+    @apply bg-[hsl(var(--status-running))]/15 text-[hsl(var(--status-running))];
+  }
+  .status-completed {
+    @apply bg-[hsl(var(--status-completed))]/15 text-[hsl(var(--status-completed))];
+  }
+  .status-failed {
+    @apply bg-[hsl(var(--status-failed))]/15 text-[hsl(var(--status-failed))];
+  }
+
+  /* Card hover effect */
+  .card-hover {
+    @apply transition-all duration-200 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary to-[hsl(var(--accent))] bg-clip-text text-transparent;
+  }
+
+  /* Subtle pattern background */
+  .pattern-grid {
+    background-image:
+      linear-gradient(to right, hsl(var(--border)) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border)) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  /* Animated gradient background */
+  .animated-gradient {
+    background: linear-gradient(
+      -45deg,
+      hsl(var(--primary) / 0.1),
+      hsl(var(--accent) / 0.1),
+      hsl(var(--primary) / 0.05),
+      hsl(var(--accent) / 0.05)
+    );
+    background-size: 400% 400%;
+    animation: gradient-shift 15s ease infinite;
+  }
+
+  @keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+
+  /* Pulse animation for running status */
+  .pulse-ring {
+    @apply relative;
+  }
+  .pulse-ring::after {
+    content: '';
+    @apply absolute inset-0 rounded-full;
+    animation: pulse-ring 2s ease-out infinite;
+  }
+  @keyframes pulse-ring {
+    0% { box-shadow: 0 0 0 0 hsl(var(--status-running) / 0.4); }
+    70% { box-shadow: 0 0 0 8px hsl(var(--status-running) / 0); }
+    100% { box-shadow: 0 0 0 0 hsl(var(--status-running) / 0); }
+  }
+
+  /* Progress bar animation */
+  .progress-animated {
+    @apply relative overflow-hidden;
+  }
+  .progress-animated::after {
+    content: '';
+    @apply absolute inset-0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--primary-foreground) / 0.2),
+      transparent
+    );
+    animation: shimmer 2s infinite;
+  }
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  /* Skeleton loader */
+  .skeleton {
+    @apply bg-muted animate-pulse rounded;
+  }
+
+  /* Staggered fade in animation */
+  .fade-in-stagger > * {
+    @apply opacity-0 animate-[fade-in_0.5s_ease-out_forwards];
+  }
+  .fade-in-stagger > *:nth-child(1) { animation-delay: 0ms; }
+  .fade-in-stagger > *:nth-child(2) { animation-delay: 50ms; }
+  .fade-in-stagger > *:nth-child(3) { animation-delay: 100ms; }
+  .fade-in-stagger > *:nth-child(4) { animation-delay: 150ms; }
+  .fade-in-stagger > *:nth-child(5) { animation-delay: 200ms; }
+  .fade-in-stagger > *:nth-child(6) { animation-delay: 250ms; }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
+
+/* Prose styling for markdown content */
+@layer utilities {
+  .prose-medical {
+    @apply prose prose-slate dark:prose-invert max-w-none;
+    @apply prose-headings:font-serif prose-headings:text-foreground;
+    @apply prose-h1:text-2xl prose-h1:border-b prose-h1:border-border prose-h1:pb-2;
+    @apply prose-h2:text-xl prose-h2:text-primary;
+    @apply prose-h3:text-lg;
+    @apply prose-p:text-muted-foreground prose-p:leading-relaxed;
+    @apply prose-a:text-primary prose-a:no-underline hover:prose-a:underline;
+    @apply prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm;
+    @apply prose-pre:bg-muted prose-pre:border prose-pre:border-border;
+    @apply prose-ul:text-muted-foreground prose-ol:text-muted-foreground;
+    @apply prose-strong:text-foreground prose-strong:font-semibold;
   }
 }

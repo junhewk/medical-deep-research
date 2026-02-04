@@ -63,6 +63,16 @@ export {
   type PopulationValidationResult,
 } from "./population-validator";
 
+// Claim verification tools (post-synthesis safety net)
+export {
+  claimVerifierTool,
+  verifyReportClaims,
+  extractCitationsFromReport,
+  type Citation,
+  type VerificationResult,
+  type ClaimVerificationReport,
+} from "./claim-verifier";
+
 // Utility tools
 export {
   meshMappingTool,

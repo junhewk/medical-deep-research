@@ -174,9 +174,8 @@ export const cochraneSearchTool = tool(
         reviews: reviews.map((r) => ({
           id: r.id,
           title: r.title,
-          abstract: r.abstract
-            ? r.abstract.substring(0, 500) + (r.abstract.length > 500 ? "..." : "")
-            : null,
+          // CRITICAL: Return FULL abstract to prevent hallucination from incomplete data
+          abstract: r.abstract || null,
           authors: r.authors.slice(0, 5).join(", ") + (r.authors.length > 5 ? " et al." : ""),
           publicationDate: r.publicationDate,
           doi: r.doi,

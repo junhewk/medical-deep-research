@@ -128,6 +128,8 @@ export async function POST(request: Request) {
       .where(eq(research.id, researchId));
 
     // Start research in background (don't await)
+    // Note: Population validator now uses the user's configured LLM provider (apiKey)
+    // instead of a separate OpenAI key
     runMedicalResearch({
       researchId,
       query,

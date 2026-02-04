@@ -56,6 +56,10 @@ export interface PubMedArticle {
   pmid: string;
   title: string;
   abstract: string;
+  /** Extracted conclusion section from structured abstract */
+  conclusion?: string;
+  /** Extracted results section from structured abstract */
+  results?: string;
   authors: string[];
   journal: string;
   publicationDate: string;
@@ -64,6 +68,64 @@ export interface PubMedArticle {
   doi?: string;
   evidenceLevel?: string;
   isLandmarkJournal?: boolean;
+}
+
+/**
+ * Parse structured abstract sections from PubMed XML
+ * PubMed returns structured abstracts with labeled sections like:
+ * <AbstractText Label="CONCLUSIONS">...</AbstractText>
+ */
+function parseStructuredAbstract(abstractXml: string): {
+  background?: string;
+  methods?: string;
+  results?: string;
+  conclusion?: string;
+  fullText: string;
+} {
+  const sections: Record<string, string> = {};
+  let fullText = "";
+
+  // Try to extract labeled sections
+  const labeledMatches = Array.from(
+    abstractXml.matchAll(/<AbstractText[^>]*Label="([^"]+)"[^>]*>([\s\S]*?)<\/AbstractText>/gi)
+  );
+
+  if (labeledMatches.length > 0) {
+    // Structured abstract with labeled sections
+    for (const match of labeledMatches) {
+      const label = match[1].toLowerCase();
+      const text = match[2].replace(/<[^>]+>/g, "").trim();
+      sections[label] = text;
+      fullText += text + " ";
+    }
+  } else {
+    // Unstructured abstract - extract all AbstractText content
+    const unstructuredMatches = Array.from(
+      abstractXml.matchAll(/<AbstractText[^>]*>([\s\S]*?)<\/AbstractText>/gi)
+    );
+    fullText = unstructuredMatches.map((m) => m[1].replace(/<[^>]+>/g, "").trim()).join(" ");
+  }
+
+  // Map common variations of section labels to canonical names
+  function findSection(...keys: string[]): string | undefined {
+    for (const key of keys) {
+      if (sections[key]) return sections[key];
+    }
+    return undefined;
+  }
+
+  const conclusion = findSection("conclusions", "conclusion", "interpretation", "findings");
+  const results = findSection("results", "findings", "main results");
+  const background = findSection("background", "context", "introduction", "objective", "objectives");
+  const methods = findSection("methods", "method", "design", "setting");
+
+  return {
+    background,
+    methods,
+    results,
+    conclusion,
+    fullText: fullText.trim(),
+  };
 }
 
 interface ESearchResult {
@@ -199,10 +261,10 @@ async function fetchPubMedDetails(
 
     const pmid = articleXml.match(/<PMID[^>]*>(\d+)<\/PMID>/)?.[1] || "";
     const title = articleXml.match(/<ArticleTitle[^>]*>([\s\S]*?)<\/ArticleTitle>/)?.[1] || "";
-    const abstractMatch = articleXml.match(/<AbstractText[^>]*>([\s\S]*?)<\/AbstractText>/g);
-    const abstract = abstractMatch
-      ? abstractMatch.map((a: string) => a.replace(/<[^>]+>/g, "")).join(" ")
-      : "";
+
+    // Extract Abstract section and parse structured abstract
+    const abstractSection = articleXml.match(/<Abstract>([\s\S]*?)<\/Abstract>/)?.[1] || "";
+    const parsedAbstract = parseStructuredAbstract(abstractSection);
 
     const journal = articleXml.match(/<Title[^>]*>([\s\S]*?)<\/Title>/)?.[1] || "";
 
@@ -232,7 +294,7 @@ async function fetchPubMedDetails(
     // Determine evidence level
     let evidenceLevel = "Level V";
     const pubTypeStr = pubTypes.join(" ").toLowerCase();
-    const abstractLower = abstract.toLowerCase();
+    const abstractLower = parsedAbstract.fullText.toLowerCase();
 
     for (const [key, value] of Object.entries(EVIDENCE_LEVELS)) {
       if (pubTypeStr.includes(key) || abstractLower.includes(key)) {
@@ -245,7 +307,9 @@ async function fetchPubMedDetails(
     articles.push({
       pmid,
       title: title.replace(/<[^>]+>/g, ""), // Strip any remaining HTML
-      abstract: abstract.replace(/<[^>]+>/g, ""),
+      abstract: parsedAbstract.fullText, // FULL abstract, not truncated
+      conclusion: parsedAbstract.conclusion, // Extracted conclusion section
+      results: parsedAbstract.results, // Extracted results section
       authors,
       journal: cleanJournal,
       publicationDate,
@@ -374,7 +438,12 @@ export const pubmedSearchTool = tool(
         articles: articles.map((a) => ({
           pmid: a.pmid,
           title: a.title,
-          abstract: a.abstract.substring(0, 500) + (a.abstract.length > 500 ? "..." : ""),
+          // CRITICAL: Return FULL abstract to prevent hallucination from incomplete data
+          abstract: a.abstract,
+          // Extracted conclusion section - most important for accurate claims
+          conclusion: a.conclusion || null,
+          // Extracted results section
+          results: a.results || null,
           authors: a.authors.slice(0, 5).join(", ") + (a.authors.length > 5 ? " et al." : ""),
           journal: a.journal,
           publicationDate: a.publicationDate,

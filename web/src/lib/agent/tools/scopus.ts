@@ -108,9 +108,8 @@ export const scopusSearchTool = tool(
         articles: articles.map((a) => ({
           scopusId: a.scopusId,
           title: a.title,
-          abstract: a.abstract
-            ? a.abstract.substring(0, 500) + (a.abstract.length > 500 ? "..." : "")
-            : null,
+          // CRITICAL: Return FULL abstract to prevent hallucination from incomplete data
+          abstract: a.abstract || null,
           authors: a.authors.join(", "),
           journal: a.journal,
           publicationDate: a.publicationDate,

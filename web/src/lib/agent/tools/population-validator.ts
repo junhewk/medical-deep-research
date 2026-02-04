@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
 import { ChatOpenAI } from "@langchain/openai";
+import { ChatAnthropic } from "@langchain/anthropic";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+
+type SupportedLLM = ChatOpenAI | ChatAnthropic | ChatGoogleGenerativeAI;
 
 /**
  * AI-based population validation for medical research
@@ -91,34 +95,75 @@ Return ONLY valid JSON:
 }`;
 
 /**
+ * Create LLM instance from provider configuration
+ */
+function createValidatorLLM(
+  provider: "openai" | "anthropic" | "google",
+  apiKey: string,
+  model?: string
+): SupportedLLM {
+  if (provider === "anthropic") {
+    return new ChatAnthropic({
+      modelName: model || "claude-3-5-haiku-20241022", // Fast and cost-effective
+      anthropicApiKey: apiKey,
+      temperature: 0,
+    });
+  }
+  if (provider === "google") {
+    return new ChatGoogleGenerativeAI({
+      model: model || "gemini-1.5-flash", // Fast and cost-effective
+      apiKey: apiKey,
+      temperature: 0,
+    });
+  }
+  return new ChatOpenAI({
+    modelName: model || "gpt-4o-mini", // Fast and cost-effective
+    openAIApiKey: apiKey,
+    temperature: 0,
+  });
+}
+
+/**
  * Validate population match using LLM
+ *
+ * Supports multiple LLM providers (OpenAI, Anthropic, Google)
+ * Uses user's configured provider instead of hardcoding OpenAI
  */
 async function validatePopulationWithLLM(
   targetCriteria: TargetCriteria,
   studyAbstract: string,
   studyTitle?: string,
-  apiKey?: string
-): Promise<PopulationValidationResult> {
-  // Use environment variable if apiKey not provided
-  const openaiKey = apiKey || process.env.OPENAI_API_KEY;
-
-  if (!openaiKey) {
-    // Return default match if no API key available
-    console.warn("No OpenAI API key for population validation, defaulting to match");
-    return {
-      isMatch: true,
-      matchScore: 1.0,
-      reasoning: "Population validation skipped (no API key)",
-      violations: [],
-      extractedPopulation: "Unknown",
-    };
+  options?: {
+    apiKey?: string;
+    provider?: "openai" | "anthropic" | "google";
+    model?: string;
+    llm?: SupportedLLM; // Pre-configured LLM instance
   }
+): Promise<PopulationValidationResult> {
+  let llm: SupportedLLM;
 
-  const llm = new ChatOpenAI({
-    modelName: "gpt-4o-mini", // Cost-effective for validation
-    openAIApiKey: openaiKey,
-    temperature: 0, // Deterministic output
-  });
+  // Use provided LLM instance if available
+  if (options?.llm) {
+    llm = options.llm;
+  } else {
+    // Create LLM from configuration
+    const apiKey = options?.apiKey || process.env.OPENAI_API_KEY;
+    const provider = options?.provider || "openai";
+
+    if (!apiKey) {
+      // Return default match if no API key available
+      console.warn("No API key for population validation, defaulting to match");
+      return {
+        isMatch: true,
+        matchScore: 1.0,
+        reasoning: "Population validation skipped (no API key)",
+        violations: [],
+        extractedPopulation: "Unknown",
+      };
+    }
+
+    llm = createValidatorLLM(provider, apiKey, options?.model);
+  }
 
   // Build the user prompt
   const userPrompt = `## TARGET POPULATION CRITERIA
@@ -180,11 +225,18 @@ Analyze whether this study's population matches the target criteria. Return JSON
 
 /**
  * Batch validate multiple studies against target criteria
+ *
+ * Supports OpenAI, Anthropic, and Google LLM providers
  */
 export async function batchValidatePopulations(
   targetCriteria: TargetCriteria,
   studies: Array<{ abstract: string; title?: string; id: string }>,
-  apiKey?: string
+  options?: {
+    apiKey?: string;
+    provider?: "openai" | "anthropic" | "google";
+    model?: string;
+    llm?: SupportedLLM;
+  }
 ): Promise<Map<string, PopulationValidationResult>> {
   const results = new Map<string, PopulationValidationResult>();
 
@@ -198,7 +250,7 @@ export async function batchValidatePopulations(
           targetCriteria,
           study.abstract,
           study.title,
-          apiKey
+          options
         );
         return { id: study.id, result };
       })
@@ -216,9 +268,10 @@ export async function batchValidatePopulations(
  * LangChain tool for population validation
  *
  * Can be used by the agent to validate individual study populations
+ * Supports OpenAI, Anthropic, and Google LLM providers
  */
 export const populationValidatorTool = tool(
-  async ({ targetPopulation, targetContext, targetNumericCriteria, studyAbstract, studyTitle, apiKey }) => {
+  async ({ targetPopulation, targetContext, targetNumericCriteria, studyAbstract, studyTitle, apiKey, provider, model }) => {
     const targetCriteria: TargetCriteria = {
       population: targetPopulation,
       clinicalContext: targetContext,
@@ -229,7 +282,11 @@ export const populationValidatorTool = tool(
       targetCriteria,
       studyAbstract,
       studyTitle,
-      apiKey
+      {
+        apiKey,
+        provider: provider as "openai" | "anthropic" | "google" | undefined,
+        model,
+      }
     );
 
     // Determine recommendation based on match status and score
@@ -258,7 +315,9 @@ export const populationValidatorTool = tool(
       targetNumericCriteria: z.string().optional().describe("Numeric criteria (e.g., 'LVEF >= 50%', 'age > 65', 'eGFR < 60')"),
       studyAbstract: z.string().describe("Abstract text of the study to validate"),
       studyTitle: z.string().optional().describe("Title of the study"),
-      apiKey: z.string().optional().describe("OpenAI API key (uses environment variable if not provided)"),
+      apiKey: z.string().optional().describe("API key for the LLM provider"),
+      provider: z.enum(["openai", "anthropic", "google"]).optional().describe("LLM provider (defaults to openai)"),
+      model: z.string().optional().describe("Optional model name (defaults to fast model for each provider)"),
     }),
   }
 );

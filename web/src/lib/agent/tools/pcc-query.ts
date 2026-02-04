@@ -1,8 +1,12 @@
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
-import { MESH_MAPPINGS } from "./mesh-mapping";
+import { findMeshTerms } from "./mesh-mapping";
 
-export interface PccComponents {
+/**
+ * PCC components for query building (stricter version with required fields).
+ * For API input types, use PccComponents from @/types/index.ts
+ */
+export interface PccQueryInput {
   population: string;
   concept: string;
   context: string;
@@ -15,21 +19,7 @@ export interface GeneratedPccQuery {
   alternativeQueries: string[];
 }
 
-function findMeshTerms(text: string): string[] {
-  const terms: string[] = [];
-  const normalizedText = text.toLowerCase();
-
-  for (const [key, meshTerms] of Object.entries(MESH_MAPPINGS)) {
-    const keyNormalized = key.replace(/_/g, " ");
-    if (normalizedText.includes(keyNormalized) || normalizedText.includes(key)) {
-      terms.push(...meshTerms);
-    }
-  }
-
-  return [...new Set(terms)];
-}
-
-function buildPccPubMedQuery(components: PccComponents): GeneratedPccQuery {
+function buildPccPubMedQuery(components: PccQueryInput): GeneratedPccQuery {
   const meshTerms: string[] = [];
   const queryParts: string[] = [];
 
@@ -113,15 +103,15 @@ Note: PCC framework is typically used for:
 
   return {
     pubmedQuery,
-    meshTerms: [...new Set(meshTerms)],
+    meshTerms: Array.from(new Set(meshTerms)),
     searchStrategy,
     alternativeQueries,
   };
 }
 
 export const pccQueryBuilderTool = tool(
-  async ({ population, concept, context }) => {
-    const components: PccComponents = {
+  async ({ population, concept, context }): Promise<string> => {
+    const components: PccQueryInput = {
       population,
       concept,
       context,

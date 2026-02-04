@@ -4,12 +4,11 @@ import path from "path";
 const DATA_DIR = path.join(process.cwd(), "..", "data", "research");
 
 export interface StateExportData {
-  phase: string;
+  phase?: string;
   progress?: number;
   planningSteps?: Array<{ id: string; name: string; status: string }>;
   searchResults?: unknown[];
   synthesizedContent?: string;
-  messages?: Array<{ role: string; content: string }>;
 }
 
 export async function ensureResearchDir(researchId: string): Promise<string> {

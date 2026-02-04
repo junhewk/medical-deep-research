@@ -133,4 +133,22 @@ export const evidenceLevelTool = tool(
   }
 );
 
+/**
+ * Find MeSH terms in text by matching against known mappings.
+ * Shared utility function used by PICO and PCC query builders.
+ */
+export function findMeshTerms(text: string): string[] {
+  const terms: string[] = [];
+  const normalizedText = text.toLowerCase();
+
+  for (const [key, meshTerms] of Object.entries(MESH_MAPPINGS)) {
+    const keyNormalized = key.replace(/_/g, " ");
+    if (normalizedText.includes(keyNormalized) || normalizedText.includes(key)) {
+      terms.push(...meshTerms);
+    }
+  }
+
+  return Array.from(new Set(terms));
+}
+
 export { MESH_MAPPINGS };

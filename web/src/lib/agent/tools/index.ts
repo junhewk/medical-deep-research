@@ -7,10 +7,10 @@ export { cochraneSearchTool, searchCochrane, type CochraneReview } from "./cochr
 export {
   picoQueryBuilderTool,
   buildPubMedQuery,
-  type PicoComponents,
-  type GeneratedQuery,
+  type PicoQueryInput,
+  type GeneratedPicoQuery,
 } from "./pico-query";
-export { pccQueryBuilderTool, buildPccPubMedQuery, type PccComponents } from "./pcc-query";
+export { pccQueryBuilderTool, buildPccPubMedQuery, type PccQueryInput, type GeneratedPccQuery } from "./pcc-query";
 
 // Utility tools
 export {

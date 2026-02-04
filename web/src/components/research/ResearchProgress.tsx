@@ -270,7 +270,7 @@ function simpleMarkdownToHtml(markdown: string): string {
 
   // Fix list items
   html = html.replace(/<\/li>\s*<li>/g, "</li><li>");
-  html = html.replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>");
+  html = html.replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>");
   html = html.replace(/<\/ul>\s*<ul>/g, "");
 
   return html;

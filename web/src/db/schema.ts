@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
 
 // Research sessions
 export const research = sqliteTable("research", {
@@ -18,7 +18,10 @@ export const research = sqliteTable("research", {
   completedAt: integer("completed_at", { mode: "timestamp" }),
   durationSeconds: integer("duration_seconds"),
   errorMessage: text("error_message"),
-});
+}, (table) => ({
+  statusIdx: index("research_status_idx").on(table.status),
+  createdAtIdx: index("research_created_at_idx").on(table.createdAt),
+}));
 
 // PICO queries
 export const picoQueries = sqliteTable("pico_queries", {
@@ -35,7 +38,9 @@ export const picoQueries = sqliteTable("pico_queries", {
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
-});
+}, (table) => ({
+  researchIdIdx: index("pico_research_id_idx").on(table.researchId),
+}));
 
 // PCC queries (qualitative research)
 export const pccQueries = sqliteTable("pcc_queries", {
@@ -50,7 +55,9 @@ export const pccQueries = sqliteTable("pcc_queries", {
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
-});
+}, (table) => ({
+  researchIdIdx: index("pcc_research_id_idx").on(table.researchId),
+}));
 
 // Reports (markdown content)
 export const reports = sqliteTable("reports", {
@@ -68,7 +75,9 @@ export const reports = sqliteTable("reports", {
     .notNull()
     .$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }),
-});
+}, (table) => ({
+  researchIdIdx: index("reports_research_id_idx").on(table.researchId),
+}));
 
 // Agent state snapshots
 export const agentStates = sqliteTable("agent_states", {
@@ -87,7 +96,10 @@ export const agentStates = sqliteTable("agent_states", {
     .notNull()
     .$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }),
-});
+}, (table) => ({
+  researchIdIdx: index("agent_states_research_id_idx").on(table.researchId),
+  createdAtIdx: index("agent_states_created_at_idx").on(table.createdAt),
+}));
 
 // Search results
 export const searchResults = sqliteTable("search_results", {
@@ -109,7 +121,10 @@ export const searchResults = sqliteTable("search_results", {
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
-});
+}, (table) => ({
+  researchIdIdx: index("search_results_research_id_idx").on(table.researchId),
+  sourceIdx: index("search_results_source_idx").on(table.source),
+}));
 
 // API keys (BYOK)
 export const apiKeys = sqliteTable("api_keys", {

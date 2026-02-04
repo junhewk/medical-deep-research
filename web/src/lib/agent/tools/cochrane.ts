@@ -122,7 +122,7 @@ async function searchCochraneAlternative(
   const xmlText = await fetchResponse.text();
   const reviews: CochraneReview[] = [];
 
-  const articleMatches = xmlText.matchAll(/<PubmedArticle>([\s\S]*?)<\/PubmedArticle>/g);
+  const articleMatches = Array.from(xmlText.matchAll(/<PubmedArticle>([\s\S]*?)<\/PubmedArticle>/g));
 
   for (const match of articleMatches) {
     const articleXml = match[1];
@@ -131,13 +131,13 @@ async function searchCochraneAlternative(
     const title = articleXml.match(/<ArticleTitle[^>]*>([\s\S]*?)<\/ArticleTitle>/)?.[1] || "";
     const abstractMatch = articleXml.match(/<AbstractText[^>]*>([\s\S]*?)<\/AbstractText>/g);
     const abstract = abstractMatch
-      ? abstractMatch.map((a) => a.replace(/<[^>]+>/g, "")).join(" ")
+      ? abstractMatch.map((a: string) => a.replace(/<[^>]+>/g, "")).join(" ")
       : undefined;
 
     const authors: string[] = [];
-    const authorMatches = articleXml.matchAll(
+    const authorMatches = Array.from(articleXml.matchAll(
       /<Author[^>]*>[\s\S]*?<LastName>([^<]+)<\/LastName>[\s\S]*?<ForeName>([^<]+)<\/ForeName>[\s\S]*?<\/Author>/g
-    );
+    ));
     for (const authorMatch of authorMatches) {
       authors.push(`${authorMatch[2]} ${authorMatch[1]}`);
     }

@@ -3,6 +3,7 @@ import { research, agentStates, reports, picoQueries, pccQueries, searchResults 
 import { eq, desc } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { readResearchState, readFinalReport } from "@/lib/state-export";
+import { safeJsonParse } from "@/lib/utils";
 
 // GET /api/research/[id] - Get research details and progress
 export async function GET(
@@ -68,9 +69,9 @@ export async function GET(
       durationSeconds: researchRecord.durationSeconds,
       errorMessage: researchRecord.errorMessage,
       phase: latestState?.phase || "init",
-      planning_steps: latestState?.planningSteps ? JSON.parse(latestState.planningSteps) : [],
-      active_agents: latestState?.activeAgents ? JSON.parse(latestState.activeAgents) : [],
-      tool_executions: latestState?.toolExecutions ? JSON.parse(latestState.toolExecutions) : [],
+      planning_steps: safeJsonParse(latestState?.planningSteps, []),
+      active_agents: safeJsonParse(latestState?.activeAgents, []),
+      tool_executions: safeJsonParse(latestState?.toolExecutions, []),
       picoQuery: picoQuery
         ? {
             population: picoQuery.population,
@@ -78,7 +79,7 @@ export async function GET(
             comparison: picoQuery.comparison,
             outcome: picoQuery.outcome,
             generatedPubmedQuery: picoQuery.generatedPubmedQuery,
-            meshTerms: picoQuery.meshTerms ? JSON.parse(picoQuery.meshTerms) : [],
+            meshTerms: safeJsonParse(picoQuery.meshTerms, []),
           }
         : null,
       pccQuery: pccQuery

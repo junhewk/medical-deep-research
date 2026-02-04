@@ -1,36 +1,26 @@
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
-import { MESH_MAPPINGS } from "./mesh-mapping";
+import { findMeshTerms } from "./mesh-mapping";
 
-export interface PicoComponents {
+/**
+ * PICO components for query building (stricter version with required fields).
+ * For API input types, use PicoComponents from @/types/index.ts
+ */
+export interface PicoQueryInput {
   population: string;
   intervention: string;
   comparison?: string;
   outcome: string;
 }
 
-export interface GeneratedQuery {
+export interface GeneratedPicoQuery {
   pubmedQuery: string;
   meshTerms: string[];
   searchStrategy: string;
   alternativeQueries: string[];
 }
 
-function findMeshTerms(text: string): string[] {
-  const terms: string[] = [];
-  const normalizedText = text.toLowerCase();
-
-  for (const [key, meshTerms] of Object.entries(MESH_MAPPINGS)) {
-    const keyNormalized = key.replace(/_/g, " ");
-    if (normalizedText.includes(keyNormalized) || normalizedText.includes(key)) {
-      terms.push(...meshTerms);
-    }
-  }
-
-  return [...new Set(terms)];
-}
-
-function buildPubMedQuery(components: PicoComponents): GeneratedQuery {
+function buildPubMedQuery(components: PicoQueryInput): GeneratedPicoQuery {
   const meshTerms: string[] = [];
   const queryParts: string[] = [];
 
@@ -126,15 +116,15 @@ Alternative Queries:
 
   return {
     pubmedQuery,
-    meshTerms: [...new Set(meshTerms)],
+    meshTerms: Array.from(new Set(meshTerms)),
     searchStrategy,
     alternativeQueries,
   };
 }
 
 export const picoQueryBuilderTool = tool(
-  async ({ population, intervention, comparison, outcome }) => {
-    const components: PicoComponents = {
+  async ({ population, intervention, comparison, outcome }): Promise<string> => {
+    const components: PicoQueryInput = {
       population,
       intervention,
       comparison,
@@ -170,4 +160,4 @@ export const picoQueryBuilderTool = tool(
   }
 );
 
-export { buildPubMedQuery, findMeshTerms };
+export { buildPubMedQuery };

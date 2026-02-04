@@ -4,6 +4,27 @@ import { desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { generateId } from "@/lib/utils";
 import { runMedicalResearch } from "@/lib/agent";
+import { z } from "zod";
+
+// Input validation schema
+const createResearchSchema = z.object({
+  query: z.string().min(1, "Query is required").max(5000),
+  queryType: z.enum(["pico", "pcc", "free"]).default("pico"),
+  mode: z.enum(["quick", "detailed"]).default("detailed"),
+  llmProvider: z.enum(["openai", "anthropic"]).default("openai"),
+  model: z.string().optional(),
+  picoComponents: z.object({
+    population: z.string().optional(),
+    intervention: z.string().optional(),
+    comparison: z.string().optional(),
+    outcome: z.string().optional(),
+  }).optional(),
+  pccComponents: z.object({
+    population: z.string().optional(),
+    concept: z.string().optional(),
+    context: z.string().optional(),
+  }).optional(),
+});
 
 // GET /api/research - List all research
 export async function GET() {
@@ -23,19 +44,23 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
+
+    // Validate input
+    const parseResult = createResearchSchema.safeParse(body);
+    if (!parseResult.success) {
+      const errors = parseResult.error.errors.map(e => e.message).join(", ");
+      return NextResponse.json({ error: errors }, { status: 400 });
+    }
+
     const {
       query,
-      queryType = "pico",
-      mode = "detailed",
-      llmProvider = "openai",
+      queryType,
+      mode,
+      llmProvider,
       model,
       picoComponents,
       pccComponents,
-    } = body;
-
-    if (!query || typeof query !== "string" || query.trim().length === 0) {
-      return NextResponse.json({ error: "Query is required" }, { status: 400 });
-    }
+    } = parseResult.data;
 
     const researchId = generateId();
     const now = new Date();
@@ -43,7 +68,7 @@ export async function POST(request: Request) {
     // Create research record
     await db.insert(research).values({
       id: researchId,
-      query: query.trim(),
+      query: query,
       queryType,
       mode,
       status: "pending",
@@ -81,7 +106,7 @@ export async function POST(request: Request) {
     // Start research in background (don't await)
     runMedicalResearch({
       researchId,
-      query: query.trim(),
+      query,
       queryType,
       llmProvider,
       model: model || (llmProvider === "anthropic" ? "claude-3-5-sonnet-20241022" : "gpt-4o"),

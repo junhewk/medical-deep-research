@@ -18,12 +18,15 @@ const AgentState = Annotation.Root({
   }),
   researchId: Annotation<string>(),
   phase: Annotation<string>({
+    value: (_, update) => update,
     default: () => "init",
   }),
   progress: Annotation<number>({
+    value: (_, update) => update,
     default: () => 0,
   }),
   planningSteps: Annotation<Array<{ id: string; name: string; status: string }>>({
+    value: (_, update) => update,
     default: () => [],
   }),
   searchResults: Annotation<unknown[]>({
@@ -31,6 +34,7 @@ const AgentState = Annotation.Root({
     default: () => [],
   }),
   synthesizedContent: Annotation<string>({
+    value: (_, update) => update,
     default: () => "",
   }),
 });
@@ -113,7 +117,7 @@ async function updateProgress(
   message: string,
   state: Partial<AgentStateType>,
   onProgress?: (progress: { phase: string; progress: number; message: string }) => void
-) {
+): Promise<void> {
   const stateId = generateId();
   const now = new Date();
 
@@ -165,6 +169,10 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
     };
   }
 
+  // Track tool calls to determine when to synthesize
+  let toolCallCount = 0;
+  const maxToolCalls = 10; // Prevent infinite loops
+
   // Should continue function
   function shouldContinue(state: AgentStateType): "tools" | "synthesize" | typeof END {
     const lastMessage = state.messages[state.messages.length - 1];
@@ -175,11 +183,21 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       Array.isArray(lastMessage.tool_calls) &&
       lastMessage.tool_calls.length > 0
     ) {
+      toolCallCount++;
+      // If we've made enough tool calls, force synthesis
+      if (toolCallCount >= maxToolCalls) {
+        return "synthesize";
+      }
       return "tools";
     }
 
-    // Check if we have enough search results to synthesize
-    if (state.searchResults.length > 0 && state.phase === "searching") {
+    // Check if we're in searching phase and have made at least one tool call
+    if (state.phase === "searching" && toolCallCount > 0) {
+      return "synthesize";
+    }
+
+    // If we've completed planning and agent returns without tool calls, synthesize
+    if (state.phase === "planning" && toolCallCount > 0) {
       return "synthesize";
     }
 
@@ -316,10 +334,11 @@ Focus on:
       .reverse()
       .find((m): m is AIMessage => m instanceof AIMessage);
 
-    const reportContent =
-      typeof lastAIMessage?.content === "string"
+    const reportContent = lastAIMessage
+      ? typeof lastAIMessage.content === "string"
         ? lastAIMessage.content
-        : JSON.stringify(lastAIMessage?.content);
+        : JSON.stringify(lastAIMessage.content)
+      : "No report content generated.";
 
     // Save report to database
     const reportId = generateId();
@@ -380,7 +399,7 @@ Focus on:
   return graph;
 }
 
-export async function runMedicalResearch(config: MedicalResearchConfig) {
+export async function runMedicalResearch(config: MedicalResearchConfig): Promise<AgentStateType> {
   const graph = await createMedicalResearchAgent(config);
 
   // Initialize with system message

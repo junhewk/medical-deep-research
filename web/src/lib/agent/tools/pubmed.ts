@@ -128,7 +128,7 @@ async function fetchPubMedDetails(
   const articles: PubMedArticle[] = [];
 
   // Simple regex-based XML parsing for key fields
-  const articleMatches = xmlText.matchAll(/<PubmedArticle>([\s\S]*?)<\/PubmedArticle>/g);
+  const articleMatches = Array.from(xmlText.matchAll(/<PubmedArticle>([\s\S]*?)<\/PubmedArticle>/g));
 
   for (const match of articleMatches) {
     const articleXml = match[1];
@@ -137,30 +137,30 @@ async function fetchPubMedDetails(
     const title = articleXml.match(/<ArticleTitle[^>]*>([\s\S]*?)<\/ArticleTitle>/)?.[1] || "";
     const abstractMatch = articleXml.match(/<AbstractText[^>]*>([\s\S]*?)<\/AbstractText>/g);
     const abstract = abstractMatch
-      ? abstractMatch.map((a) => a.replace(/<[^>]+>/g, "")).join(" ")
+      ? abstractMatch.map((a: string) => a.replace(/<[^>]+>/g, "")).join(" ")
       : "";
 
     const journal = articleXml.match(/<Title[^>]*>([\s\S]*?)<\/Title>/)?.[1] || "";
 
     // Extract authors
     const authors: string[] = [];
-    const authorMatches = articleXml.matchAll(
+    const authorMatches = Array.from(articleXml.matchAll(
       /<Author[^>]*>[\s\S]*?<LastName>([^<]+)<\/LastName>[\s\S]*?<ForeName>([^<]+)<\/ForeName>[\s\S]*?<\/Author>/g
-    );
+    ));
     for (const authorMatch of authorMatches) {
       authors.push(`${authorMatch[2]} ${authorMatch[1]}`);
     }
 
     // Extract publication types
     const pubTypes: string[] = [];
-    const pubTypeMatches = articleXml.matchAll(/<PublicationType[^>]*>([^<]+)<\/PublicationType>/g);
+    const pubTypeMatches = Array.from(articleXml.matchAll(/<PublicationType[^>]*>([^<]+)<\/PublicationType>/g));
     for (const ptMatch of pubTypeMatches) {
       pubTypes.push(ptMatch[1]);
     }
 
     // Extract MeSH terms
     const meshTerms: string[] = [];
-    const meshMatches = articleXml.matchAll(/<DescriptorName[^>]*>([^<]+)<\/DescriptorName>/g);
+    const meshMatches = Array.from(articleXml.matchAll(/<DescriptorName[^>]*>([^<]+)<\/DescriptorName>/g));
     for (const meshMatch of meshMatches) {
       meshTerms.push(meshMatch[1]);
     }

@@ -25,3 +25,16 @@ export function formatDate(date: Date | number): string {
     minute: "2-digit",
   });
 }
+
+/**
+ * Safely parse JSON with a fallback value.
+ * Returns the fallback if parsing fails or input is null/undefined.
+ */
+export function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback;
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    return fallback;
+  }
+}

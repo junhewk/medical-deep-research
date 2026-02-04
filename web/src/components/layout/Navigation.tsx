@@ -20,7 +20,6 @@ import { cn } from "@/lib/utils";
 const navLinks = [
   { href: "/research", label: "Research", icon: FileText },
   { href: "/research/new", label: "New Query", icon: Plus, highlight: true },
-  { href: "/settings/api-keys", label: "Settings", icon: Settings },
 ];
 
 export function Navigation() {
@@ -116,8 +115,20 @@ export function Navigation() {
             })}
           </div>
 
-          {/* Right side: Theme toggle + Mobile menu */}
-          <div className="flex items-center gap-2">
+          {/* Right side: Settings + Theme toggle + Mobile menu */}
+          <div className="flex items-center gap-1">
+            {/* Settings */}
+            <Link href="/settings/api-keys">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="w-9 h-9 rounded-xl hover:bg-muted"
+                aria-label="Settings"
+              >
+                <Settings className="h-[18px] w-[18px]" />
+              </Button>
+            </Link>
+
             {/* Theme Toggle */}
             {mounted && (
               <Button

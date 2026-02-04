@@ -35,11 +35,14 @@ export default function ResearchPage({ params }: ResearchPageProps) {
       const response = await fetch(`/api/research/${params.id}`, {
         method: "DELETE",
       });
-      if (response.ok) {
+      // Redirect on success or if already deleted (404)
+      if (response.ok || response.status === 404) {
         router.push("/research");
       }
     } catch (err) {
       console.error("Failed to delete research:", err);
+      // Redirect anyway on error
+      router.push("/research");
     } finally {
       setIsDeleting(false);
     }

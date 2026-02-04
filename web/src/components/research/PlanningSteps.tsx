@@ -13,34 +13,46 @@ export function PlanningSteps({ steps }: PlanningStepsProps) {
   if (!steps || steps.length === 0) {
     return (
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2 font-serif">
-            <ListChecks className="h-5 w-5 text-primary" />
+        <CardHeader className="border-b border-border/50">
+          <CardTitle className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <ListChecks className="h-4 w-4 text-primary" />
+            </div>
             Planning Steps
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-3 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm">Generating research plan...</span>
+        <CardContent className="pt-6">
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/30 border border-dashed">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <div>
+              <span className="text-sm font-medium">Generating research plan...</span>
+              <p className="text-xs text-muted-foreground mt-0.5">Analyzing query structure</p>
+            </div>
           </div>
         </CardContent>
       </Card>
     );
   }
 
+  const completedCount = steps.filter((s) => s.status === "completed").length;
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2 font-serif">
-          <ListChecks className="h-5 w-5 text-primary" />
-          Planning Steps
-          <span className="text-sm font-normal text-muted-foreground font-sans ml-auto">
-            {steps.filter((s) => s.status === "completed").length}/{steps.length}
-          </span>
-        </CardTitle>
+      <CardHeader className="border-b border-border/50">
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <ListChecks className="h-4 w-4 text-primary" />
+            </div>
+            Planning Steps
+          </CardTitle>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Progress:</span>
+            <span className="font-semibold text-foreground">{completedCount}/{steps.length}</span>
+          </div>
+        </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="pt-6">
         <div className="space-y-2">
           {steps.map((step, index) => (
             <div

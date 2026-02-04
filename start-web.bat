@@ -92,7 +92,29 @@ echo.
 echo   Press Ctrl+C to stop
 echo.
 
+:: Start browser opener in background
+start /b cmd /c "call :wait_and_open"
+
 :: Start Next.js development server
 call npm run dev
 
 pause
+goto :eof
+
+:wait_and_open
+echo [INFO] Waiting for server to be ready...
+set attempts=0
+:wait_loop
+if %attempts% geq 30 (
+    echo [WARN] Timeout waiting for server. Please open http://localhost:3000 manually.
+    goto :eof
+)
+timeout /t 1 /nobreak >nul
+curl -s http://localhost:3000 >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [OK] Server is ready!
+    start http://localhost:3000
+    goto :eof
+)
+set /a attempts+=1
+goto :wait_loop

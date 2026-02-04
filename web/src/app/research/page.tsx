@@ -53,23 +53,22 @@ function ResearchSkeleton() {
 
 function EmptyState() {
   return (
-    <Card className="border-dashed">
-      <CardContent className="py-16 text-center">
-        <div className="mx-auto mb-6 relative w-20 h-20">
-          <div className="absolute inset-0 bg-primary/10 rounded-full animate-pulse" />
-          <div className="absolute inset-2 bg-primary/5 rounded-full flex items-center justify-center">
-            <Beaker className="h-8 w-8 text-primary" />
+    <Card className="border-dashed border-2 bg-gradient-to-br from-muted/30 to-transparent">
+      <CardContent className="py-20 text-center">
+        <div className="mx-auto mb-8 relative w-24 h-24">
+          <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full animate-pulse" />
+          <div className="absolute inset-3 bg-background rounded-full flex items-center justify-center shadow-inner">
+            <Beaker className="h-10 w-10 text-primary" />
           </div>
         </div>
-        <h3 className="font-serif text-xl font-semibold mb-2">
+        <h3 className="font-serif text-2xl mb-3">
           No research yet
         </h3>
-        <p className="text-muted-foreground mb-6 max-w-sm mx-auto">
-          Start your first evidence-based medical research query using the PICO
-          or PCC framework
+        <p className="text-muted-foreground mb-8 max-w-md mx-auto">
+          Start your first evidence-based medical research query using the PICO or PCC framework
         </p>
         <Link href="/research/new">
-          <Button size="lg" className="gap-2">
+          <Button size="lg" className="gap-2 shadow-lg shadow-primary/20">
             <Plus className="h-4 w-4" />
             Start New Research
           </Button>
@@ -136,19 +135,19 @@ export default function ResearchListPage() {
   const { data: research, isLoading, error } = useResearchList();
 
   return (
-    <div className="space-y-8 fade-in-stagger">
+    <div className="space-y-8 stagger-fade">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-serif text-3xl font-semibold tracking-tight">
+          <h1 className="font-serif text-3xl sm:text-4xl tracking-tight">
             Research History
           </h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-muted-foreground mt-2">
             View and manage your medical research queries
           </p>
         </div>
         <Link href="/research/new">
-          <Button size="lg" className="gap-2 shadow-lg shadow-primary/20">
+          <Button size="lg" className="gap-2 shadow-lg shadow-primary/25 bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary">
             <Plus className="h-4 w-4" />
             New Research
           </Button>
@@ -179,12 +178,12 @@ export default function ResearchListPage() {
             <Link key={item.id} href={`/research/${item.id}`}>
               <Card
                 className={cn(
-                  "group overflow-hidden card-hover cursor-pointer",
-                  "border-l-4",
-                  item.status === "completed" && "border-l-status-completed",
-                  item.status === "running" && "border-l-status-running",
-                  item.status === "failed" && "border-l-status-failed",
-                  item.status === "pending" && "border-l-status-pending"
+                  "group overflow-hidden cursor-pointer transition-all duration-300",
+                  "border-l-4 hover:-translate-y-0.5 hover:shadow-lg",
+                  item.status === "completed" && "border-l-[hsl(var(--status-completed))]",
+                  item.status === "running" && "border-l-[hsl(var(--status-running))]",
+                  item.status === "failed" && "border-l-[hsl(var(--status-failed))]",
+                  item.status === "pending" && "border-l-[hsl(var(--status-pending))]"
                 )}
                 style={{ animationDelay: `${index * 50}ms` }}
               >
@@ -194,31 +193,33 @@ export default function ResearchListPage() {
                       <div className="flex items-center gap-2 mb-2">
                         <QueryTypeBadge type={item.queryType} />
                       </div>
-                      <CardTitle className="text-base font-medium line-clamp-2 group-hover:text-primary transition-colors">
+                      <CardTitle className="text-base font-sans font-medium line-clamp-2 group-hover:text-primary transition-colors">
                         {item.query}
                       </CardTitle>
-                      <CardDescription className="mt-1 flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
+                      <CardDescription className="mt-2 flex items-center gap-1.5 text-xs">
+                        <Clock className="h-3.5 w-3.5" />
                         {formatDate(new Date(item.createdAt))}
                       </CardDescription>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-3">
                       <StatusBadge status={item.status} />
-                      <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="p-2 rounded-lg bg-muted opacity-0 group-hover:opacity-100 transition-opacity">
+                        <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                      </div>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     <div className="flex justify-between text-xs text-muted-foreground">
                       <span>Progress</span>
-                      <span className="font-medium">{item.progress}%</span>
+                      <span className="font-semibold text-foreground">{item.progress}%</span>
                     </div>
                     <Progress
                       value={item.progress}
                       className={cn(
                         "h-1.5",
-                        item.status === "running" && "progress-animated"
+                        item.status === "running" && "progress-shimmer"
                       )}
                     />
                   </div>

@@ -28,10 +28,10 @@ import {
   Target,
   Lightbulb,
   MapPin,
-  ArrowRight,
   AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LiveQueryPreview } from "@/components/research/LiveQueryPreview";
 
 type QueryType = "pico" | "pcc" | "free";
 
@@ -256,22 +256,28 @@ export default function NewResearchPage() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 fade-in-stagger">
+    <div className="max-w-2xl mx-auto space-y-8 stagger-fade">
       {/* Header */}
-      <div>
-        <h1 className="font-serif text-3xl font-semibold tracking-tight">
-          New Research Query
+      <div className="text-center space-y-3">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium">
+          <Sparkles className="h-3.5 w-3.5" />
+          New Research
+        </div>
+        <h1 className="font-serif text-3xl sm:text-4xl tracking-tight">
+          Research Query
         </h1>
-        <p className="text-muted-foreground mt-1">
-          Start an evidence-based medical literature search
+        <p className="text-muted-foreground max-w-md mx-auto">
+          Structure your clinical question using evidence-based frameworks
         </p>
       </div>
 
       {/* Main Card */}
-      <Card className="overflow-hidden">
-        <CardHeader className="bg-gradient-to-r from-primary/5 to-transparent border-b">
-          <CardTitle className="flex items-center gap-2 font-serif">
-            <Search className="h-5 w-5 text-primary" />
+      <Card className="overflow-hidden card-hover">
+        <CardHeader className="bg-gradient-to-br from-primary/5 via-transparent to-accent/5 border-b border-border/50">
+          <CardTitle className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Search className="h-4 w-4 text-primary" />
+            </div>
             Research Framework
           </CardTitle>
           <CardDescription>
@@ -284,39 +290,40 @@ export default function NewResearchPage() {
               value={queryType}
               onValueChange={(v) => setQueryType(v as QueryType)}
             >
-              <TabsList className="grid w-full grid-cols-3 h-auto p-1">
+              <TabsList className="grid w-full grid-cols-3 h-auto p-1.5 bg-muted/50">
                 <TabsTrigger
                   value="pico"
-                  className="flex items-center gap-2 py-3 data-[state=active]:bg-pico-p/10 data-[state=active]:text-pico-p"
+                  className="flex items-center gap-2 py-3 rounded-lg transition-all data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-[hsl(var(--pico-p))] dark:data-[state=active]:bg-card"
                 >
                   <BookOpen className="h-4 w-4" />
-                  <span className="hidden sm:inline">PICO</span>
+                  <span className="hidden sm:inline font-medium">PICO</span>
                 </TabsTrigger>
                 <TabsTrigger
                   value="pcc"
-                  className="flex items-center gap-2 py-3 data-[state=active]:bg-pico-c/10 data-[state=active]:text-pico-c"
+                  className="flex items-center gap-2 py-3 rounded-lg transition-all data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-[hsl(var(--pico-c))] dark:data-[state=active]:bg-card"
                 >
                   <FileText className="h-4 w-4" />
-                  <span className="hidden sm:inline">PCC</span>
+                  <span className="hidden sm:inline font-medium">PCC</span>
                 </TabsTrigger>
                 <TabsTrigger
                   value="free"
-                  className="flex items-center gap-2 py-3 data-[state=active]:bg-accent/10 data-[state=active]:text-accent"
+                  className="flex items-center gap-2 py-3 rounded-lg transition-all data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-accent dark:data-[state=active]:bg-card"
                 >
                   <Sparkles className="h-4 w-4" />
-                  <span className="hidden sm:inline">Free-form</span>
+                  <span className="hidden sm:inline font-medium">Free-form</span>
                 </TabsTrigger>
               </TabsList>
 
               {/* PICO Framework */}
               <TabsContent value="pico" className="space-y-6 mt-6">
-                <div className="flex items-start gap-3 p-4 rounded-lg bg-pico-p/5 border border-pico-p/20">
-                  <BookOpen className="h-5 w-5 text-pico-p mt-0.5" />
+                <div className="flex items-start gap-4 p-4 rounded-xl bg-gradient-to-br from-[hsl(var(--pico-p))]/8 to-transparent border border-[hsl(var(--pico-p))]/15">
+                  <div className="p-2 rounded-lg bg-[hsl(var(--pico-p))]/15">
+                    <BookOpen className="h-5 w-5 text-[hsl(var(--pico-p))]" />
+                  </div>
                   <div>
-                    <p className="font-medium text-sm">PICO Framework</p>
-                    <p className="text-sm text-muted-foreground">
-                      Best for clinical questions about interventions, therapies,
-                      or treatments
+                    <p className="font-serif font-medium">PICO Framework</p>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      Best for clinical questions about interventions, therapies, or treatments
                     </p>
                   </div>
                 </div>
@@ -332,28 +339,22 @@ export default function NewResearchPage() {
                   )}
                 </div>
 
-                {buildPicoQuery() && (
-                  <div className="p-4 rounded-lg bg-muted/50 border animate-fade-in">
-                    <p className="text-sm font-medium mb-2 flex items-center gap-2">
-                      <ArrowRight className="h-4 w-4 text-primary" />
-                      Generated Query
-                    </p>
-                    <pre className="text-sm text-muted-foreground whitespace-pre-line font-sans">
-                      {buildPicoQuery()}
-                    </pre>
-                  </div>
-                )}
+                <LiveQueryPreview
+                  queryType="pico"
+                  picoValues={picoValues}
+                />
               </TabsContent>
 
               {/* PCC Framework */}
               <TabsContent value="pcc" className="space-y-6 mt-6">
-                <div className="flex items-start gap-3 p-4 rounded-lg bg-pico-c/5 border border-pico-c/20">
-                  <FileText className="h-5 w-5 text-pico-c mt-0.5" />
+                <div className="flex items-start gap-4 p-4 rounded-xl bg-gradient-to-br from-[hsl(var(--pico-c))]/8 to-transparent border border-[hsl(var(--pico-c))]/15">
+                  <div className="p-2 rounded-lg bg-[hsl(var(--pico-c))]/15">
+                    <FileText className="h-5 w-5 text-[hsl(var(--pico-c))]" />
+                  </div>
                   <div>
-                    <p className="font-medium text-sm">PCC Framework</p>
-                    <p className="text-sm text-muted-foreground">
-                      Best for scoping reviews, qualitative research, or
-                      exploratory questions
+                    <p className="font-serif font-medium">PCC Framework</p>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      Best for scoping reviews, qualitative research, or exploratory questions
                     </p>
                   </div>
                 </div>
@@ -369,28 +370,22 @@ export default function NewResearchPage() {
                   )}
                 </div>
 
-                {buildPccQuery() && (
-                  <div className="p-4 rounded-lg bg-muted/50 border animate-fade-in">
-                    <p className="text-sm font-medium mb-2 flex items-center gap-2">
-                      <ArrowRight className="h-4 w-4 text-primary" />
-                      Generated Query
-                    </p>
-                    <pre className="text-sm text-muted-foreground whitespace-pre-line font-sans">
-                      {buildPccQuery()}
-                    </pre>
-                  </div>
-                )}
+                <LiveQueryPreview
+                  queryType="pcc"
+                  pccValues={pccValues}
+                />
               </TabsContent>
 
               {/* Free-form Query */}
               <TabsContent value="free" className="space-y-6 mt-6">
-                <div className="flex items-start gap-3 p-4 rounded-lg bg-accent/5 border border-accent/20">
-                  <Sparkles className="h-5 w-5 text-accent mt-0.5" />
+                <div className="flex items-start gap-4 p-4 rounded-xl bg-gradient-to-br from-accent/10 to-transparent border border-accent/15">
+                  <div className="p-2 rounded-lg bg-accent/15">
+                    <Sparkles className="h-5 w-5 text-accent" />
+                  </div>
                   <div>
-                    <p className="font-medium text-sm">Free-form Query</p>
-                    <p className="text-sm text-muted-foreground">
-                      Enter your research question in natural language. The agent
-                      will determine the best search strategy.
+                    <p className="font-serif font-medium">Free-form Query</p>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      Enter your research question in natural language. The agent will determine the best search strategy.
                     </p>
                   </div>
                 </div>
@@ -427,24 +422,29 @@ export default function NewResearchPage() {
             )}
 
             {/* Submit Button */}
-            <Button
-              type="submit"
-              className="w-full h-12 text-base shadow-lg shadow-primary/20"
-              size="lg"
-              disabled={startResearch.isPending || !isValid()}
-            >
-              {startResearch.isPending ? (
-                <>
-                  <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                  Starting Research...
-                </>
-              ) : (
-                <>
-                  <Search className="h-5 w-5 mr-2" />
-                  Start Research
-                </>
-              )}
-            </Button>
+            <div className="pt-2">
+              <Button
+                type="submit"
+                className="w-full h-12 text-base font-medium shadow-lg shadow-primary/25 bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary"
+                size="lg"
+                disabled={startResearch.isPending || !isValid()}
+              >
+                {startResearch.isPending ? (
+                  <>
+                    <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                    Starting Research...
+                  </>
+                ) : (
+                  <>
+                    <Search className="h-5 w-5 mr-2" />
+                    Start Research
+                  </>
+                )}
+              </Button>
+              <p className="text-center text-xs text-muted-foreground mt-3">
+                The agent will search PubMed, Scopus, and Cochrane databases
+              </p>
+            </div>
           </form>
         </CardContent>
       </Card>

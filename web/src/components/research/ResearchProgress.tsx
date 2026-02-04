@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlanningSteps } from "./PlanningSteps";
 import { AgentStatus } from "./AgentStatus";
 import { ToolLog } from "./ToolLog";
+import { QueryDisplayInline } from "./QueryDisplay";
 import type { ResearchProgress as ResearchProgressType } from "@/lib/research";
 import {
   FileText,
@@ -143,22 +144,23 @@ function PicoDisplay({
   ];
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2 font-serif">
-          <BookOpen className="h-5 w-5 text-pico-p" />
+    <Card className="card-hover">
+      <CardHeader className="border-b border-border/50 bg-gradient-to-r from-[hsl(var(--pico-p))]/5 to-transparent">
+        <CardTitle className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-[hsl(var(--pico-p))]/10">
+            <BookOpen className="h-4 w-4 text-[hsl(var(--pico-p))]" />
+          </div>
           PICO Query
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="pt-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {fields.map((field) => {
             const value =
               picoQuery[field.key as keyof typeof picoQuery] as string;
             if (!value && field.key === "comparison") return null;
-            const Icon = field.icon;
             return (
-              <div key={field.key} className="space-y-1.5">
+              <div key={field.key} className="p-3 rounded-lg bg-muted/30 space-y-1.5">
                 <div className="flex items-center gap-2">
                   <Badge
                     variant="outline"
@@ -166,11 +168,11 @@ function PicoDisplay({
                   >
                     {field.shortLabel}
                   </Badge>
-                  <span className="text-sm font-medium text-muted-foreground">
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                     {field.label}
                   </span>
                 </div>
-                <p className="text-sm pl-1">{value || "Not specified"}</p>
+                <p className="text-sm font-medium">{value || "Not specified"}</p>
               </div>
             );
           })}
@@ -181,9 +183,7 @@ function PicoDisplay({
             <p className="text-sm font-medium text-muted-foreground mb-2">
               Generated PubMed Query
             </p>
-            <code className="text-xs bg-muted p-3 rounded-lg block overflow-x-auto">
-              {picoQuery.generatedPubmedQuery}
-            </code>
+            <QueryDisplayInline query={picoQuery.generatedPubmedQuery} />
           </div>
         )}
 
@@ -242,20 +242,22 @@ function PccDisplay({
   ];
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2 font-serif">
-          <FileText className="h-5 w-5 text-pico-c" />
+    <Card className="card-hover">
+      <CardHeader className="border-b border-border/50 bg-gradient-to-r from-[hsl(var(--pico-c))]/5 to-transparent">
+        <CardTitle className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-[hsl(var(--pico-c))]/10">
+            <FileText className="h-4 w-4 text-[hsl(var(--pico-c))]" />
+          </div>
           PCC Query
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="pt-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {fields.map((field) => {
             const value =
               pccQuery[field.key as keyof typeof pccQuery] as string;
             return (
-              <div key={field.key} className="space-y-1.5">
+              <div key={field.key} className="p-3 rounded-lg bg-muted/30 space-y-1.5">
                 <div className="flex items-center gap-2">
                   <Badge
                     variant="outline"
@@ -263,11 +265,11 @@ function PccDisplay({
                   >
                     {field.shortLabel}
                   </Badge>
-                  <span className="text-sm font-medium text-muted-foreground">
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                     {field.label}
                   </span>
                 </div>
-                <p className="text-sm pl-1">{value || "Not specified"}</p>
+                <p className="text-sm font-medium">{value || "Not specified"}</p>
               </div>
             );
           })}
@@ -278,9 +280,7 @@ function PccDisplay({
             <p className="text-sm font-medium text-muted-foreground mb-2">
               Generated Query
             </p>
-            <code className="text-xs bg-muted p-3 rounded-lg block overflow-x-auto">
-              {pccQuery.generatedQuery}
-            </code>
+            <QueryDisplayInline query={pccQuery.generatedQuery} />
           </div>
         )}
       </CardContent>
@@ -295,60 +295,67 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
   };
 
   return (
-    <div className="space-y-6 fade-in-stagger">
+    <div className="space-y-6 stagger-fade">
       {/* Query and Status Header */}
       <Card
         className={cn(
-          "overflow-hidden border-l-4",
-          data.status === "completed" && "border-l-status-completed",
-          data.status === "running" && "border-l-status-running",
-          data.status === "failed" && "border-l-status-failed",
-          data.status === "pending" && "border-l-status-pending"
+          "overflow-hidden border-l-4 relative",
+          data.status === "completed" && "border-l-[hsl(var(--status-completed))]",
+          data.status === "running" && "border-l-[hsl(var(--status-running))]",
+          data.status === "failed" && "border-l-[hsl(var(--status-failed))]",
+          data.status === "pending" && "border-l-[hsl(var(--status-pending))]"
         )}
       >
-        <CardHeader>
+        {data.status === "running" && (
+          <div className="absolute inset-0 bg-gradient-to-r from-[hsl(var(--status-running))]/5 to-transparent pointer-events-none" />
+        )}
+        <CardHeader className="relative">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex flex-wrap items-center gap-2 mb-3">
                 <QueryTypeBadge type={data.queryType} />
                 <StatusBadge status={data.status} />
               </div>
-              <CardTitle className="text-xl font-serif leading-relaxed">
+              <CardTitle className="text-xl sm:text-2xl leading-relaxed">
                 {data.query}
               </CardTitle>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-sm text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-4 text-sm text-muted-foreground">
                 <span className="flex items-center gap-1.5">
                   <Clock className="h-3.5 w-3.5" />
-                  Created: {formatDate(data.createdAt)}
+                  {formatDate(data.createdAt)}
                 </span>
                 {data.completedAt && (
-                  <span className="flex items-center gap-1.5">
+                  <span className="flex items-center gap-1.5 text-[hsl(var(--status-completed))]">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    Completed: {formatDate(data.completedAt)}
+                    Completed {formatDate(data.completedAt)}
                   </span>
                 )}
                 {data.durationSeconds && (
-                  <span>Duration: {Math.round(data.durationSeconds)}s</span>
+                  <span className="px-2 py-0.5 rounded-full bg-muted text-xs">
+                    {Math.round(data.durationSeconds)}s
+                  </span>
                 )}
               </div>
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="relative">
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">
-                {data.phase ? `Phase: ${data.phase}` : "Progress"}
+              <span className="text-muted-foreground font-medium">
+                {data.phase ? data.phase.charAt(0).toUpperCase() + data.phase.slice(1) : "Progress"}
               </span>
-              <span className="font-medium">{data.progress}%</span>
+              <span className="font-semibold text-foreground">{data.progress}%</span>
             </div>
-            <Progress
-              value={data.progress}
-              className={cn(
-                "h-2",
-                data.status === "running" && "progress-animated"
-              )}
-            />
+            <div className="relative">
+              <Progress
+                value={data.progress}
+                className={cn(
+                  "h-2.5 rounded-full",
+                  data.status === "running" && "progress-shimmer"
+                )}
+              />
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -368,15 +375,17 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
 
       {/* Error Display */}
       {(data.error || data.errorMessage) && (
-        <Card className="border-destructive/50 bg-destructive/5">
-          <CardHeader>
-            <CardTitle className="text-lg text-destructive flex items-center gap-2">
-              <AlertCircle className="h-5 w-5" />
-              Error
+        <Card className="border-destructive/30 bg-gradient-to-br from-destructive/5 to-transparent overflow-hidden">
+          <CardHeader className="border-b border-destructive/20">
+            <CardTitle className="text-destructive flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-destructive/10">
+                <AlertCircle className="h-4 w-4" />
+              </div>
+              Error Occurred
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <pre className="text-sm text-destructive whitespace-pre-wrap font-mono">
+          <CardContent className="pt-6">
+            <pre className="text-sm text-destructive/90 whitespace-pre-wrap font-mono p-4 rounded-lg bg-destructive/5 border border-destructive/10">
               {data.error || data.errorMessage}
             </pre>
           </CardContent>
@@ -385,24 +394,36 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
 
       {/* Results Display */}
       {data.status === "completed" && (data.result || data.report) && (
-        <Card>
-          <CardHeader className="border-b bg-gradient-to-r from-status-completed/5 to-transparent">
-            <CardTitle className="text-lg flex items-center gap-2 font-serif">
-              <FileText className="h-5 w-5 text-status-completed" />
-              Research Report
+        <Card className="overflow-hidden">
+          <CardHeader className="border-b border-border/50 bg-gradient-to-br from-[hsl(var(--status-completed))]/8 via-transparent to-[hsl(var(--pico-i))]/5">
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-[hsl(var(--status-completed))]/15">
+                  <FileText className="h-4 w-4 text-[hsl(var(--status-completed))]" />
+                </div>
+                Research Report
+              </CardTitle>
               {data.report && (
-                <span className="text-sm font-normal text-muted-foreground font-sans">
-                  ({data.report.wordCount} words, {data.report.referenceCount}{" "}
-                  references)
-                </span>
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <span className="px-2 py-1 rounded-md bg-muted">
+                    {data.report.wordCount.toLocaleString()} words
+                  </span>
+                  <span className="px-2 py-1 rounded-md bg-muted">
+                    {data.report.referenceCount} refs
+                  </span>
+                </div>
               )}
-            </CardTitle>
+            </div>
           </CardHeader>
           <CardContent className="pt-6">
             <Tabs defaultValue="formatted">
-              <TabsList>
-                <TabsTrigger value="formatted">Formatted</TabsTrigger>
-                <TabsTrigger value="raw">Raw Markdown</TabsTrigger>
+              <TabsList className="bg-muted/50">
+                <TabsTrigger value="formatted" className="data-[state=active]:bg-background">
+                  Formatted
+                </TabsTrigger>
+                <TabsTrigger value="raw" className="data-[state=active]:bg-background">
+                  Raw Markdown
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="formatted" className="mt-6">
                 <div className="prose-medical">
@@ -412,7 +433,7 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
                 </div>
               </TabsContent>
               <TabsContent value="raw" className="mt-6">
-                <pre className="whitespace-pre-wrap font-mono text-xs bg-muted p-4 rounded-lg overflow-auto max-h-[600px] border">
+                <pre className="whitespace-pre-wrap font-mono text-xs bg-muted/50 p-4 rounded-xl overflow-auto max-h-[600px] border border-border/50">
                   {data.result || data.report?.content}
                 </pre>
               </TabsContent>
@@ -423,23 +444,28 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
 
       {/* Search Results Summary */}
       {data.searchResultsCount !== undefined && data.searchResultsCount > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2 font-serif">
-              <Database className="h-5 w-5 text-primary" />
+        <Card className="card-hover">
+          <CardHeader className="border-b border-border/50">
+            <CardTitle className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-primary/10">
+                <Database className="h-4 w-4 text-primary" />
+              </div>
               Search Results
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-primary/10 rounded-lg">
-                <span className="text-2xl font-bold text-primary">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-4">
+              <div className="p-4 bg-gradient-to-br from-primary/15 to-primary/5 rounded-xl border border-primary/10">
+                <span className="text-3xl font-bold text-primary">
                   {data.searchResultsCount}
                 </span>
               </div>
-              <p className="text-sm text-muted-foreground">
-                articles retrieved from medical databases
-              </p>
+              <div>
+                <p className="font-medium">Articles Retrieved</p>
+                <p className="text-sm text-muted-foreground">
+                  From PubMed, Scopus, and Cochrane databases
+                </p>
+              </div>
             </div>
           </CardContent>
         </Card>

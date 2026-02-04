@@ -35,15 +35,18 @@ interface ScopusSearchResponse {
   };
 }
 
+export type ScopusSortBy = "relevancy" | "citedby-count" | "pubyear" | "coverDate";
+
 async function searchScopus(
   query: string,
   maxResults: number = 20,
-  apiKey: string
+  apiKey: string,
+  sortBy: ScopusSortBy = "citedby-count"
 ): Promise<ScopusArticle[]> {
   const params = new URLSearchParams({
     query: query,
     count: maxResults.toString(),
-    sort: "relevancy",
+    sort: sortBy,
     view: "COMPLETE",
   });
 
@@ -82,7 +85,7 @@ async function searchScopus(
 }
 
 export const scopusSearchTool = tool(
-  async ({ query, maxResults, apiKey }) => {
+  async ({ query, maxResults, apiKey, sortBy }) => {
     if (!apiKey) {
       return JSON.stringify({
         success: false,
@@ -91,11 +94,17 @@ export const scopusSearchTool = tool(
     }
 
     try {
-      const articles = await searchScopus(query, maxResults || 20, apiKey);
+      const articles = await searchScopus(
+        query,
+        maxResults || 20,
+        apiKey,
+        (sortBy as ScopusSortBy) || "citedby-count"
+      );
 
       return JSON.stringify({
         success: true,
         count: articles.length,
+        sortedBy: sortBy || "citedby-count",
         articles: articles.map((a) => ({
           scopusId: a.scopusId,
           title: a.title,
@@ -120,11 +129,15 @@ export const scopusSearchTool = tool(
   {
     name: "scopus_search",
     description:
-      "Searches Scopus database for scientific literature. Requires Scopus API key (BYOK). Supports complex queries with AND, OR, NOT operators.",
+      "Searches Scopus database for scientific literature. Requires Scopus API key (BYOK). Supports complex queries with AND, OR, NOT operators. By default sorts by citation count.",
     schema: z.object({
       query: z.string().describe("Scopus search query"),
       maxResults: z.number().optional().default(20).describe("Maximum number of results"),
       apiKey: z.string().describe("Scopus/Elsevier API key"),
+      sortBy: z.enum(["relevancy", "citedby-count", "pubyear", "coverDate"])
+        .optional()
+        .default("citedby-count")
+        .describe("Sort order: citedby-count (default), relevancy, pubyear, coverDate"),
     }),
   }
 );

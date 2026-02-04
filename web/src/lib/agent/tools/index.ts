@@ -1,6 +1,6 @@
 // Search engine tools
 export { pubmedSearchTool, searchPubMed, fetchPubMedDetails, type PubMedArticle } from "./pubmed";
-export { scopusSearchTool, searchScopus, type ScopusArticle } from "./scopus";
+export { scopusSearchTool, searchScopus, type ScopusArticle, type ScopusSortBy } from "./scopus";
 export { cochraneSearchTool, searchCochrane, type CochraneReview } from "./cochrane";
 
 // Query builder tools
@@ -11,6 +11,32 @@ export {
   type GeneratedPicoQuery,
 } from "./pico-query";
 export { pccQueryBuilderTool, buildPccPubMedQuery, type PccQueryInput, type GeneratedPccQuery } from "./pcc-query";
+
+// Query formatting utilities
+export {
+  buildBlockQuery,
+  buildProfessionalQuery,
+  formatQueryForDisplay,
+  parseQueryForHighlighting,
+  getTokenColorClass,
+  extractTextWords,
+  type QueryBlock,
+  type FormattedQuery,
+  type HighlightToken,
+} from "./query-formatter";
+
+// Scoring utilities
+export {
+  calculateCompositeScore,
+  scoreAndSortResults,
+  getEvidenceLevelScore,
+  getCitationScore,
+  getRecencyScore,
+  formatScoreBreakdown,
+  type EvidenceLevel,
+  type ScoredResult,
+  type UnifiedSearchResult,
+} from "./scoring";
 
 // Utility tools
 export {

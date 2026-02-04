@@ -30,28 +30,30 @@ export function AgentStatus({ agents, phase }: AgentStatusProps) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2 font-serif">
-          <Sparkles className="h-5 w-5 text-primary" />
-          Agent Status
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {phaseInfo && (
-          <div className="mb-4 flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Phase:</span>
+      <CardHeader className="border-b border-border/50">
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Sparkles className="h-4 w-4 text-primary" />
+            </div>
+            Agent Status
+          </CardTitle>
+          {phaseInfo && (
             <Badge
               variant="outline"
               className={cn("capitalize font-medium", phaseInfo.color)}
             >
               {phaseInfo.label}
             </Badge>
-          </div>
-        )}
-
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="pt-6">
         {!hasActiveAgents ? (
-          <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/30 border border-dashed">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/30 border border-dashed">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            </div>
             <div>
               <span className="text-sm font-medium">Initializing agent...</span>
               <p className="text-xs text-muted-foreground mt-0.5">

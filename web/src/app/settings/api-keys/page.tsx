@@ -25,6 +25,13 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Key,
   Loader2,
   Check,
@@ -35,7 +42,7 @@ import {
   Database,
   Brain,
   BookOpen,
-  AlertCircle,
+  Settings2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -47,12 +54,25 @@ interface ApiKey {
   updatedAt?: string;
 }
 
+type LlmProvider = "openai" | "anthropic" | "google";
+
+interface LlmConfig {
+  provider: LlmProvider;
+  model: string;
+  isDefault: boolean;
+  availableModels: {
+    openai: { id: string; name: string; description: string }[];
+    anthropic: { id: string; name: string; description: string }[];
+    google: { id: string; name: string; description: string }[];
+  };
+}
+
 const API_SERVICES = [
   {
     id: "openai",
     name: "OpenAI",
-    description: "Required for GPT-4 based research (default LLM)",
-    required: true,
+    description: "Required for GPT based research (default LLM)",
+    required: false,
     docsUrl: "https://platform.openai.com/api-keys",
     icon: Sparkles,
     color: "text-emerald-600 dark:text-emerald-400",
@@ -65,6 +85,15 @@ const API_SERVICES = [
     docsUrl: "https://console.anthropic.com/settings/keys",
     icon: Brain,
     color: "text-orange-600 dark:text-orange-400",
+  },
+  {
+    id: "google",
+    name: "Google AI",
+    description: "Required for Gemini-based research",
+    required: false,
+    docsUrl: "https://aistudio.google.com/app/apikey",
+    icon: Sparkles,
+    color: "text-blue-600 dark:text-blue-400",
   },
   {
     id: "ncbi",
@@ -120,8 +149,15 @@ export default function ApiKeysPage() {
   const [newKeys, setNewKeys] = useState<Record<string, string>>({});
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // LLM Config state
+  const [llmConfig, setLlmConfig] = useState<LlmConfig | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<LlmProvider>("openai");
+  const [selectedModel, setSelectedModel] = useState<string>("gpt-5.2");
+  const [savingLlm, setSavingLlm] = useState(false);
+
   useEffect(() => {
     fetchKeys();
+    fetchLlmConfig();
   }, []);
 
   const fetchKeys = async () => {
@@ -135,6 +171,20 @@ export default function ApiKeysPage() {
       console.error("Failed to fetch API keys:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchLlmConfig = async () => {
+    try {
+      const res = await fetch("/api/settings/llm");
+      if (res.ok) {
+        const data = await res.json();
+        setLlmConfig(data);
+        setSelectedProvider(data.provider);
+        setSelectedModel(data.model);
+      }
+    } catch (error) {
+      console.error("Failed to fetch LLM config:", error);
     }
   };
 
@@ -179,8 +229,42 @@ export default function ApiKeysPage() {
     }
   };
 
+  const saveLlmConfig = async () => {
+    setSavingLlm(true);
+    try {
+      const res = await fetch("/api/settings/llm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: selectedProvider,
+          model: selectedModel,
+          isDefault: true,
+        }),
+      });
+
+      if (res.ok) {
+        await fetchLlmConfig();
+        setSuccessMessage("LLM configuration saved successfully");
+        setTimeout(() => setSuccessMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error("Failed to save LLM config:", error);
+    } finally {
+      setSavingLlm(false);
+    }
+  };
+
   const getKeyStatus = (serviceId: string) => {
     return keys.find((k) => k.service === serviceId);
+  };
+
+  const handleProviderChange = (provider: LlmProvider) => {
+    setSelectedProvider(provider);
+    // Set first model as default when switching providers
+    const models = llmConfig?.availableModels[provider] || [];
+    if (models.length > 0) {
+      setSelectedModel(models[0].id);
+    }
   };
 
   if (loading) {
@@ -201,28 +285,134 @@ export default function ApiKeysPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 fade-in-stagger">
+    <div className="max-w-2xl mx-auto space-y-8 stagger-fade">
       {/* Header */}
-      <div>
-        <h1 className="font-serif text-3xl font-semibold tracking-tight flex items-center gap-3">
+      <div className="text-center space-y-3">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 mb-2">
           <Key className="h-8 w-8 text-primary" />
-          API Keys
+        </div>
+        <h1 className="font-serif text-3xl sm:text-4xl tracking-tight">
+          API Configuration
         </h1>
-        <p className="text-muted-foreground mt-1">
-          Manage your API keys for LLM providers and search engines (BYOK -
-          Bring Your Own Key)
+        <p className="text-muted-foreground max-w-md mx-auto">
+          Configure your API keys for LLM providers and search databases
         </p>
+        <Badge variant="outline" className="text-xs">BYOK — Bring Your Own Key</Badge>
       </div>
 
       {/* Success Message */}
       {successMessage && (
-        <div className="flex items-center gap-3 p-4 rounded-lg bg-status-completed/10 border border-status-completed/20 animate-fade-in">
-          <Check className="h-5 w-5 text-status-completed" />
-          <p className="text-sm font-medium text-status-completed">
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-gradient-to-r from-[hsl(var(--status-completed))]/10 to-transparent border border-[hsl(var(--status-completed))]/20 animate-fade-in">
+          <div className="p-1.5 rounded-full bg-[hsl(var(--status-completed))]/15">
+            <Check className="h-4 w-4 text-[hsl(var(--status-completed))]" />
+          </div>
+          <p className="text-sm font-medium text-[hsl(var(--status-completed))]">
             {successMessage}
           </p>
         </div>
       )}
+
+      {/* LLM Model Selector */}
+      <Card className="overflow-hidden border-2 border-primary/20">
+        <CardHeader className="bg-gradient-to-br from-primary/8 via-primary/4 to-transparent border-b border-primary/10">
+          <CardTitle className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Settings2 className="h-4 w-4 text-primary" />
+            </div>
+            Default LLM Model
+          </CardTitle>
+          <CardDescription>
+            Select the default language model for research tasks
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-6 space-y-5">
+          {/* Provider Selection */}
+          <div className="space-y-3">
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Provider</Label>
+            <div className="grid grid-cols-3 gap-3">
+              <Button
+                variant={selectedProvider === "openai" ? "default" : "outline"}
+                className={cn(
+                  "h-12 justify-center gap-2",
+                  selectedProvider === "openai" && "shadow-md shadow-primary/20"
+                )}
+                onClick={() => handleProviderChange("openai")}
+              >
+                <Sparkles className="h-4 w-4" />
+                <span>OpenAI</span>
+              </Button>
+              <Button
+                variant={selectedProvider === "anthropic" ? "default" : "outline"}
+                className={cn(
+                  "h-12 justify-center gap-2",
+                  selectedProvider === "anthropic" && "shadow-md shadow-primary/20"
+                )}
+                onClick={() => handleProviderChange("anthropic")}
+              >
+                <Brain className="h-4 w-4" />
+                <span>Anthropic</span>
+              </Button>
+              <Button
+                variant={selectedProvider === "google" ? "default" : "outline"}
+                className={cn(
+                  "h-12 justify-center gap-2",
+                  selectedProvider === "google" && "shadow-md shadow-primary/20"
+                )}
+                onClick={() => handleProviderChange("google")}
+              >
+                <Sparkles className="h-4 w-4" />
+                <span>Google</span>
+              </Button>
+            </div>
+          </div>
+
+          {/* Model Selection */}
+          <div className="space-y-3">
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Model</Label>
+            <Select value={selectedModel} onValueChange={setSelectedModel}>
+              <SelectTrigger className="h-12">
+                <SelectValue placeholder="Select a model" />
+              </SelectTrigger>
+              <SelectContent>
+                {llmConfig?.availableModels[selectedProvider]?.map((model) => (
+                  <SelectItem key={model.id} value={model.id}>
+                    <div className="flex flex-col py-1">
+                      <span className="font-medium">{model.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {model.description}
+                      </span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Current Selection Info */}
+          {llmConfig && (
+            <div className="flex items-center justify-center gap-2 p-3 rounded-lg bg-muted/50 text-sm">
+              <span className="text-muted-foreground">Current:</span>
+              <Badge variant="secondary" className="font-mono text-xs">
+                {llmConfig.provider}/{llmConfig.model}
+              </Badge>
+            </div>
+          )}
+
+          {/* Save Button */}
+          <Button
+            onClick={saveLlmConfig}
+            disabled={savingLlm}
+            className="w-full h-11 shadow-md shadow-primary/15"
+          >
+            {savingLlm ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4 mr-2" />
+            )}
+            Save as Default
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* API Key Cards */}
       <div className="space-y-4">
@@ -365,13 +555,15 @@ export default function ApiKeysPage() {
       </div>
 
       {/* Security Note */}
-      <Card className="bg-muted/30 border-dashed">
-        <CardContent className="pt-6">
-          <div className="flex items-start gap-3">
-            <Shield className="h-5 w-5 text-muted-foreground mt-0.5" />
+      <Card className="bg-gradient-to-br from-muted/40 to-transparent border-dashed border-2">
+        <CardContent className="py-6">
+          <div className="flex items-start gap-4">
+            <div className="p-2.5 rounded-lg bg-muted">
+              <Shield className="h-5 w-5 text-muted-foreground" />
+            </div>
             <div>
-              <p className="font-medium text-sm">Security Note</p>
-              <p className="text-sm text-muted-foreground mt-1">
+              <p className="font-serif font-medium">Security Note</p>
+              <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
                 API keys are stored locally in your database and are never sent
                 to external servers except for the specific API they belong to.
                 For production deployments, consider using environment variables

@@ -32,14 +32,16 @@ export function ToolLog({ executions }: ToolLogProps) {
   if (!executions || executions.length === 0) {
     return (
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2 font-serif">
-            <Terminal className="h-5 w-5 text-primary" />
+        <CardHeader className="border-b border-border/50">
+          <CardTitle className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Terminal className="h-4 w-4 text-primary" />
+            </div>
             Tool Execution Log
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/30 border border-dashed">
+        <CardContent className="pt-6">
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/30 border border-dashed">
             <Clock className="h-5 w-5 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">
               Waiting for tool executions...
@@ -54,16 +56,21 @@ export function ToolLog({ executions }: ToolLogProps) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2 font-serif">
-          <Terminal className="h-5 w-5 text-primary" />
-          Tool Execution Log
-          <span className="text-sm font-normal text-muted-foreground font-sans ml-auto">
-            {completedCount}/{executions.length} completed
-          </span>
-        </CardTitle>
+      <CardHeader className="border-b border-border/50">
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Terminal className="h-4 w-4 text-primary" />
+            </div>
+            Tool Execution Log
+          </CardTitle>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Completed:</span>
+            <span className="font-semibold text-foreground">{completedCount}/{executions.length}</span>
+          </div>
+        </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="pt-6">
         <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
           {executions.map((exec, index) => {
             const ToolIcon = toolIcons[exec.tool] || Terminal;

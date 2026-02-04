@@ -38,3 +38,59 @@ export function safeJsonParse<T>(json: string | null | undefined, fallback: T): 
     return fallback;
   }
 }
+
+/**
+ * Debounce a function call
+ * Returns a debounced version of the function that delays execution
+ * until after the specified wait time has passed since the last call.
+ */
+export function debounce<T extends (...args: Parameters<T>) => ReturnType<T>>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  return function (this: ThisParameterType<T>, ...args: Parameters<T>) {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+
+    timeoutId = setTimeout(() => {
+      func.apply(this, args);
+      timeoutId = null;
+    }, wait);
+  };
+}
+
+/**
+ * Debounce with immediate execution on first call
+ */
+export function debounceImmediate<T extends (...args: Parameters<T>) => ReturnType<T>>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let lastCallTime = 0;
+
+  return function (this: ThisParameterType<T>, ...args: Parameters<T>) {
+    const now = Date.now();
+    const timeSinceLastCall = now - lastCallTime;
+
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+
+    // Execute immediately if enough time has passed
+    if (timeSinceLastCall >= wait) {
+      func.apply(this, args);
+      lastCallTime = now;
+    } else {
+      // Otherwise, schedule for later
+      timeoutId = setTimeout(() => {
+        func.apply(this, args);
+        lastCallTime = Date.now();
+        timeoutId = null;
+      }, wait - timeSinceLastCall);
+    }
+  };
+}

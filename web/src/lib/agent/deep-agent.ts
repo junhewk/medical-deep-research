@@ -1,14 +1,16 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage, SystemMessage, AIMessage } from "@langchain/core/messages";
 import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { allMedicalTools } from "./tools";
+import { allMedicalTools, calculateCompositeScore, type EvidenceLevel } from "./tools";
 import { db } from "@/db";
-import { research, agentStates, reports, picoQueries, pccQueries } from "@/db/schema";
+import { research, agentStates, reports, picoQueries, pccQueries, searchResults } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { generateId } from "@/lib/utils";
 import { exportStateToMarkdown } from "../state-export";
+import { formatVancouverCitation, type CitationData } from "@/lib/citation/vancouver";
 
 // Agent state annotation
 const AgentState = Annotation.Root({
@@ -45,7 +47,7 @@ export interface MedicalResearchConfig {
   researchId: string;
   query: string;
   queryType: "pico" | "pcc" | "free";
-  llmProvider: "openai" | "anthropic";
+  llmProvider: "openai" | "anthropic" | "google";
   model: string;
   apiKey: string;
   scopusApiKey?: string;
@@ -95,11 +97,22 @@ Format your final report in markdown with:
 - Conclusions
 - References (with PMIDs/DOIs)`;
 
-function createLLM(provider: "openai" | "anthropic", model: string, apiKey: string) {
+function createLLM(
+  provider: "openai" | "anthropic" | "google",
+  model: string,
+  apiKey: string
+): ChatOpenAI | ChatAnthropic | ChatGoogleGenerativeAI {
   if (provider === "anthropic") {
     return new ChatAnthropic({
       modelName: model,
       anthropicApiKey: apiKey,
+      temperature: 0.3,
+    });
+  }
+  if (provider === "google") {
+    return new ChatGoogleGenerativeAI({
+      model: model,
+      apiKey: apiKey,
       temperature: 0.3,
     });
   }
@@ -108,6 +121,96 @@ function createLLM(provider: "openai" | "anthropic", model: string, apiKey: stri
     openAIApiKey: apiKey,
     temperature: 0.3,
   });
+}
+
+/**
+ * Persist search results to database with composite scoring and Vancouver citations
+ */
+interface PersistableResult {
+  title: string;
+  authors?: string[];
+  journal?: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  publicationYear?: string;
+  publicationDate?: string;
+  doi?: string;
+  pmid?: string;
+  url?: string;
+  abstract?: string;
+  source: string;
+  evidenceLevel?: string;
+  citationCount?: number;
+  meshTerms?: string[];
+}
+
+async function persistSearchResults(
+  researchId: string,
+  results: PersistableResult[]
+): Promise<void> {
+  if (!results || results.length === 0) return;
+
+  // Calculate scores and sort
+  const scoredResults = results.map((result) => {
+    const scores = calculateCompositeScore(
+      result.evidenceLevel as EvidenceLevel | undefined,
+      result.citationCount,
+      result.publicationDate || result.publicationYear
+    );
+    return { ...result, ...scores };
+  });
+
+  // Sort by composite score
+  scoredResults.sort((a, b) => b.compositeScore - a.compositeScore);
+
+  // Insert with reference numbers
+  for (let i = 0; i < scoredResults.length; i++) {
+    const result = scoredResults[i];
+    const refNumber = i + 1;
+
+    // Generate Vancouver citation
+    const citationData: CitationData = {
+      id: generateId(),
+      title: result.title,
+      authors: result.authors,
+      journal: result.journal,
+      volume: result.volume,
+      issue: result.issue,
+      pages: result.pages,
+      publicationYear: result.publicationYear,
+      doi: result.doi,
+      pmid: result.pmid,
+    };
+    const vancouverCitation = formatVancouverCitation(citationData);
+
+    await db.insert(searchResults).values({
+      id: generateId(),
+      researchId,
+      title: result.title,
+      url: result.url,
+      snippet: result.abstract?.substring(0, 500),
+      source: result.source,
+      evidenceLevel: result.evidenceLevel,
+      doi: result.doi,
+      pmid: result.pmid,
+      authors: JSON.stringify(result.authors || []),
+      journal: result.journal,
+      volume: result.volume,
+      issue: result.issue,
+      pages: result.pages,
+      publicationYear: result.publicationYear,
+      citationCount: result.citationCount,
+      meshTerms: JSON.stringify(result.meshTerms || []),
+      compositeScore: result.compositeScore,
+      evidenceLevelScore: result.evidenceLevelScore,
+      citationScore: result.citationScore,
+      recencyScore: result.recencyScore,
+      referenceNumber: refNumber,
+      vancouverCitation,
+      createdAt: new Date(),
+    });
+  }
 }
 
 async function updateProgress(
@@ -289,20 +392,28 @@ Then build the appropriate query and search multiple databases.`;
 
     const synthesisPrompt = `Based on the search results gathered, synthesize a comprehensive evidence-based report.
 
+IMPORTANT: When citing sources, use numbered in-text citations [1], [2], [3], etc.
+Assign reference numbers in order of first citation in the text.
+Include a complete "References" section at the end using Vancouver style:
+
+Example Vancouver format:
+1. Smith AB, Jones CD. Title of article. Journal Name. 2024;45(3):123-130. doi:10.1000/example
+
 Structure the report with:
 1. Executive Summary
 2. Background
 3. Methods (search strategy used)
-4. Results (organized by evidence level)
+4. Results (organized by evidence level, with [n] citations)
 5. Discussion
 6. Conclusions
-7. References
+7. References (numbered list in Vancouver format)
 
 Focus on:
 - Highlighting the highest quality evidence
 - Noting any conflicting findings
 - Identifying gaps in the literature
-- Providing clinical implications where appropriate`;
+- Providing clinical implications where appropriate
+- Using proper in-text citations [1], [2], etc. throughout`;
 
     return {
       messages: [new HumanMessage(synthesisPrompt)],
@@ -329,6 +440,35 @@ Focus on:
       config.onProgress
     );
 
+    // Persist search results if available
+    if (state.searchResults && state.searchResults.length > 0) {
+      try {
+        const persistableResults = state.searchResults
+          .filter((r): r is PersistableResult => r !== null && typeof r === "object" && "title" in r)
+          .map((r) => ({
+            title: r.title || "Untitled",
+            authors: r.authors,
+            journal: r.journal,
+            volume: r.volume,
+            issue: r.issue,
+            pages: r.pages,
+            publicationYear: r.publicationYear,
+            publicationDate: r.publicationDate,
+            doi: r.doi,
+            pmid: r.pmid,
+            url: r.url,
+            abstract: r.abstract,
+            source: r.source || "unknown",
+            evidenceLevel: r.evidenceLevel,
+            citationCount: r.citationCount,
+            meshTerms: r.meshTerms,
+          }));
+        await persistSearchResults(config.researchId, persistableResults);
+      } catch (error) {
+        console.error("Error persisting search results:", error);
+      }
+    }
+
     // Extract the final report from messages
     const lastAIMessage = [...state.messages]
       .reverse()
@@ -351,7 +491,7 @@ Focus on:
       content: reportContent,
       format: "markdown",
       wordCount: reportContent.split(/\s+/).length,
-      referenceCount: (reportContent.match(/PMID|DOI/gi) || []).length,
+      referenceCount: (reportContent.match(/\[\d+\]/g) || []).length, // Count [1], [2] style references
       version: 1,
       createdAt: now,
       updatedAt: now,

@@ -1,102 +1,102 @@
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    /* Medical-inspired palette: Deep teal primary, warm accents */
-    --background: 210 20% 98%;
-    --foreground: 220 25% 10%;
-    --card: 0 0% 100%;
-    --card-foreground: 220 25% 10%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 220 25% 10%;
+    /* Refined Medical Journal Palette */
+    --background: 40 20% 98%;
+    --foreground: 220 30% 12%;
+    --card: 40 30% 99%;
+    --card-foreground: 220 30% 12%;
+    --popover: 40 30% 99%;
+    --popover-foreground: 220 30% 12%;
 
-    /* Primary: Deep medical teal */
-    --primary: 187 60% 32%;
-    --primary-foreground: 0 0% 100%;
+    /* Primary: Deep scholarly blue-green */
+    --primary: 192 45% 28%;
+    --primary-foreground: 40 20% 98%;
 
-    /* Secondary: Warm slate */
-    --secondary: 220 14% 92%;
-    --secondary-foreground: 220 25% 20%;
+    /* Secondary: Warm parchment */
+    --secondary: 35 25% 93%;
+    --secondary-foreground: 220 30% 18%;
 
-    /* Muted backgrounds */
-    --muted: 210 20% 96%;
-    --muted-foreground: 220 10% 45%;
+    /* Muted: Soft warm gray */
+    --muted: 40 15% 94%;
+    --muted-foreground: 220 12% 48%;
 
-    /* Accent: Medical gold */
-    --accent: 45 80% 50%;
-    --accent-foreground: 220 25% 10%;
+    /* Accent: Medical amber/gold - for highlights */
+    --accent: 38 92% 50%;
+    --accent-foreground: 220 30% 12%;
 
-    /* Destructive: Medical alert red */
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
+    /* Destructive: Refined clinical red */
+    --destructive: 4 72% 46%;
+    --destructive-foreground: 40 20% 98%;
 
     /* Borders and inputs */
-    --border: 220 13% 87%;
-    --input: 220 13% 87%;
-    --ring: 187 60% 32%;
-    --radius: 0.625rem;
+    --border: 35 15% 85%;
+    --input: 35 15% 85%;
+    --ring: 192 45% 28%;
+    --radius: 0.5rem;
 
-    /* Evidence level colors */
-    --evidence-1: 160 60% 40%;  /* Level I - Strong green */
-    --evidence-2: 145 50% 45%;  /* Level II - Green */
-    --evidence-3: 45 70% 50%;   /* Level III - Amber */
-    --evidence-4: 25 80% 55%;   /* Level IV - Orange */
-    --evidence-5: 0 65% 55%;    /* Level V - Red */
+    /* Evidence level colors - refined medical spectrum */
+    --evidence-1: 158 64% 32%;  /* Level I - Deep emerald */
+    --evidence-2: 142 52% 38%;  /* Level II - Forest green */
+    --evidence-3: 43 74% 49%;   /* Level III - Golden amber */
+    --evidence-4: 24 85% 48%;   /* Level IV - Burnt orange */
+    --evidence-5: 4 72% 46%;    /* Level V - Clinical red */
 
-    /* PICO component colors */
-    --pico-p: 200 70% 45%;  /* Population - Blue */
-    --pico-i: 160 60% 40%;  /* Intervention - Teal */
-    --pico-c: 280 50% 55%;  /* Comparison - Purple */
-    --pico-o: 25 80% 50%;   /* Outcome - Orange */
-
-    /* PCC component colors */
-    --pcc-p: 200 70% 45%;  /* Population - Blue */
-    --pcc-c1: 320 60% 50%; /* Concept - Magenta */
-    --pcc-c2: 45 70% 50%;  /* Context - Gold */
+    /* PICO component colors - scholarly palette */
+    --pico-p: 205 65% 38%;  /* Population - Oxford blue */
+    --pico-i: 158 55% 34%;  /* Intervention - Medical green */
+    --pico-c: 275 45% 48%;  /* Comparison - Royal purple */
+    --pico-o: 24 75% 45%;   /* Outcome - Warm sienna */
 
     /* Status colors */
-    --status-pending: 220 10% 60%;
-    --status-running: 187 60% 45%;
-    --status-completed: 160 60% 40%;
-    --status-failed: 0 72% 51%;
+    --status-pending: 220 12% 55%;
+    --status-running: 192 55% 42%;
+    --status-completed: 158 55% 36%;
+    --status-failed: 4 72% 46%;
+
+    /* Special: Paper texture overlay */
+    --paper-texture: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
   }
 
   .dark {
-    --background: 220 25% 8%;
-    --foreground: 210 20% 95%;
-    --card: 220 20% 12%;
-    --card-foreground: 210 20% 95%;
-    --popover: 220 20% 12%;
-    --popover-foreground: 210 20% 95%;
+    --background: 220 20% 7%;
+    --foreground: 40 15% 92%;
+    --card: 220 18% 10%;
+    --card-foreground: 40 15% 92%;
+    --popover: 220 18% 10%;
+    --popover-foreground: 40 15% 92%;
 
-    /* Primary: Brighter teal for dark mode */
-    --primary: 175 55% 50%;
-    --primary-foreground: 220 25% 8%;
+    /* Primary: Luminous teal for dark mode */
+    --primary: 178 50% 48%;
+    --primary-foreground: 220 20% 7%;
 
-    --secondary: 220 15% 18%;
-    --secondary-foreground: 210 20% 90%;
+    --secondary: 220 15% 15%;
+    --secondary-foreground: 40 15% 88%;
 
-    --muted: 220 15% 15%;
-    --muted-foreground: 220 10% 60%;
+    --muted: 220 15% 13%;
+    --muted-foreground: 220 10% 55%;
 
-    --accent: 45 75% 55%;
-    --accent-foreground: 220 25% 8%;
+    --accent: 43 85% 55%;
+    --accent-foreground: 220 20% 7%;
 
-    --destructive: 0 65% 45%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 4 65% 50%;
+    --destructive-foreground: 40 20% 98%;
 
-    --border: 220 15% 20%;
-    --input: 220 15% 20%;
-    --ring: 175 55% 50%;
+    --border: 220 15% 18%;
+    --input: 220 15% 18%;
+    --ring: 178 50% 48%;
 
-    /* Adjusted evidence colors for dark mode */
-    --evidence-1: 160 55% 50%;
-    --evidence-2: 145 45% 50%;
-    --evidence-3: 45 65% 55%;
-    --evidence-4: 25 75% 55%;
-    --evidence-5: 0 60% 55%;
+    /* Adjusted evidence colors for dark mode - more luminous */
+    --evidence-1: 158 55% 48%;
+    --evidence-2: 142 48% 48%;
+    --evidence-3: 43 70% 55%;
+    --evidence-4: 24 80% 55%;
+    --evidence-5: 4 65% 55%;
   }
 }
 
@@ -105,175 +105,499 @@
     @apply border-border;
   }
 
+  html {
+    scroll-behavior: smooth;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: 'DM Sans', system-ui, sans-serif;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    font-optical-sizing: auto;
   }
 
-  /* Improved focus styles */
+  /* Elegant serif for headings */
+  h1, h2, h3, h4, h5, h6, .font-serif {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+  }
+
+  /* Monospace for code */
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  /* Refined focus styles */
   :focus-visible {
-    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+    @apply outline-none ring-2 ring-ring/60 ring-offset-2 ring-offset-background;
+    transition: box-shadow 0.15s ease;
   }
 
-  /* Selection color */
+  /* Elegant selection */
   ::selection {
-    @apply bg-primary/20 text-foreground;
+    @apply bg-primary/15 text-foreground;
+  }
+
+  /* Refined scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border/60 rounded-full;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border;
   }
 }
 
 @layer components {
-  /* Evidence level badge variants */
-  .evidence-level-1 {
-    @apply bg-[hsl(var(--evidence-1))] text-white;
-  }
-  .evidence-level-2 {
-    @apply bg-[hsl(var(--evidence-2))] text-white;
-  }
-  .evidence-level-3 {
-    @apply bg-[hsl(var(--evidence-3))] text-white;
-  }
-  .evidence-level-4 {
-    @apply bg-[hsl(var(--evidence-4))] text-white;
-  }
-  .evidence-level-5 {
-    @apply bg-[hsl(var(--evidence-5))] text-white;
-  }
-
-  /* PICO component badges */
-  .pico-population {
-    @apply bg-[hsl(var(--pico-p))]/15 text-[hsl(var(--pico-p))] border-[hsl(var(--pico-p))]/30;
-  }
-  .pico-intervention {
-    @apply bg-[hsl(var(--pico-i))]/15 text-[hsl(var(--pico-i))] border-[hsl(var(--pico-i))]/30;
-  }
-  .pico-comparison {
-    @apply bg-[hsl(var(--pico-c))]/15 text-[hsl(var(--pico-c))] border-[hsl(var(--pico-c))]/30;
-  }
-  .pico-outcome {
-    @apply bg-[hsl(var(--pico-o))]/15 text-[hsl(var(--pico-o))] border-[hsl(var(--pico-o))]/30;
-  }
-
-  /* Status badges */
-  .status-pending {
-    @apply bg-[hsl(var(--status-pending))]/15 text-[hsl(var(--status-pending))];
-  }
-  .status-running {
-    @apply bg-[hsl(var(--status-running))]/15 text-[hsl(var(--status-running))];
-  }
-  .status-completed {
-    @apply bg-[hsl(var(--status-completed))]/15 text-[hsl(var(--status-completed))];
-  }
-  .status-failed {
-    @apply bg-[hsl(var(--status-failed))]/15 text-[hsl(var(--status-failed))];
-  }
-
-  /* Card hover effect */
-  .card-hover {
-    @apply transition-all duration-200 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5;
-  }
-
-  /* Gradient text */
-  .gradient-text {
-    @apply bg-gradient-to-r from-primary to-[hsl(var(--accent))] bg-clip-text text-transparent;
-  }
-
-  /* Subtle pattern background */
-  .pattern-grid {
-    background-image:
-      linear-gradient(to right, hsl(var(--border)) 1px, transparent 1px),
-      linear-gradient(to bottom, hsl(var(--border)) 1px, transparent 1px);
-    background-size: 24px 24px;
-  }
-
-  /* Animated gradient background */
-  .animated-gradient {
-    background: linear-gradient(
-      -45deg,
-      hsl(var(--primary) / 0.1),
-      hsl(var(--accent) / 0.1),
-      hsl(var(--primary) / 0.05),
-      hsl(var(--accent) / 0.05)
-    );
-    background-size: 400% 400%;
-    animation: gradient-shift 15s ease infinite;
-  }
-
-  @keyframes gradient-shift {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-  }
-
-  /* Pulse animation for running status */
-  .pulse-ring {
+  /* === PAPER TEXTURE & DEPTH === */
+  .paper-bg {
     @apply relative;
   }
-  .pulse-ring::after {
+  .paper-bg::before {
     content: '';
-    @apply absolute inset-0 rounded-full;
-    animation: pulse-ring 2s ease-out infinite;
+    @apply absolute inset-0 pointer-events-none opacity-[0.015];
+    background-image: var(--paper-texture);
+    mix-blend-mode: multiply;
   }
-  @keyframes pulse-ring {
-    0% { box-shadow: 0 0 0 0 hsl(var(--status-running) / 0.4); }
-    70% { box-shadow: 0 0 0 8px hsl(var(--status-running) / 0); }
-    100% { box-shadow: 0 0 0 0 hsl(var(--status-running) / 0); }
+  .dark .paper-bg::before {
+    @apply opacity-[0.03];
+    mix-blend-mode: soft-light;
   }
 
-  /* Progress bar animation */
-  .progress-animated {
+  /* Elegant card with paper feel */
+  .card-paper {
+    @apply bg-card border border-border/60 rounded-lg;
+    box-shadow:
+      0 1px 2px -1px rgba(0,0,0,0.06),
+      0 2px 8px -2px rgba(0,0,0,0.04),
+      inset 0 1px 0 rgba(255,255,255,0.5);
+  }
+  .dark .card-paper {
+    box-shadow:
+      0 1px 2px -1px rgba(0,0,0,0.3),
+      0 4px 16px -4px rgba(0,0,0,0.2),
+      inset 0 1px 0 rgba(255,255,255,0.03);
+  }
+
+  /* === EVIDENCE LEVEL BADGES - Refined === */
+  .evidence-badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium tracking-wide;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  .evidence-level-1 {
+    @apply evidence-badge bg-[hsl(var(--evidence-1))] text-white;
+  }
+  .evidence-level-2 {
+    @apply evidence-badge bg-[hsl(var(--evidence-2))] text-white;
+  }
+  .evidence-level-3 {
+    @apply evidence-badge bg-[hsl(var(--evidence-3))] text-white;
+  }
+  .evidence-level-4 {
+    @apply evidence-badge bg-[hsl(var(--evidence-4))] text-white;
+  }
+  .evidence-level-5 {
+    @apply evidence-badge bg-[hsl(var(--evidence-5))] text-white;
+  }
+
+  /* === PICO/PCC BADGES - Scholarly === */
+  .pico-badge {
+    @apply inline-flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold;
+    box-shadow: inset 0 -1px 0 rgba(0,0,0,0.1);
+  }
+  .pico-population {
+    @apply border;
+    background-color: hsl(var(--pico-p) / 0.12);
+    color: hsl(var(--pico-p));
+    border-color: hsl(var(--pico-p) / 0.25);
+  }
+  .pico-intervention {
+    @apply border;
+    background-color: hsl(var(--pico-i) / 0.12);
+    color: hsl(var(--pico-i));
+    border-color: hsl(var(--pico-i) / 0.25);
+  }
+  .pico-comparison {
+    @apply border;
+    background-color: hsl(var(--pico-c) / 0.12);
+    color: hsl(var(--pico-c));
+    border-color: hsl(var(--pico-c) / 0.25);
+  }
+  .pico-outcome {
+    @apply border;
+    background-color: hsl(var(--pico-o) / 0.12);
+    color: hsl(var(--pico-o));
+    border-color: hsl(var(--pico-o) / 0.25);
+  }
+
+  /* === STATUS INDICATORS === */
+  .status-indicator {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  .status-pending {
+    @apply status-indicator;
+    background-color: hsl(var(--status-pending) / 0.1);
+    color: hsl(var(--status-pending));
+  }
+  .status-running {
+    @apply status-indicator;
+    background-color: hsl(var(--status-running) / 0.1);
+    color: hsl(var(--status-running));
+  }
+  .status-completed {
+    @apply status-indicator;
+    background-color: hsl(var(--status-completed) / 0.1);
+    color: hsl(var(--status-completed));
+  }
+  .status-failed {
+    @apply status-indicator;
+    background-color: hsl(var(--status-failed) / 0.1);
+    color: hsl(var(--status-failed));
+  }
+
+  /* === INTERACTIVE STATES === */
+  .card-hover {
+    @apply transition-all duration-300 ease-out;
+  }
+  .card-hover:hover {
+    @apply -translate-y-0.5;
+    box-shadow:
+      0 4px 12px -2px rgba(0,0,0,0.08),
+      0 8px 24px -4px rgba(0,0,0,0.04);
+  }
+  .dark .card-hover:hover {
+    box-shadow:
+      0 4px 12px -2px rgba(0,0,0,0.4),
+      0 8px 24px -4px rgba(0,0,0,0.3);
+  }
+
+  /* Subtle button press effect */
+  .btn-press {
+    @apply transition-transform duration-75;
+  }
+  .btn-press:active {
+    @apply scale-[0.98];
+  }
+
+  /* === DECORATIVE ELEMENTS === */
+
+  /* Elegant divider with diamond */
+  .divider-diamond {
+    @apply flex items-center gap-4 my-8;
+  }
+  .divider-diamond::before,
+  .divider-diamond::after {
+    content: '';
+    @apply flex-1 h-px bg-gradient-to-r from-transparent via-border to-transparent;
+  }
+  .divider-diamond span {
+    @apply text-border text-xs;
+  }
+
+  /* Header underline accent */
+  .header-accent {
+    @apply relative pb-3;
+  }
+  .header-accent::after {
+    content: '';
+    @apply absolute bottom-0 left-0 w-12 h-0.5 bg-primary rounded-full;
+  }
+
+  /* Gradient text - editorial style */
+  .gradient-text {
+    @apply bg-gradient-to-br from-primary via-[hsl(var(--pico-i))] to-primary bg-clip-text text-transparent;
+  }
+
+  /* === PATTERNS & BACKGROUNDS === */
+
+  /* Subtle dot grid */
+  .pattern-dots {
+    background-image: radial-gradient(hsl(var(--border)) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+
+  /* Elegant mesh gradient for hero sections */
+  .mesh-gradient {
+    background:
+      radial-gradient(at 20% 20%, hsl(var(--primary) / 0.08) 0%, transparent 50%),
+      radial-gradient(at 80% 80%, hsl(var(--accent) / 0.06) 0%, transparent 50%),
+      radial-gradient(at 50% 50%, hsl(var(--pico-c) / 0.04) 0%, transparent 60%);
+  }
+
+  /* Animated gradient for loading states */
+  .animated-gradient {
+    background: linear-gradient(
+      110deg,
+      hsl(var(--primary) / 0.05) 0%,
+      hsl(var(--accent) / 0.08) 25%,
+      hsl(var(--primary) / 0.05) 50%,
+      hsl(var(--accent) / 0.08) 75%,
+      hsl(var(--primary) / 0.05) 100%
+    );
+    background-size: 200% 100%;
+    animation: gradient-flow 8s ease infinite;
+  }
+
+  @keyframes gradient-flow {
+    0% { background-position: 0% 0%; }
+    50% { background-position: 100% 0%; }
+    100% { background-position: 0% 0%; }
+  }
+
+  /* === ANIMATIONS === */
+
+  /* Refined pulse for running status */
+  .pulse-glow {
+    animation: pulse-glow 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 hsl(var(--status-running) / 0.4);
+    }
+    50% {
+      opacity: 0.85;
+      box-shadow: 0 0 0 6px hsl(var(--status-running) / 0);
+    }
+  }
+
+  /* Progress bar shimmer */
+  .progress-shimmer {
     @apply relative overflow-hidden;
   }
-  .progress-animated::after {
+  .progress-shimmer::after {
     content: '';
     @apply absolute inset-0;
     background: linear-gradient(
-      90deg,
-      transparent,
-      hsl(var(--primary-foreground) / 0.2),
-      transparent
+      110deg,
+      transparent 20%,
+      hsl(var(--primary-foreground) / 0.15) 50%,
+      transparent 80%
     );
-    animation: shimmer 2s infinite;
+    animation: shimmer 2s ease-in-out infinite;
   }
   @keyframes shimmer {
     0% { transform: translateX(-100%); }
     100% { transform: translateX(100%); }
   }
 
-  /* Skeleton loader */
+  /* Staggered entrance animation */
+  .stagger-fade > * {
+    @apply opacity-0;
+    animation: stagger-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  .stagger-fade > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger-fade > *:nth-child(2) { animation-delay: 60ms; }
+  .stagger-fade > *:nth-child(3) { animation-delay: 120ms; }
+  .stagger-fade > *:nth-child(4) { animation-delay: 180ms; }
+  .stagger-fade > *:nth-child(5) { animation-delay: 240ms; }
+  .stagger-fade > *:nth-child(6) { animation-delay: 300ms; }
+  .stagger-fade > *:nth-child(7) { animation-delay: 360ms; }
+  .stagger-fade > *:nth-child(8) { animation-delay: 420ms; }
+
+  @keyframes stagger-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  /* Slide in from right */
+  .slide-in-right {
+    animation: slide-right 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  @keyframes slide-right {
+    from {
+      opacity: 0;
+      transform: translateX(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  /* Gentle float for icons */
+  .float-gentle {
+    animation: float 4s ease-in-out infinite;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+
+  /* === SKELETON LOADER === */
   .skeleton {
-    @apply bg-muted animate-pulse rounded;
+    @apply bg-muted animate-pulse rounded-md;
+    background: linear-gradient(
+      110deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--muted) / 0.6) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  }
+  @keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
 
-  /* Staggered fade in animation */
-  .fade-in-stagger > * {
-    @apply opacity-0 animate-[fade-in_0.5s_ease-out_forwards];
-  }
-  .fade-in-stagger > *:nth-child(1) { animation-delay: 0ms; }
-  .fade-in-stagger > *:nth-child(2) { animation-delay: 50ms; }
-  .fade-in-stagger > *:nth-child(3) { animation-delay: 100ms; }
-  .fade-in-stagger > *:nth-child(4) { animation-delay: 150ms; }
-  .fade-in-stagger > *:nth-child(5) { animation-delay: 200ms; }
-  .fade-in-stagger > *:nth-child(6) { animation-delay: 250ms; }
-
-  @keyframes fade-in {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+  /* Legacy support */
+  .fade-in-stagger {
+    @apply stagger-fade;
   }
 }
 
-/* Prose styling for markdown content */
+/* === PROSE STYLING - Medical Journal === */
 @layer utilities {
   .prose-medical {
-    @apply prose prose-slate dark:prose-invert max-w-none;
-    @apply prose-headings:font-serif prose-headings:text-foreground;
-    @apply prose-h1:text-2xl prose-h1:border-b prose-h1:border-border prose-h1:pb-2;
-    @apply prose-h2:text-xl prose-h2:text-primary;
-    @apply prose-h3:text-lg;
-    @apply prose-p:text-muted-foreground prose-p:leading-relaxed;
-    @apply prose-a:text-primary prose-a:no-underline hover:prose-a:underline;
-    @apply prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm;
-    @apply prose-pre:bg-muted prose-pre:border prose-pre:border-border;
-    @apply prose-ul:text-muted-foreground prose-ol:text-muted-foreground;
-    @apply prose-strong:text-foreground prose-strong:font-semibold;
+    @apply prose max-w-none;
+    --tw-prose-body: hsl(var(--muted-foreground));
+    --tw-prose-headings: hsl(var(--foreground));
+    --tw-prose-links: hsl(var(--primary));
+    --tw-prose-bold: hsl(var(--foreground));
+    --tw-prose-quotes: hsl(var(--foreground));
+    --tw-prose-quote-borders: hsl(var(--primary));
+    --tw-prose-code: hsl(var(--foreground));
+    --tw-prose-pre-bg: hsl(var(--muted));
   }
+
+  .prose-medical :where(h1, h2, h3, h4, h5, h6) {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+  }
+
+  .prose-medical :where(h1) {
+    @apply text-2xl sm:text-3xl border-b border-border pb-4 mb-6;
+  }
+
+  .prose-medical :where(h2) {
+    @apply text-xl sm:text-2xl text-primary mt-10 mb-4;
+  }
+
+  .prose-medical :where(h3) {
+    @apply text-lg sm:text-xl mt-8 mb-3;
+  }
+
+  .prose-medical :where(p) {
+    @apply leading-relaxed mb-4;
+  }
+
+  .prose-medical :where(a) {
+    @apply text-primary no-underline hover:underline decoration-primary/40 underline-offset-2;
+  }
+
+  .prose-medical :where(code):not(:where(pre *)) {
+    @apply bg-muted px-1.5 py-0.5 rounded text-sm font-medium;
+  }
+
+  .prose-medical :where(pre) {
+    @apply bg-muted border border-border rounded-lg;
+  }
+
+  .prose-medical :where(blockquote) {
+    @apply border-l-2 border-primary pl-4 italic;
+  }
+
+  .prose-medical :where(ul, ol) {
+    @apply my-4 pl-6;
+  }
+
+  .prose-medical :where(li) {
+    @apply mb-1;
+  }
+
+  .prose-medical :where(table) {
+    @apply w-full text-sm border-collapse;
+  }
+
+  .prose-medical :where(th) {
+    @apply bg-muted font-semibold text-left p-3 border-b border-border;
+  }
+
+  .prose-medical :where(td) {
+    @apply p-3 border-b border-border/50;
+  }
+
+  .prose-medical :where(strong) {
+    @apply font-semibold text-foreground;
+  }
+}
+
+/* === SPECIAL COMPONENTS === */
+@layer components {
+  /* Query syntax highlighting tokens */
+  .token-mesh { @apply text-emerald-600 dark:text-emerald-400; }
+  .token-tiab { @apply text-sky-600 dark:text-sky-400; }
+  .token-pt { @apply text-violet-600 dark:text-violet-400; }
+  .token-dp { @apply text-amber-600 dark:text-amber-400; }
+  .token-operator { @apply text-orange-600 dark:text-orange-400 font-semibold; }
+  .token-paren { @apply text-muted-foreground; }
+
+  /* Score meter visualization */
+  .score-meter {
+    @apply h-1.5 rounded-full bg-muted overflow-hidden;
+  }
+  .score-meter-fill {
+    @apply h-full rounded-full transition-all duration-500 ease-out;
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)));
+  }
+
+  /* Evidence pyramid indicator */
+  .evidence-pyramid {
+    @apply relative w-6 h-6;
+  }
+  .evidence-pyramid::before {
+    content: '';
+    @apply absolute inset-0;
+    clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+    background: linear-gradient(180deg, hsl(var(--evidence-1)), hsl(var(--evidence-5)));
+  }
+
+  /* Research phase timeline */
+  .phase-timeline {
+    @apply relative pl-6;
+  }
+  .phase-timeline::before {
+    content: '';
+    @apply absolute left-2 top-2 bottom-2 w-0.5 bg-border rounded-full;
+  }
+  .phase-dot {
+    @apply absolute left-0 w-4 h-4 rounded-full border-2 border-background bg-muted;
+  }
+  .phase-dot.active {
+    @apply bg-primary;
+    box-shadow: 0 0 0 3px hsl(var(--primary) / 0.2);
+  }
+  .phase-dot.completed {
+    @apply bg-[hsl(var(--status-completed))];
+  }
+}
+
+/* === DARK MODE REFINEMENTS === */
+.dark {
+  color-scheme: dark;
+}
+
+.dark .card-paper {
+  @apply bg-card/80 backdrop-blur-sm;
+}
+
+.dark .pattern-dots {
+  background-image: radial-gradient(hsl(var(--border) / 0.5) 1px, transparent 1px);
 }

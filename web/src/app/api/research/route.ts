@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { research, apiKeys } from "@/db/schema";
+import { research, apiKeys, llmConfig } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { generateId } from "@/lib/utils";
@@ -11,7 +11,7 @@ const createResearchSchema = z.object({
   query: z.string().min(1, "Query is required").max(5000),
   queryType: z.enum(["pico", "pcc", "free"]).default("pico"),
   mode: z.enum(["quick", "detailed"]).default("detailed"),
-  llmProvider: z.enum(["openai", "anthropic"]).default("openai"),
+  llmProvider: z.enum(["openai", "anthropic", "google"]).default("openai"),
   model: z.string().optional(),
   picoComponents: z.object({
     population: z.string().optional(),
@@ -56,8 +56,8 @@ export async function POST(request: Request) {
       query,
       queryType,
       mode,
-      llmProvider,
-      model,
+      llmProvider: requestedProvider,
+      model: requestedModel,
       picoComponents,
       pccComponents,
     } = parseResult.data;
@@ -86,8 +86,32 @@ export async function POST(request: Request) {
       {} as Record<string, string>
     );
 
-    const llmApiKey =
-      llmProvider === "anthropic" ? keyMap.anthropic : keyMap.openai;
+    // Get default LLM config if not specified in request
+    const defaultLlmConfig = await db.query.llmConfig.findFirst({
+      where: eq(llmConfig.isDefault, true),
+    });
+
+    const llmProvider: "openai" | "anthropic" | "google" = requestedProvider
+      || (defaultLlmConfig?.provider as "openai" | "anthropic" | "google")
+      || "openai";
+
+    const getDefaultModel = (provider: string) => {
+      if (provider === "anthropic") return "claude-opus-4-5-20251101";
+      if (provider === "google") return "gemini-3-pro-preview";
+      return "gpt-5.2";
+    };
+
+    const model: string = requestedModel
+      || defaultLlmConfig?.model
+      || getDefaultModel(llmProvider);
+
+    const getApiKey = (provider: string) => {
+      if (provider === "anthropic") return keyMap.anthropic;
+      if (provider === "google") return keyMap.google;
+      return keyMap.openai;
+    };
+
+    const llmApiKey = getApiKey(llmProvider);
 
     if (!llmApiKey) {
       await db.update(research).set({ status: "failed", errorMessage: `${llmProvider} API key not configured` }).where(eq(research.id, researchId));
@@ -109,7 +133,7 @@ export async function POST(request: Request) {
       query,
       queryType,
       llmProvider,
-      model: model || (llmProvider === "anthropic" ? "claude-3-5-sonnet-20241022" : "gpt-4o"),
+      model,
       apiKey: llmApiKey,
       scopusApiKey: keyMap.scopus,
       ncbiApiKey: keyMap.ncbi,
@@ -129,6 +153,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ research_id: researchId });
   } catch (error) {
     console.error("Error creating research:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return NextResponse.json({ error: `Internal server error: ${message}` }, { status: 500 });
   }
 }

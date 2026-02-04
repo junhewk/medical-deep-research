@@ -76,5 +76,38 @@ echo ""
 echo "Press Ctrl+C to stop"
 echo ""
 
+# Function to open browser based on OS
+open_browser() {
+    local url="http://localhost:3000"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        open "$url"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        if command -v xdg-open &> /dev/null; then
+            xdg-open "$url"
+        elif command -v gnome-open &> /dev/null; then
+            gnome-open "$url"
+        fi
+    elif [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]]; then
+        start "$url"
+    fi
+}
+
+# Wait for server to be ready and open browser in background
+(
+    echo "⏳ Waiting for server to be ready..."
+    max_attempts=30
+    attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -s http://localhost:3000 > /dev/null 2>&1; then
+            echo "✓ Server is ready!"
+            open_browser
+            exit 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    echo "⚠️  Timeout waiting for server. Please open http://localhost:3000 manually."
+) &
+
 # Start Next.js development server
 npm run dev

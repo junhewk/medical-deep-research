@@ -118,12 +118,29 @@ export const searchResults = sqliteTable("search_results", {
   doi: text("doi"),
   pmid: text("pmid"),
   relevanceScore: real("relevance_score"),
+  // Bibliographic data for Vancouver formatting
+  authors: text("authors"), // JSON array
+  journal: text("journal"),
+  volume: text("volume"),
+  issue: text("issue"),
+  pages: text("pages"),
+  publicationYear: text("publication_year"),
+  citationCount: integer("citation_count"),
+  // Composite scoring data
+  compositeScore: real("composite_score"),
+  evidenceLevelScore: real("evidence_level_score"),
+  citationScore: real("citation_score"),
+  recencyScore: real("recency_score"),
+  // Reference tracking
+  referenceNumber: integer("reference_number"), // [1], [2], etc.
+  vancouverCitation: text("vancouver_citation"), // Pre-formatted string
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
 }, (table) => ({
   researchIdIdx: index("search_results_research_id_idx").on(table.researchId),
   sourceIdx: index("search_results_source_idx").on(table.source),
+  compositeScoreIdx: index("search_results_composite_score_idx").on(table.compositeScore),
 }));
 
 // API keys (BYOK)
@@ -145,6 +162,18 @@ export const settings = sqliteTable("settings", {
   updatedAt: integer("updated_at", { mode: "timestamp" }),
 });
 
+// LLM configuration
+export const llmConfig = sqliteTable("llm_config", {
+  id: text("id").primaryKey(),
+  provider: text("provider", { enum: ["openai", "anthropic", "google"] }).notNull(),
+  model: text("model").notNull(),
+  isDefault: integer("is_default", { mode: "boolean" }).default(false),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }),
+});
+
 // Type exports
 export type Research = typeof research.$inferSelect;
 export type NewResearch = typeof research.$inferInsert;
@@ -162,3 +191,5 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type NewApiKey = typeof apiKeys.$inferInsert;
 export type Setting = typeof settings.$inferSelect;
 export type NewSetting = typeof settings.$inferInsert;
+export type LlmConfig = typeof llmConfig.$inferSelect;
+export type NewLlmConfig = typeof llmConfig.$inferInsert;

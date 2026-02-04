@@ -1,25 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { LogOut, Settings, FlaskConical, Plus } from "lucide-react";
+import { Settings, FlaskConical, Plus, Key } from "lucide-react";
 
-interface NavbarProps {
-  username: string;
-}
-
-export function Navbar({ username }: NavbarProps) {
-  const router = useRouter();
-
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/");
-    router.refresh();
-  }
-
+export function Navbar() {
   return (
-    <nav className="border-b bg-white">
+    <nav className="border-b bg-background">
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
         <div className="flex items-center gap-6">
           <Link href="/research" className="flex items-center gap-2">
@@ -41,18 +28,18 @@ export function Navbar({ username }: NavbarProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-muted-foreground hidden sm:block">
-            {username}
-          </span>
+        <div className="flex items-center gap-2">
+          <Link href="/settings/api-keys">
+            <Button variant="ghost" size="sm">
+              <Key className="h-4 w-4 mr-1" />
+              API Keys
+            </Button>
+          </Link>
           <Link href="/settings">
             <Button variant="ghost" size="icon">
               <Settings className="h-5 w-5" />
             </Button>
           </Link>
-          <Button variant="ghost" size="icon" onClick={handleLogout}>
-            <LogOut className="h-5 w-5" />
-          </Button>
         </div>
       </div>
     </nav>

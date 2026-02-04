@@ -12,18 +12,19 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Plus, Loader2, FileText } from "lucide-react";
+import { Plus, Loader2, FileText, BookOpen } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 
 export default function ResearchListPage() {
   const { data: research, isLoading, error } = useResearchList();
 
-  const statusColors = {
+  const statusColors: Record<string, "secondary" | "default" | "destructive"> = {
     pending: "secondary",
     running: "default",
-    completed: "success",
+    completed: "secondary",
     failed: "destructive",
-  } as const;
+    cancelled: "secondary",
+  };
 
   return (
     <div className="space-y-6">
@@ -64,7 +65,7 @@ export default function ResearchListPage() {
             <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
             <h3 className="text-lg font-medium mb-2">No research yet</h3>
             <p className="text-muted-foreground mb-4">
-              Start your first medical research query
+              Start your first medical research query using PICO or PCC framework
             </p>
             <Link href="/research/new">
               <Button>
@@ -84,6 +85,14 @@ export default function ResearchListPage() {
                 <CardHeader className="pb-2">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        {item.queryType && (
+                          <Badge variant="outline" className="text-xs">
+                            <BookOpen className="h-3 w-3 mr-1" />
+                            {item.queryType.toUpperCase()}
+                          </Badge>
+                        )}
+                      </div>
                       <CardTitle className="text-base truncate">
                         {item.query}
                       </CardTitle>
@@ -91,8 +100,8 @@ export default function ResearchListPage() {
                         {formatDate(new Date(item.createdAt))}
                       </CardDescription>
                     </div>
-                    <Badge variant={statusColors[item.status as keyof typeof statusColors] || "secondary"}>
-                      {item.status}
+                    <Badge variant={statusColors[item.status] || "secondary"}>
+                      {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
                     </Badge>
                   </div>
                 </CardHeader>

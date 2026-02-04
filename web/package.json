@@ -1,6 +1,6 @@
 {
   "name": "medical-deep-research-web",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -12,7 +12,10 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
-    "@lucia-auth/adapter-drizzle": "^1.1.0",
+    "@langchain/anthropic": "^0.3.14",
+    "@langchain/core": "^0.3.30",
+    "@langchain/langgraph": "^0.2.44",
+    "@langchain/openai": "^0.3.17",
     "@radix-ui/react-avatar": "^1.1.0",
     "@radix-ui/react-dialog": "^1.1.1",
     "@radix-ui/react-dropdown-menu": "^2.1.1",
@@ -28,18 +31,18 @@
     "better-sqlite3": "^11.1.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "deepagents": "^1.6.1",
     "drizzle-orm": "^0.32.0",
-    "lucia": "^3.2.0",
     "lucide-react": "^0.407.0",
     "next": "^14.2.5",
-    "bcryptjs": "^2.4.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
     "tailwind-merge": "^2.4.0",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^20.14.11",
     "@types/react": "^18.3.3",

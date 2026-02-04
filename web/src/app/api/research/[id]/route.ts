@@ -1,102 +1,164 @@
-import { validateRequest } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { research } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { db } from "@/db";
+import { research, agentStates, reports, picoQueries, pccQueries, searchResults } from "@/db/schema";
+import { eq, desc } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { readResearchState, readFinalReport } from "@/lib/state-export";
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
-
-// GET /api/research/[id] - Get research details/progress
+// GET /api/research/[id] - Get research details and progress
 export async function GET(
   request: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { user } = await validateRequest();
+    const { id } = params;
 
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    // Get research from database
-    const item = await db.query.research.findFirst({
-      where: and(eq(research.id, params.id), eq(research.userId, user.id)),
+    // Get research record
+    const researchRecord = await db.query.research.findFirst({
+      where: eq(research.id, id),
     });
 
-    if (!item) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!researchRecord) {
+      return NextResponse.json({ error: "Research not found" }, { status: 404 });
     }
 
-    // If research is running, get progress from Python backend
-    if (item.status === "running" || item.status === "pending") {
-      try {
-        const response = await fetch(`${PYTHON_API_URL}/research/${params.id}`);
+    // Get latest agent state
+    const latestState = await db.query.agentStates.findFirst({
+      where: eq(agentStates.researchId, id),
+      orderBy: [desc(agentStates.createdAt)],
+    });
 
-        if (response.ok) {
-          const progress = await response.json();
+    // Get PICO/PCC query if exists
+    const picoQuery = await db.query.picoQueries.findFirst({
+      where: eq(picoQueries.researchId, id),
+    });
 
-          // Update database with latest progress
-          await db
-            .update(research)
-            .set({
-              progress: progress.progress || item.progress,
-              status: progress.status || item.status,
-              result: progress.result
-                ? JSON.stringify(progress.result)
-                : item.result,
-              planningSteps: progress.planning_steps
-                ? JSON.stringify(progress.planning_steps)
-                : item.planningSteps,
-              toolExecutions: progress.tool_executions
-                ? JSON.stringify(progress.tool_executions)
-                : item.toolExecutions,
-              completedAt:
-                progress.status === "completed" ? new Date() : item.completedAt,
-            })
-            .where(eq(research.id, params.id));
+    const pccQuery = await db.query.pccQueries.findFirst({
+      where: eq(pccQueries.researchId, id),
+    });
 
-          // Return combined data
-          return NextResponse.json({
-            id: item.id,
-            query: item.query,
-            status: progress.status || item.status,
-            progress: progress.progress || item.progress,
-            phase: progress.phase,
-            planning_steps: progress.planning_steps || [],
-            active_agents: progress.active_agents || [],
-            tool_executions: progress.tool_executions || [],
-            result: progress.result,
-            error: progress.error,
-            createdAt: item.createdAt,
-            completedAt: item.completedAt,
-          });
-        }
-      } catch (fetchError) {
-        console.error("Error fetching from Python API:", fetchError);
-      }
+    // Get report if completed
+    let report = null;
+    if (researchRecord.status === "completed") {
+      report = await db.query.reports.findFirst({
+        where: eq(reports.researchId, id),
+        orderBy: [desc(reports.createdAt)],
+      });
     }
 
-    // Return data from database
+    // Get search results count
+    const searchResultsData = await db.query.searchResults.findMany({
+      where: eq(searchResults.researchId, id),
+    });
+
+    // Read state markdown file
+    const stateMarkdown = await readResearchState(id);
+    const reportMarkdown = await readFinalReport(id);
+
     return NextResponse.json({
-      id: item.id,
-      query: item.query,
-      status: item.status,
-      progress: item.progress,
-      planning_steps: item.planningSteps
-        ? JSON.parse(item.planningSteps)
-        : [],
-      tool_executions: item.toolExecutions
-        ? JSON.parse(item.toolExecutions)
-        : [],
-      result: item.result ? JSON.parse(item.result) : null,
-      createdAt: item.createdAt,
-      completedAt: item.completedAt,
+      id: researchRecord.id,
+      query: researchRecord.query,
+      queryType: researchRecord.queryType,
+      mode: researchRecord.mode,
+      status: researchRecord.status,
+      progress: researchRecord.progress,
+      title: researchRecord.title,
+      createdAt: researchRecord.createdAt,
+      startedAt: researchRecord.startedAt,
+      completedAt: researchRecord.completedAt,
+      durationSeconds: researchRecord.durationSeconds,
+      errorMessage: researchRecord.errorMessage,
+      phase: latestState?.phase || "init",
+      planning_steps: latestState?.planningSteps ? JSON.parse(latestState.planningSteps) : [],
+      active_agents: latestState?.activeAgents ? JSON.parse(latestState.activeAgents) : [],
+      tool_executions: latestState?.toolExecutions ? JSON.parse(latestState.toolExecutions) : [],
+      picoQuery: picoQuery
+        ? {
+            population: picoQuery.population,
+            intervention: picoQuery.intervention,
+            comparison: picoQuery.comparison,
+            outcome: picoQuery.outcome,
+            generatedPubmedQuery: picoQuery.generatedPubmedQuery,
+            meshTerms: picoQuery.meshTerms ? JSON.parse(picoQuery.meshTerms) : [],
+          }
+        : null,
+      pccQuery: pccQuery
+        ? {
+            population: pccQuery.population,
+            concept: pccQuery.concept,
+            context: pccQuery.context,
+            generatedQuery: pccQuery.generatedQuery,
+          }
+        : null,
+      searchResultsCount: searchResultsData.length,
+      report: report
+        ? {
+            id: report.id,
+            title: report.title,
+            content: report.content,
+            wordCount: report.wordCount,
+            referenceCount: report.referenceCount,
+            createdAt: report.createdAt,
+          }
+        : null,
+      result: report?.content || null,
+      stateMarkdown,
+      reportMarkdown,
     });
   } catch (error) {
     console.error("Error fetching research:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+// DELETE /api/research/[id] - Delete research
+export async function DELETE(
+  request: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const { id } = params;
+
+    // Check if research exists
+    const researchRecord = await db.query.research.findFirst({
+      where: eq(research.id, id),
+    });
+
+    if (!researchRecord) {
+      return NextResponse.json({ error: "Research not found" }, { status: 404 });
+    }
+
+    // Delete research (cascades to related tables)
+    await db.delete(research).where(eq(research.id, id));
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting research:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+// PATCH /api/research/[id] - Cancel research
+export async function PATCH(
+  request: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const { id } = params;
+    const body = await request.json();
+    const { action } = body;
+
+    if (action === "cancel") {
+      await db
+        .update(research)
+        .set({ status: "cancelled" })
+        .where(eq(research.id, id));
+
+      return NextResponse.json({ success: true });
+    }
+
+    return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+  } catch (error) {
+    console.error("Error updating research:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

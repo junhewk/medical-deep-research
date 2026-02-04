@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Plus,
-  Key,
+  Settings,
   Sun,
   Moon,
   Menu,
@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 const navLinks = [
   { href: "/research", label: "Research", icon: FileText },
   { href: "/research/new", label: "New Query", icon: Plus, highlight: true },
-  { href: "/settings/api-keys", label: "API Keys", icon: Key },
+  { href: "/settings/api-keys", label: "Settings", icon: Settings },
 ];
 
 export function Navigation() {

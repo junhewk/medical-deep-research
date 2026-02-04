@@ -577,6 +577,11 @@ Focus on:
     const reportId = generateId();
     const now = new Date();
 
+    // Count unique reference numbers (e.g., [1], [2], [3])
+    const refMatches = reportContent.match(/\[\d+\]/g) || [];
+    const uniqueRefs = new Set(refMatches.map(r => r));
+    const referenceCount = uniqueRefs.size;
+
     await db.insert(reports).values({
       id: reportId,
       researchId: config.researchId,
@@ -584,7 +589,7 @@ Focus on:
       content: reportContent,
       format: "markdown",
       wordCount: reportContent.split(/\s+/).length,
-      referenceCount: (reportContent.match(/\[\d+\]/g) || []).length, // Count [1], [2] style references
+      referenceCount,
       version: 1,
       createdAt: now,
       updatedAt: now,

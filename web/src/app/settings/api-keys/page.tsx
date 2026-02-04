@@ -272,11 +272,11 @@ export default function ApiKeysPage() {
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <h1 className="font-serif text-3xl font-semibold tracking-tight flex items-center gap-3">
-            <Key className="h-8 w-8 text-primary" />
-            API Keys
+            <Settings2 className="h-8 w-8 text-primary" />
+            Settings
           </h1>
           <p className="text-muted-foreground mt-1">
-            Manage your API keys for LLM providers and search engines
+            Configure LLM models and API keys
           </p>
         </div>
         <LoadingSkeleton />
@@ -289,13 +289,13 @@ export default function ApiKeysPage() {
       {/* Header */}
       <div className="text-center space-y-3">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 mb-2">
-          <Key className="h-8 w-8 text-primary" />
+          <Settings2 className="h-8 w-8 text-primary" />
         </div>
         <h1 className="font-serif text-3xl sm:text-4xl tracking-tight">
-          API Configuration
+          Settings
         </h1>
         <p className="text-muted-foreground max-w-md mx-auto">
-          Configure your API keys for LLM providers and search databases
+          Configure LLM models and API keys for research
         </p>
         <Badge variant="outline" className="text-xs">BYOK — Bring Your Own Key</Badge>
       </div>

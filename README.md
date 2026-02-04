@@ -35,7 +35,24 @@ Medical Deep Research is an **evidence-based medicine (EBM)** research assistant
 - Node.js 18+
 - npm or pnpm
 
-### Installation
+### One-Click Start
+
+**macOS / Linux:**
+```bash
+./start-web.sh
+```
+
+**Windows:**
+```cmd
+start-web.bat
+```
+
+The startup script will automatically:
+- Install dependencies
+- Set up the SQLite database
+- Start the development server
+
+### Manual Installation
 
 ```bash
 cd medical-deep-research/web

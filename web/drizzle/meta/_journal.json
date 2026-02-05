@@ -15,6 +15,20 @@
       "when": 1770179075190,
       "tag": "0001_messy_dragon_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1770255014492,
+      "tag": "0002_lowly_fixer",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1770258635659,
+      "tag": "0003_breezy_nova",
+      "breakpoints": true
     }
   ]
 }

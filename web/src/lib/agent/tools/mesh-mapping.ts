@@ -128,7 +128,7 @@ export const evidenceLevelTool = tool(
     description: "Classifies the evidence level (I-V) of a study based on its publication type and study design",
     schema: z.object({
       publicationType: z.string().describe("Publication type (e.g., 'Journal Article', 'Review')"),
-      studyDesign: z.string().optional().describe("Study design if available (e.g., 'RCT', 'cohort study')"),
+      studyDesign: z.string().optional().nullable().describe("Study design if available (e.g., 'RCT', 'cohort study')"),
     }),
   }
 );

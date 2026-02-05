@@ -1,0 +1,193 @@
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "configured": "Configured",
+    "required": "Required",
+    "optional": "optional",
+    "current": "Current",
+    "byok": "BYOK — Bring Your Own Key"
+  },
+  "navigation": {
+    "research": "Research",
+    "newQuery": "New Query",
+    "settings": "Settings",
+    "title": "Medical Deep Research",
+    "subtitle": "Evidence-Based Analysis"
+  },
+  "footer": {
+    "title": "Medical Deep Research",
+    "version": "v2.0 — Evidence-based research assistant",
+    "langGraphPowered": "LangGraph Powered",
+    "byokModel": "BYOK Model"
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "Configure LLM models and API keys for research",
+    "defaultLlmModel": "Default LLM Model",
+    "defaultLlmDescription": "Select the default language model for research tasks",
+    "provider": "Provider",
+    "model": "Model",
+    "selectModel": "Select a model",
+    "saveAsDefault": "Save as Default",
+    "language": "Language",
+    "languageDescription": "Choose the interface and report language",
+    "securityNote": "Security Note",
+    "securityDescription": "API keys are stored locally in your database and are never sent to external servers except for the specific API they belong to. For production deployments, consider using environment variables instead.",
+    "getApiKey": "Get API Key",
+    "enterApiKey": "Enter API key...",
+    "enterNewKey": "Enter new key to update...",
+    "deleteApiKey": "Delete API Key",
+    "deleteApiKeyConfirm": "Are you sure you want to delete the {service} API key? This action cannot be undone.",
+    "apiKeySaved": "{service} API key saved successfully",
+    "apiKeyDeleted": "{service} API key deleted",
+    "llmConfigSaved": "LLM configuration saved successfully",
+    "languageSaved": "Language saved successfully"
+  },
+  "apiServices": {
+    "openai": {
+      "name": "OpenAI",
+      "description": "Required for GPT based research (default LLM)"
+    },
+    "anthropic": {
+      "name": "Anthropic",
+      "description": "Required for Claude-based research"
+    },
+    "google": {
+      "name": "Google AI",
+      "description": "Required for Gemini-based research"
+    },
+    "ncbi": {
+      "name": "NCBI/PubMed",
+      "description": "Optional - increases PubMed rate limits (free)"
+    },
+    "scopus": {
+      "name": "Scopus/Elsevier",
+      "description": "Required for Scopus database searches"
+    }
+  },
+  "research": {
+    "history": "Research History",
+    "historyDescription": "View and manage your medical research queries",
+    "newResearch": "New Research",
+    "startNewResearch": "Start New Research",
+    "noResearchYet": "No research yet",
+    "noResearchDescription": "Start your first evidence-based medical research query using the PICO or PCC framework",
+    "progress": "Progress",
+    "loadError": "Failed to load research history. Please try again."
+  },
+  "status": {
+    "pending": "Pending",
+    "running": "Running",
+    "completed": "Completed",
+    "failed": "Failed",
+    "cancelled": "Cancelled"
+  },
+  "newResearch": {
+    "title": "Research Query",
+    "description": "Structure your clinical question using evidence-based frameworks",
+    "framework": "Research Framework",
+    "frameworkDescription": "Choose a framework for structuring your research question",
+    "picoFramework": "PICO Framework",
+    "picoDescription": "Best for clinical questions about interventions, therapies, or treatments",
+    "pccFramework": "PCC Framework",
+    "pccDescription": "Best for scoping reviews, qualitative research, or exploratory questions",
+    "freeForm": "Free-form Query",
+    "freeFormDescription": "Enter your research question in natural language. The agent will determine the best search strategy.",
+    "researchQuestion": "Research Question",
+    "freeFormPlaceholder": "Enter your research question, e.g., 'What is the effectiveness of metformin vs SGLT2 inhibitors for type 2 diabetes cardiovascular outcomes?'",
+    "startResearch": "Start Research",
+    "startingResearch": "Starting Research...",
+    "databaseNote": "The agent will search PubMed, Scopus, and Cochrane databases",
+    "errorStarting": "Error starting research"
+  },
+  "pico": {
+    "population": {
+      "label": "Population / Patient",
+      "short": "P",
+      "placeholder": "e.g., Adults with type 2 diabetes",
+      "help": "Who are the patients or population of interest?"
+    },
+    "intervention": {
+      "label": "Intervention / Exposure",
+      "short": "I",
+      "placeholder": "e.g., SGLT2 inhibitors",
+      "help": "What is the treatment or exposure being studied?"
+    },
+    "comparison": {
+      "label": "Comparison",
+      "short": "C",
+      "placeholder": "e.g., Metformin monotherapy",
+      "help": "What is the alternative or control?"
+    },
+    "outcome": {
+      "label": "Outcome",
+      "short": "O",
+      "placeholder": "e.g., Cardiovascular events, mortality",
+      "help": "What results or outcomes matter?"
+    }
+  },
+  "pcc": {
+    "population": {
+      "label": "Population",
+      "short": "P",
+      "placeholder": "e.g., Healthcare workers",
+      "help": "Who is the population being studied?"
+    },
+    "concept": {
+      "label": "Concept",
+      "short": "C",
+      "placeholder": "e.g., Burnout experiences",
+      "help": "What is the phenomenon or concept of interest?"
+    },
+    "context": {
+      "label": "Context",
+      "short": "C",
+      "placeholder": "e.g., During COVID-19 pandemic",
+      "help": "In what setting or context?"
+    }
+  },
+  "progress": {
+    "picoQuery": "PICO Query",
+    "pccQuery": "PCC Query",
+    "generatedPubmedQuery": "Generated PubMed Query",
+    "generatedQuery": "Generated Query",
+    "meshTerms": "MeSH Terms",
+    "notSpecified": "Not specified",
+    "researchReport": "Research Report",
+    "words": "words",
+    "refs": "refs",
+    "formatted": "Formatted",
+    "rawMarkdown": "Raw Markdown",
+    "errorOccurred": "Error Occurred",
+    "searchResults": "Search Results",
+    "articlesRetrieved": "Articles Retrieved",
+    "fromDatabases": "From PubMed, Scopus, and Cochrane databases",
+    "completed": "Completed",
+    "original": "Original",
+    "originalDescription": "This is the original English report before translation. Medical terminology and citations remain consistent across both versions.",
+    "copy": "Copy",
+    "copied": "Copied!"
+  },
+  "agent": {
+    "title": "Agent Status",
+    "translating": "Translating report to Korean...",
+    "translatingDescription": "Converting research findings while preserving medical terminology",
+    "initializing": "Initializing agent...",
+    "settingUp": "Setting up research environment",
+    "using": "Using",
+    "done": "Done",
+    "phases": {
+      "init": "Initializing",
+      "planning": "Planning",
+      "execution": "Executing",
+      "synthesis": "Synthesizing",
+      "translating": "Translating",
+      "complete": "Complete"
+    }
+  }
+}

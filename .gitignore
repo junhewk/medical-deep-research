@@ -49,3 +49,9 @@ research_outputs/
 
 # Misc
 *.sarif
+
+# Claude Code project instructions
+CLAUDE.md
+
+# Local research data
+data/research/

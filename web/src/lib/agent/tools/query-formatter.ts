@@ -8,6 +8,31 @@
  * - [dp] for date of publication
  */
 
+/**
+ * Common English stopwords to filter out from search terms.
+ * Shared across extractTextWords and extractSearchTerms.
+ */
+const STOPWORDS = new Set([
+  // Basic articles and pronouns
+  "a", "an", "the", "this", "that", "these", "those",
+  // Conjunctions and prepositions
+  "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from",
+  "as", "into", "through", "during",
+  // Verbs (common forms)
+  "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+  "do", "does", "did", "will", "would", "could", "should", "may", "might",
+  "must", "shall", "can",
+  // Other common words
+  "it", "its", "if", "so", "no", "not", "such", "than", "too", "very",
+  "who", "which", "what", "when", "where", "why", "how",
+  "all", "each", "every", "both", "few", "more", "most", "other", "some",
+  "only", "same",
+  // Comparison operators (should be part of structured query, not text search)
+  "vs", "vs.", "versus", "compared", "comparing", "between",
+  // Medical context stopwords
+  "using", "based", "related", "associated", "among", "within", "without",
+]);
+
 export interface QueryBlock {
   concept: "P" | "I" | "C" | "O" | "Concept" | "Context";
   label: string;
@@ -166,15 +191,15 @@ export function formatQueryForDisplay(query: string): string {
 }
 
 /**
- * Extract text words from input, excluding terms that became MeSH terms
- * Used by PICO and PCC query builders
+ * Extract text words from input, excluding terms that became MeSH terms.
+ * Used by PICO and PCC query builders.
  */
 export function extractTextWords(input: string, meshTerms: string[]): string[] {
-  // Get the original input words
+  // Get words, filtering out stopwords and short terms
   const words = input
     .toLowerCase()
     .split(/[\s,;]+/)
-    .filter((w) => w.length > 2);
+    .filter((w) => w.length > 2 && !STOPWORDS.has(w));
 
   // Filter out words that are part of MeSH terms
   const meshLower = meshTerms.map((m) => m.toLowerCase());
@@ -184,37 +209,26 @@ export function extractTextWords(input: string, meshTerms: string[]): string[] {
 
   // Return unique words, plus the original input as a phrase
   const result = [input];
-  filtered.forEach((w) => {
+  for (const w of filtered) {
     if (!result.includes(w) && w !== input.toLowerCase()) {
       result.push(w);
     }
-  });
+  }
 
   return result.slice(0, 3); // Limit to avoid overly complex queries
 }
 
 /**
- * Parse text to extract potential search terms
+ * Parse text to extract potential search terms.
+ * Removes stopwords and returns unique meaningful terms.
  */
 export function extractSearchTerms(text: string): string[] {
-  // Remove common stop words and extract meaningful terms
-  const stopWords = new Set([
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
-    "be", "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "must", "shall", "can", "this", "that", "these",
-    "those", "who", "which", "what", "when", "where", "why", "how", "all",
-    "each", "every", "both", "few", "more", "most", "other", "some", "such",
-    "no", "not", "only", "same", "so", "than", "too", "very",
-  ]);
-
   const words = text
     .toLowerCase()
     .replace(/[^\w\s-]/g, " ")
     .split(/\s+/)
-    .filter((word) => word.length > 2 && !stopWords.has(word));
+    .filter((word) => word.length > 2 && !STOPWORDS.has(word));
 
-  // Remove duplicates
   return Array.from(new Set(words));
 }
 

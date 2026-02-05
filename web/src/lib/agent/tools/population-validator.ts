@@ -1,11 +1,7 @@
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
-import { ChatOpenAI } from "@langchain/openai";
-import { ChatAnthropic } from "@langchain/anthropic";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-
-type SupportedLLM = ChatOpenAI | ChatAnthropic | ChatGoogleGenerativeAI;
+import { createVerifierLLM, type LLMProvider, type SupportedLLM } from "./llm-factory";
 
 /**
  * AI-based population validation for medical research
@@ -94,34 +90,7 @@ Return ONLY valid JSON:
   "extractedPopulation": "Description of the study's actual population"
 }`;
 
-/**
- * Create LLM instance from provider configuration
- */
-function createValidatorLLM(
-  provider: "openai" | "anthropic" | "google",
-  apiKey: string,
-  model?: string
-): SupportedLLM {
-  if (provider === "anthropic") {
-    return new ChatAnthropic({
-      modelName: model || "claude-3-5-haiku-20241022", // Fast and cost-effective
-      anthropicApiKey: apiKey,
-      temperature: 0,
-    });
-  }
-  if (provider === "google") {
-    return new ChatGoogleGenerativeAI({
-      model: model || "gemini-1.5-flash", // Fast and cost-effective
-      apiKey: apiKey,
-      temperature: 0,
-    });
-  }
-  return new ChatOpenAI({
-    modelName: model || "gpt-4o-mini", // Fast and cost-effective
-    openAIApiKey: apiKey,
-    temperature: 0,
-  });
-}
+// LLM creation is handled by shared llm-factory.ts (createVerifierLLM)
 
 /**
  * Validate population match using LLM
@@ -162,7 +131,7 @@ async function validatePopulationWithLLM(
       };
     }
 
-    llm = createValidatorLLM(provider, apiKey, options?.model);
+    llm = createVerifierLLM(provider, apiKey, options?.model);
   }
 
   // Build the user prompt
@@ -274,18 +243,18 @@ export const populationValidatorTool = tool(
   async ({ targetPopulation, targetContext, targetNumericCriteria, studyAbstract, studyTitle, apiKey, provider, model }) => {
     const targetCriteria: TargetCriteria = {
       population: targetPopulation,
-      clinicalContext: targetContext,
-      numericCriteria: targetNumericCriteria,
+      clinicalContext: targetContext ?? undefined,
+      numericCriteria: targetNumericCriteria ?? undefined,
     };
 
     const result = await validatePopulationWithLLM(
       targetCriteria,
       studyAbstract,
-      studyTitle,
+      studyTitle ?? undefined,
       {
-        apiKey,
-        provider: provider as "openai" | "anthropic" | "google" | undefined,
-        model,
+        apiKey: apiKey ?? undefined,
+        provider: (provider ?? undefined) as "openai" | "anthropic" | "google" | undefined,
+        model: model ?? undefined,
       }
     );
 
@@ -311,13 +280,13 @@ export const populationValidatorTool = tool(
       "Validates if a study's population matches target criteria using AI analysis. Works across all medical domains (cardiology, oncology, nephrology, etc.). Use this to filter out studies with population mismatches (e.g., HFrEF studies when looking for HFpEF).",
     schema: z.object({
       targetPopulation: z.string().describe("Target population from research query (e.g., 'patients with AMI and preserved ejection fraction')"),
-      targetContext: z.string().optional().describe("Clinical context (e.g., 'acute MI', 'post-discharge', 'outpatient')"),
-      targetNumericCriteria: z.string().optional().describe("Numeric criteria (e.g., 'LVEF >= 50%', 'age > 65', 'eGFR < 60')"),
+      targetContext: z.string().optional().nullable().describe("Clinical context (e.g., 'acute MI', 'post-discharge', 'outpatient')"),
+      targetNumericCriteria: z.string().optional().nullable().describe("Numeric criteria (e.g., 'LVEF >= 50%', 'age > 65', 'eGFR < 60')"),
       studyAbstract: z.string().describe("Abstract text of the study to validate"),
-      studyTitle: z.string().optional().describe("Title of the study"),
-      apiKey: z.string().optional().describe("API key for the LLM provider"),
-      provider: z.enum(["openai", "anthropic", "google"]).optional().describe("LLM provider (defaults to openai)"),
-      model: z.string().optional().describe("Optional model name (defaults to fast model for each provider)"),
+      studyTitle: z.string().optional().nullable().describe("Title of the study"),
+      apiKey: z.string().optional().nullable().describe("API key for the LLM provider"),
+      provider: z.enum(["openai", "anthropic", "google"]).optional().nullable().describe("LLM provider (defaults to openai)"),
+      model: z.string().optional().nullable().describe("Optional model name (defaults to fast model for each provider)"),
     }),
   }
 );

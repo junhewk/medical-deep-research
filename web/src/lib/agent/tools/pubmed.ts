@@ -418,17 +418,17 @@ export const pubmedSearchTool = tool(
 
       if (searchStrategy === "comprehensive") {
         // Use multi-phase comprehensive search for clinical questions
-        articles = await comprehensivePubMedSearch(query, maxResults || 30, apiKey);
+        articles = await comprehensivePubMedSearch(query, maxResults || 30, apiKey ?? undefined);
       } else {
         // Standard single-phase search
-        const pmids = await searchPubMed(query, maxResults || 20, apiKey, {
+        const pmids = await searchPubMed(query, maxResults || 20, apiKey ?? undefined, {
           sort: "relevance",
           dateRange: dateRange ? {
-            start: dateRange.start,
-            end: dateRange.end,
+            start: dateRange.start ?? undefined,
+            end: dateRange.end ?? undefined,
           } : undefined,
         });
-        articles = await fetchPubMedDetails(pmids, apiKey);
+        articles = await fetchPubMedDetails(pmids, apiKey ?? undefined);
       }
 
       return JSON.stringify({
@@ -467,13 +467,13 @@ export const pubmedSearchTool = tool(
       "Searches PubMed/MEDLINE for medical literature. Supports MeSH terms, Boolean operators (AND, OR, NOT), and field tags like [ti] for title, [ab] for abstract, [mh] for MeSH. Use 'comprehensive' strategy for clinical questions to prioritize recent RCTs and landmark trials.",
     schema: z.object({
       query: z.string().describe("PubMed search query (supports MeSH terms and Boolean operators)"),
-      maxResults: z.number().optional().default(20).describe("Maximum number of results (default: 20, use 30 for comprehensive)"),
-      apiKey: z.string().optional().describe("Optional NCBI API key for higher rate limits"),
-      searchStrategy: z.enum(["standard", "comprehensive"]).optional().default("standard").describe("Search strategy: 'standard' for relevance-based, 'comprehensive' for multi-phase clinical search prioritizing recent RCTs"),
+      maxResults: z.number().optional().nullable().default(20).describe("Maximum number of results (default: 20, use 30 for comprehensive)"),
+      apiKey: z.string().optional().nullable().describe("Optional NCBI API key for higher rate limits"),
+      searchStrategy: z.enum(["standard", "comprehensive"]).optional().nullable().default("standard").describe("Search strategy: 'standard' for relevance-based, 'comprehensive' for multi-phase clinical search prioritizing recent RCTs"),
       dateRange: z.object({
-        start: z.string().optional().describe("Start date (YYYY/MM/DD or YYYY)"),
-        end: z.string().optional().describe("End date (YYYY/MM/DD or YYYY)"),
-      }).optional().describe("Optional date range filter (only for standard strategy)"),
+        start: z.string().optional().nullable().describe("Start date (YYYY/MM/DD or YYYY)"),
+        end: z.string().optional().nullable().describe("End date (YYYY/MM/DD or YYYY)"),
+      }).optional().nullable().describe("Optional date range filter (only for standard strategy)"),
     }),
   }
 );

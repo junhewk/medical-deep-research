@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+KR:wght@400;500;600&family=Pretendard+Variable&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -111,16 +111,27 @@
 
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: 'DM Sans', system-ui, sans-serif;
+    font-family: 'DM Sans', 'Pretendard Variable', system-ui, sans-serif;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     font-optical-sizing: auto;
   }
 
-  /* Elegant serif for headings */
+  /* Elegant serif for headings - with Korean fallback */
   h1, h2, h3, h4, h5, h6, .font-serif {
-    font-family: 'Instrument Serif', Georgia, serif;
+    font-family: 'Instrument Serif', 'Noto Serif KR', Georgia, serif;
     font-weight: 400;
     letter-spacing: -0.01em;
+  }
+
+  /* Korean text optimizations */
+  :lang(ko) {
+    word-break: keep-all;
+    line-height: 1.8;
+  }
+
+  :lang(ko) h1, :lang(ko) h2, :lang(ko) h3,
+  :lang(ko) h4, :lang(ko) h5, :lang(ko) h6 {
+    letter-spacing: -0.02em;
   }
 
   /* Monospace for code */
@@ -437,6 +448,29 @@
   @keyframes float {
     0%, 100% { transform: translateY(0); }
     50% { transform: translateY(-4px); }
+  }
+
+  /* Translation progress animation */
+  @keyframes translateProgress {
+    0% { transform: translateX(-100%); opacity: 0.7; }
+    50% { opacity: 1; }
+    100% { transform: translateX(100%); opacity: 0.7; }
+  }
+
+  /* Orbit animation for translation icon */
+  @keyframes orbit {
+    0% { transform: rotate(0deg) translateX(16px) rotate(0deg); opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { transform: rotate(360deg) translateX(16px) rotate(-360deg); opacity: 1; }
+  }
+
+  /* Fade in animation */
+  .animate-fade-in {
+    animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   /* === SKELETON LOADER === */

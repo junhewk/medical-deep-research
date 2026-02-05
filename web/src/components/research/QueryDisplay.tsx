@@ -14,7 +14,7 @@ import {
   parseQueryForHighlighting,
   getTokenColorClass,
   type QueryBlock,
-} from "@/lib/agent/tools";
+} from "@/lib/agent/tools/client";
 import { Copy, Check, Search, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 

@@ -31,15 +31,16 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "@/i18n/client";
 
 type QueryType = "pico" | "pcc" | "free";
 
 interface FieldConfig {
   id: string;
-  label: string;
-  shortLabel: string;
-  placeholder: string;
-  helpText: string;
+  labelKey: string;
+  shortLabelKey: string;
+  placeholderKey: string;
+  helpKey: string;
   icon: typeof Users;
   colorClass: string;
   optional?: boolean;
@@ -48,38 +49,38 @@ interface FieldConfig {
 const picoFields: FieldConfig[] = [
   {
     id: "population",
-    label: "Population / Patient",
-    shortLabel: "P",
-    placeholder: "e.g., Adults with type 2 diabetes",
-    helpText: "Who are the patients or population of interest?",
+    labelKey: "pico.population.label",
+    shortLabelKey: "pico.population.short",
+    placeholderKey: "pico.population.placeholder",
+    helpKey: "pico.population.help",
     icon: Users,
     colorClass: "pico-population",
   },
   {
     id: "intervention",
-    label: "Intervention / Exposure",
-    shortLabel: "I",
-    placeholder: "e.g., SGLT2 inhibitors",
-    helpText: "What is the treatment or exposure being studied?",
+    labelKey: "pico.intervention.label",
+    shortLabelKey: "pico.intervention.short",
+    placeholderKey: "pico.intervention.placeholder",
+    helpKey: "pico.intervention.help",
     icon: Syringe,
     colorClass: "pico-intervention",
   },
   {
     id: "comparison",
-    label: "Comparison",
-    shortLabel: "C",
-    placeholder: "e.g., Metformin monotherapy",
-    helpText: "What is the alternative or control?",
+    labelKey: "pico.comparison.label",
+    shortLabelKey: "pico.comparison.short",
+    placeholderKey: "pico.comparison.placeholder",
+    helpKey: "pico.comparison.help",
     icon: GitCompare,
     colorClass: "pico-comparison",
     optional: true,
   },
   {
     id: "outcome",
-    label: "Outcome",
-    shortLabel: "O",
-    placeholder: "e.g., Cardiovascular events, mortality",
-    helpText: "What results or outcomes matter?",
+    labelKey: "pico.outcome.label",
+    shortLabelKey: "pico.outcome.short",
+    placeholderKey: "pico.outcome.placeholder",
+    helpKey: "pico.outcome.help",
     icon: Target,
     colorClass: "pico-outcome",
   },
@@ -88,28 +89,28 @@ const picoFields: FieldConfig[] = [
 const pccFields: FieldConfig[] = [
   {
     id: "population",
-    label: "Population",
-    shortLabel: "P",
-    placeholder: "e.g., Healthcare workers",
-    helpText: "Who is the population being studied?",
+    labelKey: "pcc.population.label",
+    shortLabelKey: "pcc.population.short",
+    placeholderKey: "pcc.population.placeholder",
+    helpKey: "pcc.population.help",
     icon: Users,
     colorClass: "pico-population",
   },
   {
     id: "concept",
-    label: "Concept",
-    shortLabel: "C",
-    placeholder: "e.g., Burnout experiences",
-    helpText: "What is the phenomenon or concept of interest?",
+    labelKey: "pcc.concept.label",
+    shortLabelKey: "pcc.concept.short",
+    placeholderKey: "pcc.concept.placeholder",
+    helpKey: "pcc.concept.help",
     icon: Lightbulb,
     colorClass: "pico-comparison",
   },
   {
     id: "context",
-    label: "Context",
-    shortLabel: "C",
-    placeholder: "e.g., During COVID-19 pandemic",
-    helpText: "In what setting or context?",
+    labelKey: "pcc.context.label",
+    shortLabelKey: "pcc.context.short",
+    placeholderKey: "pcc.context.placeholder",
+    helpKey: "pcc.context.help",
     icon: MapPin,
     colorClass: "pico-outcome",
   },
@@ -118,6 +119,7 @@ const pccFields: FieldConfig[] = [
 export default function NewResearchPage() {
   const router = useRouter();
   const startResearch = useStartResearch();
+  const { t } = useTranslations();
 
   const [queryType, setQueryType] = useState<QueryType>("pico");
   const [freeQuery, setFreeQuery] = useState("");
@@ -230,25 +232,25 @@ export default function NewResearchPage() {
             variant="outline"
             className={cn("text-xs font-bold border", field.colorClass)}
           >
-            {field.shortLabel}
+            {t(field.shortLabelKey)}
           </Badge>
-          <span className="font-medium">{field.label}</span>
+          <span className="font-medium">{t(field.labelKey)}</span>
           {field.optional && (
-            <span className="text-xs text-muted-foreground">(optional)</span>
+            <span className="text-xs text-muted-foreground">({t("common.optional")})</span>
           )}
         </Label>
         <div className="relative">
           <Icon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
           <Input
             id={`field-${field.id}`}
-            placeholder={field.placeholder}
+            placeholder={t(field.placeholderKey)}
             value={value}
             onChange={(e) => onChange(e.target.value)}
             className="pl-10 transition-shadow focus:shadow-md focus:shadow-primary/10"
           />
         </div>
         <p className="text-xs text-muted-foreground mt-1.5 ml-1">
-          {field.helpText}
+          {t(field.helpKey)}
         </p>
       </div>
     );
@@ -260,13 +262,13 @@ export default function NewResearchPage() {
       <div className="text-center space-y-3">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium">
           <Sparkles className="h-3.5 w-3.5" />
-          New Research
+          {t("research.newResearch")}
         </div>
         <h1 className="font-serif text-3xl sm:text-4xl tracking-tight">
-          Research Query
+          {t("newResearch.title")}
         </h1>
         <p className="text-muted-foreground max-w-md mx-auto">
-          Structure your clinical question using evidence-based frameworks
+          {t("newResearch.description")}
         </p>
       </div>
 
@@ -277,10 +279,10 @@ export default function NewResearchPage() {
             <div className="p-2 rounded-lg bg-primary/10">
               <Search className="h-4 w-4 text-primary" />
             </div>
-            Research Framework
+            {t("newResearch.framework")}
           </CardTitle>
           <CardDescription>
-            Choose a framework for structuring your research question
+            {t("newResearch.frameworkDescription")}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-6">
@@ -309,7 +311,7 @@ export default function NewResearchPage() {
                   className="flex items-center gap-2 py-3 rounded-lg transition-all data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-accent dark:data-[state=active]:bg-card"
                 >
                   <Sparkles className="h-4 w-4" />
-                  <span className="hidden sm:inline font-medium">Free-form</span>
+                  <span className="hidden sm:inline font-medium">{t("newResearch.freeForm")}</span>
                 </TabsTrigger>
               </TabsList>
 
@@ -320,9 +322,9 @@ export default function NewResearchPage() {
                     <BookOpen className="h-5 w-5 text-[hsl(var(--pico-p))]" />
                   </div>
                   <div>
-                    <p className="font-serif font-medium">PICO Framework</p>
+                    <p className="font-serif font-medium">{t("newResearch.picoFramework")}</p>
                     <p className="text-sm text-muted-foreground mt-0.5">
-                      Best for clinical questions about interventions, therapies, or treatments
+                      {t("newResearch.picoDescription")}
                     </p>
                   </div>
                 </div>
@@ -346,9 +348,9 @@ export default function NewResearchPage() {
                     <FileText className="h-5 w-5 text-[hsl(var(--pico-c))]" />
                   </div>
                   <div>
-                    <p className="font-serif font-medium">PCC Framework</p>
+                    <p className="font-serif font-medium">{t("newResearch.pccFramework")}</p>
                     <p className="text-sm text-muted-foreground mt-0.5">
-                      Best for scoping reviews, qualitative research, or exploratory questions
+                      {t("newResearch.pccDescription")}
                     </p>
                   </div>
                 </div>
@@ -372,20 +374,20 @@ export default function NewResearchPage() {
                     <Sparkles className="h-5 w-5 text-accent" />
                   </div>
                   <div>
-                    <p className="font-serif font-medium">Free-form Query</p>
+                    <p className="font-serif font-medium">{t("newResearch.freeForm")}</p>
                     <p className="text-sm text-muted-foreground mt-0.5">
-                      Enter your research question in natural language. The agent will determine the best search strategy.
+                      {t("newResearch.freeFormDescription")}
                     </p>
                   </div>
                 </div>
 
                 <div>
                   <Label htmlFor="free-query" className="mb-2 block">
-                    Research Question
+                    {t("newResearch.researchQuestion")}
                   </Label>
                   <Textarea
                     id="free-query"
-                    placeholder="Enter your research question, e.g., 'What is the effectiveness of metformin vs SGLT2 inhibitors for type 2 diabetes cardiovascular outcomes?'"
+                    placeholder={t("newResearch.freeFormPlaceholder")}
                     value={freeQuery}
                     onChange={(e) => setFreeQuery(e.target.value)}
                     rows={5}
@@ -401,7 +403,7 @@ export default function NewResearchPage() {
                 <AlertCircle className="h-5 w-5 text-destructive mt-0.5" />
                 <div>
                   <p className="font-medium text-sm text-destructive">
-                    Error starting research
+                    {t("newResearch.errorStarting")}
                   </p>
                   <p className="text-sm text-destructive/80">
                     {startResearch.error.message}
@@ -421,17 +423,17 @@ export default function NewResearchPage() {
                 {startResearch.isPending ? (
                   <>
                     <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                    Starting Research...
+                    {t("newResearch.startingResearch")}
                   </>
                 ) : (
                   <>
                     <Search className="h-5 w-5 mr-2" />
-                    Start Research
+                    {t("newResearch.startResearch")}
                   </>
                 )}
               </Button>
               <p className="text-center text-xs text-muted-foreground mt-3">
-                The agent will search PubMed, Scopus, and Cochrane databases
+                {t("newResearch.databaseNote")}
               </p>
             </div>
           </form>

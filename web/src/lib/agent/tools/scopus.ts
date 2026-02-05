@@ -249,10 +249,11 @@ export const scopusSearchTool = tool(
       "Searches Scopus database for scientific literature. Requires Scopus API key (BYOK). Supports complex queries with AND, OR, NOT operators. By default sorts by citation count.",
     schema: z.object({
       query: z.string().describe("Scopus search query"),
-      maxResults: z.number().optional().default(20).describe("Maximum number of results"),
+      maxResults: z.number().optional().nullable().default(20).describe("Maximum number of results"),
       apiKey: z.string().describe("Scopus/Elsevier API key"),
       sortBy: z.enum(["relevancy", "citedby-count", "pubyear", "coverDate"])
         .optional()
+        .nullable()
         .default("citedby-count")
         .describe("Sort order: citedby-count (default), relevancy, pubyear, coverDate"),
     }),

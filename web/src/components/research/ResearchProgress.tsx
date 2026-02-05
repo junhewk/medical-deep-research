@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlanningSteps } from "./PlanningSteps";
 import { AgentStatus } from "./AgentStatus";
@@ -26,46 +28,52 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
+  Languages,
+  Copy,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "@/i18n/client";
 
 interface ResearchProgressProps {
   data: ResearchProgressType;
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslations("status");
+
   const config: Record<
     string,
-    { className: string; label: string; icon: typeof CheckCircle2 }
+    { className: string; labelKey: string; icon: typeof CheckCircle2 }
   > = {
     pending: {
       className: "status-pending",
-      label: "Pending",
+      labelKey: "pending",
       icon: Clock,
     },
     running: {
       className: "status-running",
-      label: "Running",
+      labelKey: "running",
       icon: Loader2,
     },
     completed: {
       className: "status-completed",
-      label: "Completed",
+      labelKey: "completed",
       icon: CheckCircle2,
     },
     failed: {
       className: "status-failed",
-      label: "Failed",
+      labelKey: "failed",
       icon: XCircle,
     },
     cancelled: {
       className: "status-pending",
-      label: "Cancelled",
+      labelKey: "cancelled",
       icon: XCircle,
     },
   };
 
-  const { className, label, icon: Icon } = config[status] || config.pending;
+  const { className, labelKey, icon: Icon } = config[status] || config.pending;
 
   return (
     <Badge
@@ -75,7 +83,7 @@ function StatusBadge({ status }: { status: string }) {
       <Icon
         className={cn("h-3 w-3", status === "running" && "animate-spin")}
       />
-      {label}
+      {t(labelKey)}
     </Badge>
   );
 }
@@ -110,33 +118,35 @@ function PicoDisplay({
 }: {
   picoQuery: ResearchProgressType["picoQuery"];
 }) {
+  const { t } = useTranslations();
+
   if (!picoQuery) return null;
 
   const fields = [
     {
       key: "population",
-      label: "Population",
+      labelKey: "pico.population.label",
       shortLabel: "P",
       icon: Users,
       colorClass: "pico-population",
     },
     {
       key: "intervention",
-      label: "Intervention",
+      labelKey: "pico.intervention.label",
       shortLabel: "I",
       icon: Syringe,
       colorClass: "pico-intervention",
     },
     {
       key: "comparison",
-      label: "Comparison",
+      labelKey: "pico.comparison.label",
       shortLabel: "C",
       icon: GitCompare,
       colorClass: "pico-comparison",
     },
     {
       key: "outcome",
-      label: "Outcome",
+      labelKey: "pico.outcome.label",
       shortLabel: "O",
       icon: Target,
       colorClass: "pico-outcome",
@@ -150,7 +160,7 @@ function PicoDisplay({
           <div className="p-2 rounded-lg bg-[hsl(var(--pico-p))]/10">
             <BookOpen className="h-4 w-4 text-[hsl(var(--pico-p))]" />
           </div>
-          PICO Query
+          {t("progress.picoQuery")}
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-6 space-y-4">
@@ -169,10 +179,10 @@ function PicoDisplay({
                     {field.shortLabel}
                   </Badge>
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    {field.label}
+                    {t(field.labelKey)}
                   </span>
                 </div>
-                <p className="text-sm font-medium">{value || "Not specified"}</p>
+                <p className="text-sm font-medium">{value || t("progress.notSpecified")}</p>
               </div>
             );
           })}
@@ -181,7 +191,7 @@ function PicoDisplay({
         {picoQuery.generatedPubmedQuery && (
           <div className="pt-2 border-t">
             <p className="text-sm font-medium text-muted-foreground mb-2">
-              Generated PubMed Query
+              {t("progress.generatedPubmedQuery")}
             </p>
             <QueryDisplayInline query={picoQuery.generatedPubmedQuery} />
           </div>
@@ -190,7 +200,7 @@ function PicoDisplay({
         {picoQuery.meshTerms && picoQuery.meshTerms.length > 0 && (
           <div className="pt-2 border-t">
             <p className="text-sm font-medium text-muted-foreground mb-2">
-              MeSH Terms
+              {t("progress.meshTerms")}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {picoQuery.meshTerms.map((term, i) => (
@@ -215,26 +225,28 @@ function PccDisplay({
 }: {
   pccQuery: ResearchProgressType["pccQuery"];
 }) {
+  const { t } = useTranslations();
+
   if (!pccQuery) return null;
 
   const fields = [
     {
       key: "population",
-      label: "Population",
+      labelKey: "pcc.population.label",
       shortLabel: "P",
       icon: Users,
       colorClass: "pico-population",
     },
     {
       key: "concept",
-      label: "Concept",
+      labelKey: "pcc.concept.label",
       shortLabel: "C",
       icon: Lightbulb,
       colorClass: "pico-comparison",
     },
     {
       key: "context",
-      label: "Context",
+      labelKey: "pcc.context.label",
       shortLabel: "C",
       icon: MapPin,
       colorClass: "pico-outcome",
@@ -248,7 +260,7 @@ function PccDisplay({
           <div className="p-2 rounded-lg bg-[hsl(var(--pico-c))]/10">
             <FileText className="h-4 w-4 text-[hsl(var(--pico-c))]" />
           </div>
-          PCC Query
+          {t("progress.pccQuery")}
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-6 space-y-4">
@@ -266,10 +278,10 @@ function PccDisplay({
                     {field.shortLabel}
                   </Badge>
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    {field.label}
+                    {t(field.labelKey)}
                   </span>
                 </div>
-                <p className="text-sm font-medium">{value || "Not specified"}</p>
+                <p className="text-sm font-medium">{value || t("progress.notSpecified")}</p>
               </div>
             );
           })}
@@ -278,7 +290,7 @@ function PccDisplay({
         {pccQuery.generatedQuery && (
           <div className="pt-2 border-t">
             <p className="text-sm font-medium text-muted-foreground mb-2">
-              Generated Query
+              {t("progress.generatedQuery")}
             </p>
             <QueryDisplayInline query={pccQuery.generatedQuery} />
           </div>
@@ -288,7 +300,50 @@ function PccDisplay({
   );
 }
 
+function CopyableMarkdown({ content }: { content: string }) {
+  const { t } = useTranslations();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleCopy}
+        className="absolute top-2 right-2 h-8 gap-1.5 bg-background/80 backdrop-blur-sm hover:bg-background"
+      >
+        {copied ? (
+          <>
+            <Check className="h-3.5 w-3.5 text-[hsl(var(--status-completed))]" />
+            <span className="text-xs">{t("progress.copied")}</span>
+          </>
+        ) : (
+          <>
+            <Copy className="h-3.5 w-3.5" />
+            <span className="text-xs">{t("progress.copy")}</span>
+          </>
+        )}
+      </Button>
+      <pre className="whitespace-pre-wrap font-mono text-xs bg-muted/50 p-4 pt-12 rounded-xl overflow-auto max-h-[600px] border border-border/50">
+        {content}
+      </pre>
+    </div>
+  );
+}
+
 export function ResearchProgressView({ data }: ResearchProgressProps) {
+  const { t } = useTranslations();
+
   const formatDate = (date?: string) => {
     if (!date) return "N/A";
     return new Date(date).toLocaleString();
@@ -327,7 +382,7 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
                 {data.completedAt && (
                   <span className="flex items-center gap-1.5 text-[hsl(var(--status-completed))]">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    Completed {formatDate(data.completedAt)}
+                    {t("progress.completed")} {formatDate(data.completedAt)}
                   </span>
                 )}
                 {data.durationSeconds && (
@@ -343,7 +398,7 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground font-medium">
-                {data.phase ? data.phase.charAt(0).toUpperCase() + data.phase.slice(1) : "Progress"}
+                {data.phase ? data.phase.charAt(0).toUpperCase() + data.phase.slice(1) : t("research.progress")}
               </span>
               <span className="font-semibold text-foreground">{data.progress}%</span>
             </div>
@@ -381,7 +436,7 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
               <div className="p-2 rounded-lg bg-destructive/10">
                 <AlertCircle className="h-4 w-4" />
               </div>
-              Error Occurred
+              {t("progress.errorOccurred")}
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-6">
@@ -396,20 +451,30 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
       {data.status === "completed" && (data.result || data.report) && (
         <Card className="overflow-hidden">
           <CardHeader className="border-b border-border/50 bg-gradient-to-br from-[hsl(var(--status-completed))]/8 via-transparent to-[hsl(var(--pico-i))]/5">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <CardTitle className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-[hsl(var(--status-completed))]/15">
                   <FileText className="h-4 w-4 text-[hsl(var(--status-completed))]" />
                 </div>
-                Research Report
+                {t("progress.researchReport")}
+                {/* Translation badge */}
+                {data.report?.language && data.report.language !== "en" && (
+                  <Badge
+                    variant="outline"
+                    className="border-[hsl(275,45%,48%)]/40 bg-[hsl(275,45%,48%)]/10 text-[hsl(275,45%,48%)] gap-1.5"
+                  >
+                    <Languages className="h-3 w-3" />
+                    {data.report.language === "ko" ? "한국어" : data.report.language.toUpperCase()}
+                  </Badge>
+                )}
               </CardTitle>
               {data.report && (
                 <div className="flex items-center gap-3 text-sm text-muted-foreground">
                   <span className="px-2 py-1 rounded-md bg-muted">
-                    {(data.report.wordCount ?? 0).toLocaleString()} words
+                    {(data.report.wordCount ?? 0).toLocaleString()} {t("progress.words")}
                   </span>
                   <span className="px-2 py-1 rounded-md bg-muted">
-                    {data.report.referenceCount ?? 0} refs
+                    {data.report.referenceCount ?? 0} {t("progress.refs")}
                   </span>
                 </div>
               )}
@@ -419,11 +484,18 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
             <Tabs defaultValue="formatted">
               <TabsList className="bg-muted/50">
                 <TabsTrigger value="formatted" className="data-[state=active]:bg-background">
-                  Formatted
+                  {t("progress.formatted")}
                 </TabsTrigger>
                 <TabsTrigger value="raw" className="data-[state=active]:bg-background">
-                  Raw Markdown
+                  {t("progress.rawMarkdown")}
                 </TabsTrigger>
+                {/* Show original English tab for translated reports */}
+                {data.report?.originalContent && data.report?.language !== "en" && (
+                  <TabsTrigger value="original" className="data-[state=active]:bg-background gap-1.5">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-muted-foreground/10">EN</span>
+                    {t("progress.original")}
+                  </TabsTrigger>
+                )}
               </TabsList>
               <TabsContent value="formatted" className="mt-6">
                 <div className="prose-medical">
@@ -433,10 +505,26 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
                 </div>
               </TabsContent>
               <TabsContent value="raw" className="mt-6">
-                <pre className="whitespace-pre-wrap font-mono text-xs bg-muted/50 p-4 rounded-xl overflow-auto max-h-[600px] border border-border/50">
-                  {data.result || data.report?.content}
-                </pre>
+                <CopyableMarkdown content={data.result || data.report?.content || ""} />
               </TabsContent>
+              {/* Original English report content */}
+              {data.report?.originalContent && data.report?.language !== "en" && (
+                <TabsContent value="original" className="mt-6">
+                  <div className="mb-4 p-3 rounded-lg bg-muted/30 border border-dashed flex items-center gap-3">
+                    <div className="p-1.5 rounded-md bg-muted">
+                      <FileText className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {t("progress.originalDescription")}
+                    </p>
+                  </div>
+                  <div className="prose-medical">
+                    <ReactMarkdown>
+                      {data.report.originalContent}
+                    </ReactMarkdown>
+                  </div>
+                </TabsContent>
+              )}
             </Tabs>
           </CardContent>
         </Card>
@@ -450,7 +538,7 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
               <div className="p-2 rounded-lg bg-primary/10">
                 <Database className="h-4 w-4 text-primary" />
               </div>
-              Search Results
+              {t("progress.searchResults")}
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-6">
@@ -461,9 +549,9 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
                 </span>
               </div>
               <div>
-                <p className="font-medium">Articles Retrieved</p>
+                <p className="font-medium">{t("progress.articlesRetrieved")}</p>
                 <p className="text-sm text-muted-foreground">
-                  From PubMed, Scopus, and Cochrane databases
+                  {t("progress.fromDatabases")}
                 </p>
               </div>
             </div>

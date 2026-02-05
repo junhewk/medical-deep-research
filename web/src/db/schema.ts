@@ -66,7 +66,9 @@ export const reports = sqliteTable("reports", {
     onDelete: "cascade",
   }),
   title: text("title"),
-  content: text("content"),
+  content: text("content"), // Final report (translated if language != 'en')
+  originalContent: text("original_content"), // English original (always stored)
+  language: text("language").default("en"), // Report language ('en' or 'ko')
   format: text("format").default("markdown"),
   wordCount: integer("word_count"),
   referenceCount: integer("reference_count"),
@@ -174,6 +176,30 @@ export const llmConfig = sqliteTable("llm_config", {
   updatedAt: integer("updated_at", { mode: "timestamp" }),
 });
 
+// MeSH term cache (for dynamic NLM API lookups)
+export const meshCache = sqliteTable("mesh_cache", {
+  id: text("id").primaryKey(), // DescriptorUI (e.g., "D009204")
+  label: text("label").notNull(), // Primary label
+  alternateLabels: text("alternate_labels"), // JSON array of synonyms
+  treeNumbers: text("tree_numbers"), // JSON array (e.g., ["E04.100.814"])
+  broaderTerms: text("broader_terms"), // JSON array of parent UIDs
+  narrowerTerms: text("narrower_terms"), // JSON array of child UIDs
+  scopeNote: text("scope_note"), // Definition
+  fetchedAt: integer("fetched_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
+// Text-to-MeSH lookup index (for fast text matching)
+export const meshLookupIndex = sqliteTable("mesh_lookup_index", {
+  id: text("id").primaryKey(),
+  searchTerm: text("search_term").notNull(), // Lowercase normalized
+  meshId: text("mesh_id").references(() => meshCache.id),
+  matchType: text("match_type", { enum: ["exact", "contains", "synonym"] }),
+}, (table) => ({
+  searchTermIdx: index("mesh_lookup_search_term_idx").on(table.searchTerm),
+}));
+
 // Type exports
 export type Research = typeof research.$inferSelect;
 export type NewResearch = typeof research.$inferInsert;
@@ -193,3 +219,7 @@ export type Setting = typeof settings.$inferSelect;
 export type NewSetting = typeof settings.$inferInsert;
 export type LlmConfig = typeof llmConfig.$inferSelect;
 export type NewLlmConfig = typeof llmConfig.$inferInsert;
+export type MeshCache = typeof meshCache.$inferSelect;
+export type NewMeshCache = typeof meshCache.$inferInsert;
+export type MeshLookupIndex = typeof meshLookupIndex.$inferSelect;
+export type NewMeshLookupIndex = typeof meshLookupIndex.$inferInsert;

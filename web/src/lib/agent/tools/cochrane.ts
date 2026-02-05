@@ -165,7 +165,7 @@ async function searchCochraneAlternative(
 export const cochraneSearchTool = tool(
   async ({ query, maxResults, apiKey }) => {
     try {
-      const reviews = await searchCochrane(query, maxResults || 20, apiKey);
+      const reviews = await searchCochrane(query, maxResults || 20, apiKey ?? undefined);
 
       return JSON.stringify({
         success: true,
@@ -197,8 +197,8 @@ export const cochraneSearchTool = tool(
       "Searches the Cochrane Library for systematic reviews and meta-analyses. Returns Level I evidence. Falls back to PubMed search for Cochrane reviews if direct API is unavailable.",
     schema: z.object({
       query: z.string().describe("Search query for Cochrane reviews"),
-      maxResults: z.number().optional().default(10).describe("Maximum number of results"),
-      apiKey: z.string().optional().describe("Optional Cochrane API key"),
+      maxResults: z.number().optional().nullable().default(10).describe("Maximum number of results"),
+      apiKey: z.string().optional().nullable().describe("Optional Cochrane API key"),
     }),
   }
 );

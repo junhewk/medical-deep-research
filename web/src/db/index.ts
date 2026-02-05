@@ -35,19 +35,28 @@ let _db: BetterSQLite3Database<typeof schema> | null = null;
 function initializeDb(): BetterSQLite3Database<typeof schema> {
   if (_db) return _db;
 
-  const dataDir = getDataDir();
-
-  // Ensure data directory exists
-  try {
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
+  // Use DATABASE_PATH env var directly if set, otherwise use default location
+  let dbPath: string;
+  if (process.env.DATABASE_PATH) {
+    dbPath = process.env.DATABASE_PATH;
+    // Ensure parent directory exists
+    const parentDir = path.dirname(dbPath);
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
     }
-  } catch (error) {
-    console.error(`Failed to create data directory at ${dataDir}:`, error);
-    throw new Error(`Cannot create data directory: ${dataDir}`);
+  } else {
+    const dataDir = getDataDir();
+    // Ensure data directory exists
+    try {
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+    } catch (error) {
+      console.error(`Failed to create data directory at ${dataDir}:`, error);
+      throw new Error(`Cannot create data directory: ${dataDir}`);
+    }
+    dbPath = path.join(dataDir, "medical-deep-research.db");
   }
-
-  const dbPath = path.join(dataDir, "medical-deep-research.db");
 
   let sqlite: Database.Database;
   try {

@@ -1,10 +1,11 @@
 import { db } from "@/db";
-import { research, apiKeys, llmConfig } from "@/db/schema";
+import { research, apiKeys, llmConfig, settings } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { generateId } from "@/lib/utils";
 import { runMedicalResearch } from "@/lib/agent";
 import { z } from "zod";
+import { defaultLocale, type Locale } from "@/i18n/config";
 
 // Input validation schema
 const createResearchSchema = z.object({
@@ -127,6 +128,12 @@ export async function POST(request: Request) {
       .set({ status: "running", startedAt: now })
       .where(eq(research.id, researchId));
 
+    // Fetch language setting
+    const languageSetting = await db.query.settings.findFirst({
+      where: eq(settings.key, "language"),
+    });
+    const language: Locale = (languageSetting?.value as Locale) || defaultLocale;
+
     // Start research in background (don't await)
     // Note: Population validator now uses the user's configured LLM provider (apiKey)
     // instead of a separate OpenAI key
@@ -141,6 +148,7 @@ export async function POST(request: Request) {
       ncbiApiKey: keyMap.ncbi,
       picoComponents,
       pccComponents,
+      language,
     }).catch(async (error) => {
       console.error("Research error:", error);
       await db

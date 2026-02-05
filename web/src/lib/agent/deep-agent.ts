@@ -20,6 +20,8 @@ import { eq } from "drizzle-orm";
 import { generateId } from "@/lib/utils";
 import { exportStateToMarkdown } from "../state-export";
 import { formatVancouverCitation, type CitationData } from "@/lib/citation/vancouver";
+import { translateReport } from "./tools/report-translator";
+import type { Locale } from "@/i18n/config";
 
 /**
  * Normalize authors field: convert string to array if needed
@@ -103,6 +105,19 @@ const AgentState = Annotation.Root({
     value: (_, update) => update,
     default: () => "",
   }),
+  language: Annotation<Locale>({
+    value: (_, update) => update,
+    default: () => "en" as Locale,
+  }),
+  originalContent: Annotation<string>({
+    value: (_, update) => update,
+    default: () => "",
+  }),
+  // Track which databases have been searched to avoid duplicates
+  searchedDatabases: Annotation<Set<string>>({
+    reducer: (current, update) => new Set([...Array.from(current), ...Array.from(update)]),
+    default: () => new Set<string>(),
+  }),
 });
 
 type AgentStateType = typeof AgentState.State;
@@ -127,6 +142,7 @@ export interface MedicalResearchConfig {
     concept?: string;
     context?: string;
   };
+  language?: Locale; // 'en' or 'ko' - defaults to 'en'
   onProgress?: (progress: { phase: string; progress: number; message: string }) => void;
 }
 
@@ -364,6 +380,8 @@ async function updateProgress(
     activeAgents.push({ name: "Database Search", status: "active" });
   } else if (phase === "synthesizing") {
     activeAgents.push({ name: "Report Generator", status: "active" });
+  } else if (phase === "translating") {
+    activeAgents.push({ name: "Report Translator", status: "active" });
   }
 
   // Save agent state
@@ -404,47 +422,46 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       : [];
 
     // Inject API keys into tool calls that need them
+    const fastModel = FAST_MODELS[config.llmProvider] || FAST_MODELS.openai;
+
     toolCalls = toolCalls.map((tc: { name: string; args?: Record<string, unknown>; id?: string }) => {
       const args = { ...tc.args };
+      const toolName = tc.name;
 
-      // Inject Scopus API key
-      if (tc.name === "scopus_search" && config.scopusApiKey && !args.apiKey) {
+      // Database search tools - inject respective API keys
+      if (toolName === "scopus_search" && config.scopusApiKey && !args.apiKey) {
         args.apiKey = config.scopusApiKey;
       }
-
-      // Inject NCBI API key for PubMed
-      if (tc.name === "pubmed_search" && config.ncbiApiKey && !args.apiKey) {
+      if (toolName === "pubmed_search" && config.ncbiApiKey && !args.apiKey) {
         args.apiKey = config.ncbiApiKey;
       }
 
-      // Inject API key and provider for population validator
-      // Uses the same LLM provider the user configured (not hardcoded OpenAI)
-      if (tc.name === "population_validator") {
-        if (!args.apiKey) {
-          args.apiKey = config.apiKey;
-        }
-        if (!args.provider) {
-          args.provider = config.llmProvider;
-        }
-        if (!args.model) {
-          args.model = FAST_MODELS[config.llmProvider] || FAST_MODELS.openai;
-        }
+      // LLM-powered tools - inject API key, provider, and fast model
+      const llmPoweredTools = [
+        "population_validator",
+        "query_context_analyzer",
+        "pico_query_builder",
+        "pcc_query_builder",
+      ];
+
+      if (llmPoweredTools.includes(toolName)) {
+        if (!args.apiKey) args.apiKey = config.apiKey;
+        if (!args.provider) args.provider = config.llmProvider;
+        if (!args.model) args.model = fastModel;
       }
 
-      // Inject API key and provider for claim verifier
-      if (tc.name === "claim_verifier") {
-        if (!args.apiKey) {
-          args.apiKey = config.apiKey;
-        }
-        if (!args.llmProvider) {
-          args.llmProvider = config.llmProvider;
-        }
-        if (!args.model) {
-          args.model = FAST_MODELS[config.llmProvider] || FAST_MODELS.openai;
-        }
-        if (!args.ncbiApiKey && config.ncbiApiKey) {
-          args.ncbiApiKey = config.ncbiApiKey;
-        }
+      // Query builders - enable enhanced mode by default when API key available
+      if ((toolName === "pico_query_builder" || toolName === "pcc_query_builder") &&
+          args.enhanced === undefined && config.apiKey) {
+        args.enhanced = true;
+      }
+
+      // Claim verifier - needs provider + ncbiApiKey
+      if (toolName === "claim_verifier") {
+        if (!args.apiKey) args.apiKey = config.apiKey;
+        if (!args.provider) args.provider = config.llmProvider;
+        if (!args.model) args.model = fastModel;
+        if (!args.ncbiApiKey && config.ncbiApiKey) args.ncbiApiKey = config.ncbiApiKey;
       }
 
       return { ...tc, args };
@@ -527,10 +544,19 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       }
     }
 
+    // Track which search databases were used
+    const searchToolsUsed = new Set<string>();
+    for (const tc of toolCalls) {
+      if (["pubmed_search", "cochrane_search", "scopus_search"].includes(tc.name)) {
+        searchToolsUsed.add(tc.name);
+      }
+    }
+
     return {
       ...result,
       toolExecutions: completedExecutions,
       searchResults: extractedResults,
+      searchedDatabases: searchToolsUsed,
     };
   }
 
@@ -548,7 +574,7 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
   const maxToolCalls = 10; // Prevent infinite loops
 
   // Should continue function
-  function shouldContinue(state: AgentStateType): "tools" | "synthesize" | typeof END {
+  function shouldContinue(state: AgentStateType): "tools" | "synthesize" | "translation" | "completion" {
     const lastMessage = state.messages[state.messages.length - 1];
 
     if (
@@ -575,7 +601,12 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       return "synthesize";
     }
 
-    return END;
+    // Agent is done - check if translation is needed
+    const language = config.language || "en";
+    if (language !== "en") {
+      return "translation";
+    }
+    return "completion";
   }
 
   // Planning node
@@ -727,84 +758,98 @@ Then build the appropriate query and search multiple databases.`;
     const executions: ToolExecution[] = [];
     const startTime = Date.now();
 
-    // Search 1: PubMed with comprehensive strategy (ALWAYS)
-    try {
-      executions.push({ tool: "pubmed_search", status: "running", query: searchQuery, startTime });
-      const pubmedResult = await pubmedSearchTool.invoke({
-        query: searchQuery,
-        maxResults: 30,
-        apiKey: config.ncbiApiKey,
-        searchStrategy: "comprehensive",
-      });
-      const pubmedData = JSON.parse(pubmedResult);
-      if (pubmedData.success && pubmedData.articles) {
-        for (const article of pubmedData.articles) {
-          allResults.push({
-            ...article,
-            authors: normalizeAuthors(article.authors),
-            source: "pubmed",
-          });
+    // Get already-searched databases from state
+    const alreadySearched = state.searchedDatabases || new Set<string>();
+
+    // Search 1: PubMed with comprehensive strategy (if not already searched)
+    if (!alreadySearched.has("pubmed_search")) {
+      try {
+        executions.push({ tool: "pubmed_search", status: "running", query: searchQuery, startTime });
+        const pubmedResult = await pubmedSearchTool.invoke({
+          query: searchQuery,
+          maxResults: 30,
+          apiKey: config.ncbiApiKey,
+          searchStrategy: "comprehensive",
+        });
+        const pubmedData = JSON.parse(pubmedResult);
+        if (pubmedData.success && pubmedData.articles) {
+          for (const article of pubmedData.articles) {
+            allResults.push({
+              ...article,
+              authors: normalizeAuthors(article.authors),
+              source: "pubmed",
+            });
+          }
         }
+        executions.push({
+          tool: "pubmed_search",
+          status: "completed",
+          query: searchQuery,
+          resultCount: pubmedData.articles?.length || 0,
+          duration: (Date.now() - startTime) / 1000,
+          startTime,
+        });
+      } catch (error) {
+        console.error("Mandatory PubMed search failed:", error);
+        executions.push({
+          tool: "pubmed_search",
+          status: "failed",
+          query: searchQuery,
+          error: error instanceof Error ? error.message : "Unknown error",
+          startTime,
+        });
       }
-      executions.push({
-        tool: "pubmed_search",
-        status: "completed",
-        query: searchQuery,
-        resultCount: pubmedData.articles?.length || 0,
-        duration: (Date.now() - startTime) / 1000,
-        startTime,
-      });
-    } catch (error) {
-      console.error("Mandatory PubMed search failed:", error);
-      executions.push({
-        tool: "pubmed_search",
-        status: "failed",
-        query: searchQuery,
-        error: error instanceof Error ? error.message : "Unknown error",
-        startTime,
-      });
+    } else {
+      console.log("Skipping PubMed search - already executed by agent");
     }
 
-    // Search 2: Cochrane (ALWAYS)
-    try {
-      const cochraneStartTime = Date.now();
-      executions.push({ tool: "cochrane_search", status: "running", query: searchQuery, startTime: cochraneStartTime });
-      const cochraneResult = await cochraneSearchTool.invoke({
-        query: searchQuery,
-        maxResults: 10,
-      });
-      const cochraneData = JSON.parse(cochraneResult);
-      if (cochraneData.success && cochraneData.reviews) {
-        for (const review of cochraneData.reviews) {
-          allResults.push({
-            ...review,
-            authors: normalizeAuthors(review.authors),
-            source: "cochrane",
-            pmid: review.id,
-          });
+    // Search 2: Cochrane (if not already searched)
+    if (!alreadySearched.has("cochrane_search")) {
+      try {
+        const cochraneStartTime = Date.now();
+        executions.push({ tool: "cochrane_search", status: "running", query: searchQuery, startTime: cochraneStartTime });
+        const cochraneResult = await cochraneSearchTool.invoke({
+          query: searchQuery,
+          maxResults: 10,
+        });
+        const cochraneData = JSON.parse(cochraneResult);
+        if (cochraneData.success && cochraneData.reviews) {
+          for (const review of cochraneData.reviews) {
+            allResults.push({
+              ...review,
+              authors: normalizeAuthors(review.authors),
+              source: "cochrane",
+              pmid: review.id,
+            });
+          }
         }
+        executions.push({
+          tool: "cochrane_search",
+          status: "completed",
+          query: searchQuery,
+          resultCount: cochraneData.reviews?.length || 0,
+          duration: (Date.now() - cochraneStartTime) / 1000,
+          startTime: cochraneStartTime,
+        });
+      } catch (error) {
+        console.error("Mandatory Cochrane search failed:", error);
+        executions.push({
+          tool: "cochrane_search",
+          status: "failed",
+          query: searchQuery,
+          error: error instanceof Error ? error.message : "Unknown error",
+          startTime: Date.now(),
+        });
       }
-      executions.push({
-        tool: "cochrane_search",
-        status: "completed",
-        query: searchQuery,
-        resultCount: cochraneData.reviews?.length || 0,
-        duration: (Date.now() - cochraneStartTime) / 1000,
-        startTime: cochraneStartTime,
-      });
-    } catch (error) {
-      console.error("Mandatory Cochrane search failed:", error);
-      executions.push({
-        tool: "cochrane_search",
-        status: "failed",
-        query: searchQuery,
-        error: error instanceof Error ? error.message : "Unknown error",
-        startTime: Date.now(),
-      });
+    } else {
+      console.log("Skipping Cochrane search - already executed by agent");
     }
 
     // Search 3: Scopus (IF API KEY AVAILABLE) OR additional PubMed date-sorted search
     if (config.scopusApiKey) {
+      if (alreadySearched.has("scopus_search")) {
+        console.log("Skipping Scopus search - already executed by agent");
+      } else {
       try {
         const scopusStartTime = Date.now();
 
@@ -856,8 +901,9 @@ Then build the appropriate query and search multiple databases.`;
           startTime: Date.now(),
         });
       }
+      } // Close the inner else block
     } else {
-      // Fallback: Additional PubMed search sorted by date to find recent papers
+      // Fallback: Additional PubMed search sorted by date to find recent papers (no Scopus API key)
       try {
         const pubmedDateStartTime = Date.now();
         executions.push({ tool: "pubmed_search_date", status: "running", query: searchQuery, startTime: pubmedDateStartTime });
@@ -959,6 +1005,11 @@ PMID: ${result.pmid || "N/A"} | DOI: ${result.doi || "N/A"}
       })
       .join("\n");
 
+    // Count actual sources available
+    const sourceCount = state.searchResults
+      .filter((r): r is PersistableResult => r !== null && typeof r === "object" && "title" in r)
+      .slice(0, 30).length;
+
     const synthesisPrompt = `Based on the search results gathered, synthesize a comprehensive evidence-based report.
 
 ## CRITICAL ANTI-HALLUCINATION INSTRUCTIONS
@@ -973,6 +1024,15 @@ For each claim about a study's findings:
 3. If the abstract is unclear about findings, state "findings unclear from abstract"
 4. NEVER reverse or contradict what the actual abstract states
 
+## CRITICAL CITATION RULES
+
+**THERE ARE EXACTLY ${sourceCount} SOURCES AVAILABLE (numbered [1] through [${sourceCount}]).**
+- You may ONLY use citation numbers [1] through [${sourceCount}]
+- DO NOT use any citation number higher than [${sourceCount}]
+- DO NOT invent or hallucinate citation numbers
+- If you cannot find a source to support a claim, do not make that claim
+- Every citation number MUST correspond to a source listed below
+
 ## Example of CORRECT vs INCORRECT reporting:
 
 If abstract says: "Beta-blockers did not significantly reduce all-cause death (HR 0.94, 95% CI 0.79-1.12)"
@@ -980,13 +1040,13 @@ If abstract says: "Beta-blockers did not significantly reduce all-cause death (H
 - CORRECT: "The study found no significant reduction in all-cause mortality [n]"
 - WRONG: "The study highlighted clinical benefits in reducing mortality [n]" ← HALLUCINATION
 
-## Search Results with FULL Abstracts and Conclusions:
+## Search Results with FULL Abstracts and Conclusions (${sourceCount} sources):
 ${searchResultsContext}
 
 ## Report Structure
 
 IMPORTANT: When citing sources, use numbered in-text citations [1], [2], [3], etc.
-Assign reference numbers in order of first citation in the text.
+Citation numbers MUST match the source numbers above (maximum: [${sourceCount}]).
 Include a complete "References" section at the end using Vancouver style:
 
 Example Vancouver format:
@@ -1020,6 +1080,74 @@ Focus on:
             : step
       ),
     };
+  }
+
+  /**
+   * Translation node - translates the report to Korean if language is set
+   * This node runs after synthesis if language !== 'en'
+   */
+  async function translationNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
+    // Extract the English report from the last AI message
+    const lastAIMessage = [...state.messages]
+      .reverse()
+      .find((m): m is AIMessage => m instanceof AIMessage);
+
+    const englishReport = lastAIMessage
+      ? typeof lastAIMessage.content === "string"
+        ? lastAIMessage.content
+        : JSON.stringify(lastAIMessage.content)
+      : "";
+
+    if (!englishReport || englishReport === "No report content generated.") {
+      return {
+        phase: "translating",
+        progress: 95,
+        originalContent: englishReport,
+      };
+    }
+
+    await updateProgress(
+      config.researchId,
+      "translating",
+      90,
+      "Translating report to Korean...",
+      state,
+      config.onProgress
+    );
+
+    try {
+      const translatedReport = await translateReport(
+        englishReport,
+        config.apiKey,
+        config.llmProvider,
+        config.model
+      );
+
+      await updateProgress(
+        config.researchId,
+        "translating",
+        95,
+        "Translation complete",
+        state,
+        config.onProgress
+      );
+
+      return {
+        phase: "translating",
+        progress: 95,
+        synthesizedContent: translatedReport,
+        originalContent: englishReport,
+      };
+    } catch (error) {
+      console.error("Translation failed:", error);
+      // If translation fails, keep English report
+      return {
+        phase: "translating",
+        progress: 95,
+        synthesizedContent: englishReport,
+        originalContent: englishReport,
+      };
+    }
   }
 
   // Completion node
@@ -1062,16 +1190,28 @@ Focus on:
       }
     }
 
-    // Extract the final report from messages
-    const lastAIMessage = [...state.messages]
-      .reverse()
-      .find((m): m is AIMessage => m instanceof AIMessage);
+    // Get report content - use translated content if available, otherwise extract from messages
+    let reportContent = state.synthesizedContent;
+    let originalContent = state.originalContent;
+    const language = config.language || "en";
 
-    const reportContent = lastAIMessage
-      ? typeof lastAIMessage.content === "string"
-        ? lastAIMessage.content
-        : JSON.stringify(lastAIMessage.content)
-      : "No report content generated.";
+    // If no synthesizedContent, extract from last AI message (for non-translated flow)
+    if (!reportContent) {
+      const lastAIMessage = [...state.messages]
+        .reverse()
+        .find((m): m is AIMessage => m instanceof AIMessage);
+
+      reportContent = lastAIMessage
+        ? typeof lastAIMessage.content === "string"
+          ? lastAIMessage.content
+          : JSON.stringify(lastAIMessage.content)
+        : "No report content generated.";
+    }
+
+    // If English (no translation), original is same as final content
+    if (language === "en") {
+      originalContent = reportContent;
+    }
 
     // Save report to database
     const reportId = generateId();
@@ -1087,6 +1227,8 @@ Focus on:
       researchId: config.researchId,
       title: `Research Report: ${config.query.substring(0, 100)}`,
       content: reportContent,
+      originalContent: originalContent || reportContent, // Always store English original
+      language,
       format: "markdown",
       wordCount: reportContent.split(/\s+/).length,
       referenceCount,
@@ -1109,12 +1251,15 @@ Focus on:
       phase: "complete",
       progress: 100,
       synthesizedContent: reportContent,
+      originalContent,
+      language,
       planningSteps: state.planningSteps.map((step) => ({ ...step, status: "completed" })),
     };
   }
 
   // Build the graph
   // Flow: planning -> agent (query building) -> tools -> search -> mandatorySearch -> synthesize OR agent
+  // After synthesis: agent -> (if language != 'en') translation -> completion
   const workflow = new StateGraph(AgentState)
     .addNode("planning", planningNode)
     .addNode("agent", agentNode)
@@ -1122,13 +1267,15 @@ Focus on:
     .addNode("search", searchNode)
     .addNode("mandatorySearch", mandatorySearchNode)
     .addNode("synthesis", synthesisNode)
+    .addNode("translation", translationNode)
     .addNode("completion", completionNode)
     .addEdge(START, "planning")
     .addEdge("planning", "agent")
     .addConditionalEdges("agent", shouldContinue, {
       tools: "tools",
       synthesize: "synthesis",
-      [END]: "completion",
+      translation: "translation",
+      completion: "completion",
     })
     .addEdge("tools", "search")
     .addEdge("search", "mandatorySearch")
@@ -1137,7 +1284,12 @@ Focus on:
       synthesize: "synthesis",
       agent: "agent",
     })
-    .addEdge("synthesis", "agent");
+    // After synthesis, agent continues, which will eventually reach translation or completion
+    .addEdge("synthesis", "agent")
+    // After translation, go to completion
+    .addEdge("translation", "completion")
+    // Terminal edge: completion node ends the graph
+    .addEdge("completion", END);
 
   const graph = workflow.compile();
 
@@ -1157,6 +1309,8 @@ export async function runMedicalResearch(config: MedicalResearchConfig): Promise
     toolExecutions: [],
     searchResults: [],
     synthesizedContent: "",
+    language: config.language || ("en" as Locale),
+    originalContent: "",
   };
 
   // Save PICO/PCC query if provided

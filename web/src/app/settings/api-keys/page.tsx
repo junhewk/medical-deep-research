@@ -32,7 +32,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Key,
   Loader2,
   Check,
   Trash2,
@@ -43,8 +42,11 @@ import {
   Brain,
   BookOpen,
   Settings2,
+  Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLocale, useTranslations } from "@/i18n/client";
+import type { Locale } from "@/i18n/config";
 
 interface ApiKey {
   id: string;
@@ -70,8 +72,8 @@ interface LlmConfig {
 const API_SERVICES = [
   {
     id: "openai",
-    name: "OpenAI",
-    description: "Required for GPT based research (default LLM)",
+    nameKey: "apiServices.openai.name",
+    descriptionKey: "apiServices.openai.description",
     required: false,
     docsUrl: "https://platform.openai.com/api-keys",
     icon: Sparkles,
@@ -79,8 +81,8 @@ const API_SERVICES = [
   },
   {
     id: "anthropic",
-    name: "Anthropic",
-    description: "Required for Claude-based research",
+    nameKey: "apiServices.anthropic.name",
+    descriptionKey: "apiServices.anthropic.description",
     required: false,
     docsUrl: "https://console.anthropic.com/settings/keys",
     icon: Brain,
@@ -88,8 +90,8 @@ const API_SERVICES = [
   },
   {
     id: "google",
-    name: "Google AI",
-    description: "Required for Gemini-based research",
+    nameKey: "apiServices.google.name",
+    descriptionKey: "apiServices.google.description",
     required: false,
     docsUrl: "https://aistudio.google.com/app/apikey",
     icon: Sparkles,
@@ -97,8 +99,8 @@ const API_SERVICES = [
   },
   {
     id: "ncbi",
-    name: "NCBI/PubMed",
-    description: "Optional - increases PubMed rate limits (free)",
+    nameKey: "apiServices.ncbi.name",
+    descriptionKey: "apiServices.ncbi.description",
     required: false,
     docsUrl:
       "https://www.ncbi.nlm.nih.gov/account/settings/#accountSettingsApiKeyManagement",
@@ -107,8 +109,8 @@ const API_SERVICES = [
   },
   {
     id: "scopus",
-    name: "Scopus/Elsevier",
-    description: "Required for Scopus database searches",
+    nameKey: "apiServices.scopus.name",
+    descriptionKey: "apiServices.scopus.description",
     required: false,
     docsUrl: "https://dev.elsevier.com/apikey/manage",
     icon: BookOpen,
@@ -142,7 +144,69 @@ function LoadingSkeleton() {
   );
 }
 
+interface LanguageButtonProps {
+  localeValue: Locale;
+  currentLocale: Locale;
+  label: string;
+  displayText: string;
+  onClick: (locale: Locale) => void;
+  disabled: boolean;
+  isLoading: boolean;
+}
+
+function LanguageButton({
+  localeValue,
+  currentLocale,
+  label,
+  displayText,
+  onClick,
+  disabled,
+  isLoading,
+}: LanguageButtonProps) {
+  const isSelected = currentLocale === localeValue;
+
+  return (
+    <button
+      onClick={() => onClick(localeValue)}
+      disabled={disabled}
+      className={cn(
+        "group relative h-24 rounded-xl border-2 transition-all duration-300 overflow-hidden",
+        isSelected
+          ? "border-[hsl(275,45%,48%)] bg-gradient-to-br from-[hsl(275,45%,48%)]/15 via-[hsl(275,45%,48%)]/8 to-transparent shadow-lg shadow-[hsl(275,45%,48%)]/15"
+          : "border-border/60 hover:border-[hsl(275,45%,48%)]/40 hover:bg-[hsl(275,45%,48%)]/5"
+      )}
+    >
+      {isSelected && (
+        <div className="absolute top-2 right-2">
+          <div className="p-1 rounded-full bg-[hsl(275,45%,48%)]">
+            <Check className="h-3 w-3 text-white" />
+          </div>
+        </div>
+      )}
+      <div className="flex flex-col items-center justify-center h-full gap-2">
+        <span className="text-3xl font-serif tracking-tight text-foreground group-hover:scale-105 transition-transform">
+          {displayText}
+        </span>
+        <span className={cn(
+          "text-sm font-medium transition-colors",
+          isSelected ? "text-[hsl(275,45%,48%)]" : "text-muted-foreground group-hover:text-foreground"
+        )}>
+          {label}
+        </span>
+      </div>
+      {isLoading && !isSelected && (
+        <div className="absolute inset-0 flex items-center justify-center bg-background/50">
+          <Loader2 className="h-5 w-5 animate-spin text-[hsl(275,45%,48%)]" />
+        </div>
+      )}
+    </button>
+  );
+}
+
 export default function ApiKeysPage() {
+  const { t } = useTranslations();
+  const { locale, setLocale } = useLocale();
+
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -154,6 +218,7 @@ export default function ApiKeysPage() {
   const [selectedProvider, setSelectedProvider] = useState<LlmProvider>("openai");
   const [selectedModel, setSelectedModel] = useState<string>("gpt-5.2");
   const [savingLlm, setSavingLlm] = useState(false);
+  const [savingLanguage, setSavingLanguage] = useState(false);
 
   useEffect(() => {
     fetchKeys();
@@ -203,7 +268,7 @@ export default function ApiKeysPage() {
       if (res.ok) {
         await fetchKeys();
         setNewKeys((prev) => ({ ...prev, [service]: "" }));
-        setSuccessMessage(`${service} API key saved successfully`);
+        setSuccessMessage(t("settings.apiKeySaved", { service }));
         setTimeout(() => setSuccessMessage(null), 3000);
       }
     } catch (error) {
@@ -221,7 +286,7 @@ export default function ApiKeysPage() {
 
       if (res.ok) {
         await fetchKeys();
-        setSuccessMessage(`${service} API key deleted`);
+        setSuccessMessage(t("settings.apiKeyDeleted", { service }));
         setTimeout(() => setSuccessMessage(null), 3000);
       }
     } catch (error) {
@@ -244,13 +309,26 @@ export default function ApiKeysPage() {
 
       if (res.ok) {
         await fetchLlmConfig();
-        setSuccessMessage("LLM configuration saved successfully");
+        setSuccessMessage(t("settings.llmConfigSaved"));
         setTimeout(() => setSuccessMessage(null), 3000);
       }
     } catch (error) {
       console.error("Failed to save LLM config:", error);
     } finally {
       setSavingLlm(false);
+    }
+  };
+
+  const handleLanguageChange = async (newLocale: Locale) => {
+    setSavingLanguage(true);
+    try {
+      await setLocale(newLocale);
+      setSuccessMessage(t("settings.languageSaved"));
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (error) {
+      console.error("Failed to save language:", error);
+    } finally {
+      setSavingLanguage(false);
     }
   };
 
@@ -273,10 +351,10 @@ export default function ApiKeysPage() {
         <div>
           <h1 className="font-serif text-3xl font-semibold tracking-tight flex items-center gap-3">
             <Settings2 className="h-8 w-8 text-primary" />
-            Settings
+            {t("settings.title")}
           </h1>
           <p className="text-muted-foreground mt-1">
-            Configure LLM models and API keys
+            {t("settings.description")}
           </p>
         </div>
         <LoadingSkeleton />
@@ -292,12 +370,12 @@ export default function ApiKeysPage() {
           <Settings2 className="h-8 w-8 text-primary" />
         </div>
         <h1 className="font-serif text-3xl sm:text-4xl tracking-tight">
-          Settings
+          {t("settings.title")}
         </h1>
         <p className="text-muted-foreground max-w-md mx-auto">
-          Configure LLM models and API keys for research
+          {t("settings.description")}
         </p>
-        <Badge variant="outline" className="text-xs">BYOK — Bring Your Own Key</Badge>
+        <Badge variant="outline" className="text-xs">{t("common.byok")}</Badge>
       </div>
 
       {/* Success Message */}
@@ -312,6 +390,66 @@ export default function ApiKeysPage() {
         </div>
       )}
 
+      {/* Language Selector */}
+      <Card className="overflow-hidden border-2 border-[hsl(275,45%,48%)]/25 relative">
+        {/* Decorative background pattern for language card */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-[0.03]">
+          <div className="absolute -right-8 -top-8 text-[180px] font-serif leading-none select-none text-foreground">
+            가
+          </div>
+          <div className="absolute -left-4 -bottom-6 text-[120px] font-serif leading-none select-none text-foreground">
+            A
+          </div>
+        </div>
+        <CardHeader className="relative bg-gradient-to-br from-[hsl(275,45%,48%)]/10 via-[hsl(275,45%,48%)]/5 to-transparent border-b border-[hsl(275,45%,48%)]/15">
+          <CardTitle className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-[hsl(275,45%,48%)]/15 relative">
+              <Globe className="h-4 w-4 text-[hsl(275,45%,48%)]" />
+              <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[hsl(275,45%,48%)] animate-pulse" />
+            </div>
+            <span className="bg-gradient-to-r from-[hsl(275,45%,48%)] to-[hsl(205,65%,50%)] bg-clip-text text-transparent">
+              {t("settings.language")}
+            </span>
+          </CardTitle>
+          <CardDescription>
+            {t("settings.languageDescription")}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-6 space-y-5 relative">
+          <div className="grid grid-cols-2 gap-4">
+            <LanguageButton
+              localeValue="en"
+              currentLocale={locale}
+              label="English"
+              displayText="Aa"
+              onClick={handleLanguageChange}
+              disabled={savingLanguage}
+              isLoading={savingLanguage}
+            />
+            <LanguageButton
+              localeValue="ko"
+              currentLocale={locale}
+              label="한국어"
+              displayText="가나"
+              onClick={handleLanguageChange}
+              disabled={savingLanguage}
+              isLoading={savingLanguage}
+            />
+          </div>
+
+          {/* Language-specific hint text */}
+          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <span className="w-8 h-px bg-border" />
+            <span>
+              {locale === "ko"
+                ? "보고서가 한국어로 자동 번역됩니다"
+                : "Reports will be generated in English"}
+            </span>
+            <span className="w-8 h-px bg-border" />
+          </div>
+        </CardContent>
+      </Card>
+
       {/* LLM Model Selector */}
       <Card className="overflow-hidden border-2 border-primary/20">
         <CardHeader className="bg-gradient-to-br from-primary/8 via-primary/4 to-transparent border-b border-primary/10">
@@ -319,16 +457,16 @@ export default function ApiKeysPage() {
             <div className="p-2 rounded-lg bg-primary/10">
               <Settings2 className="h-4 w-4 text-primary" />
             </div>
-            Default LLM Model
+            {t("settings.defaultLlmModel")}
           </CardTitle>
           <CardDescription>
-            Select the default language model for research tasks
+            {t("settings.defaultLlmDescription")}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-6 space-y-5">
           {/* Provider Selection */}
           <div className="space-y-3">
-            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Provider</Label>
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">{t("settings.provider")}</Label>
             <div className="grid grid-cols-3 gap-3">
               <Button
                 variant={selectedProvider === "openai" ? "default" : "outline"}
@@ -368,10 +506,10 @@ export default function ApiKeysPage() {
 
           {/* Model Selection */}
           <div className="space-y-3">
-            <Label className="text-xs uppercase tracking-wide text-muted-foreground">Model</Label>
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">{t("settings.model")}</Label>
             <Select value={selectedModel} onValueChange={setSelectedModel}>
               <SelectTrigger className="h-12">
-                <SelectValue placeholder="Select a model" />
+                <SelectValue placeholder={t("settings.selectModel")} />
               </SelectTrigger>
               <SelectContent>
                 {llmConfig?.availableModels[selectedProvider]?.map((model) => (
@@ -391,7 +529,7 @@ export default function ApiKeysPage() {
           {/* Current Selection Info */}
           {llmConfig && (
             <div className="flex items-center justify-center gap-2 p-3 rounded-lg bg-muted/50 text-sm">
-              <span className="text-muted-foreground">Current:</span>
+              <span className="text-muted-foreground">{t("common.current")}:</span>
               <Badge variant="secondary" className="font-mono text-xs">
                 {llmConfig.provider}/{llmConfig.model}
               </Badge>
@@ -409,7 +547,7 @@ export default function ApiKeysPage() {
             ) : (
               <Check className="h-4 w-4 mr-2" />
             )}
-            Save as Default
+            {t("settings.saveAsDefault")}
           </Button>
         </CardContent>
       </Card>
@@ -420,6 +558,8 @@ export default function ApiKeysPage() {
           const existingKey = getKeyStatus(service.id);
           const isConfigured = !!existingKey;
           const Icon = service.icon;
+          const serviceName = t(service.nameKey);
+          const serviceDescription = t(service.descriptionKey);
 
           return (
             <Card
@@ -443,24 +583,24 @@ export default function ApiKeysPage() {
                     </div>
                     <div>
                       <CardTitle className="text-lg flex items-center gap-2">
-                        {service.name}
+                        {serviceName}
                         {service.required && (
                           <Badge
                             variant="outline"
                             className="text-xs font-normal"
                           >
-                            Required
+                            {t("common.required")}
                           </Badge>
                         )}
                         {isConfigured && (
                           <Badge className="text-xs bg-status-completed text-white">
                             <Check className="h-3 w-3 mr-1" />
-                            Configured
+                            {t("common.configured")}
                           </Badge>
                         )}
                       </CardTitle>
                       <CardDescription className="mt-0.5">
-                        {service.description}
+                        {serviceDescription}
                       </CardDescription>
                     </div>
                   </div>
@@ -470,7 +610,7 @@ export default function ApiKeysPage() {
                     rel="noopener noreferrer"
                     className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
                   >
-                    Get API Key
+                    {t("settings.getApiKey")}
                     <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
@@ -493,19 +633,18 @@ export default function ApiKeysPage() {
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Delete API Key</AlertDialogTitle>
+                          <AlertDialogTitle>{t("settings.deleteApiKey")}</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Are you sure you want to delete the {service.name}{" "}
-                            API key? This action cannot be undone.
+                            {t("settings.deleteApiKeyConfirm", { service: serviceName })}
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
                           <AlertDialogAction
                             onClick={() => deleteKey(service.id)}
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                           >
-                            Delete
+                            {t("common.delete")}
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>
@@ -522,8 +661,8 @@ export default function ApiKeysPage() {
                       type="password"
                       placeholder={
                         isConfigured
-                          ? "Enter new key to update..."
-                          : "Enter API key..."
+                          ? t("settings.enterNewKey")
+                          : t("settings.enterApiKey")
                       }
                       value={newKeys[service.id] || ""}
                       onChange={(e) =>
@@ -544,7 +683,7 @@ export default function ApiKeysPage() {
                     {saving === service.id ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      "Save"
+                      t("common.save")
                     )}
                   </Button>
                 </div>
@@ -562,12 +701,9 @@ export default function ApiKeysPage() {
               <Shield className="h-5 w-5 text-muted-foreground" />
             </div>
             <div>
-              <p className="font-serif font-medium">Security Note</p>
+              <p className="font-serif font-medium">{t("settings.securityNote")}</p>
               <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
-                API keys are stored locally in your database and are never sent
-                to external servers except for the specific API they belong to.
-                For production deployments, consider using environment variables
-                instead.
+                {t("settings.securityDescription")}
               </p>
             </div>
           </div>

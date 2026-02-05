@@ -37,6 +37,8 @@ export interface Report {
   id: string;
   title?: string;
   content?: string;
+  originalContent?: string;  // English original (when translated)
+  language?: string;         // Report language ('en' or 'ko')
   wordCount?: number;
   referenceCount?: number;
   createdAt?: string;

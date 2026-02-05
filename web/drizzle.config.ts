@@ -5,6 +5,6 @@ export default {
   out: "./drizzle",
   dialect: "sqlite",
   dbCredentials: {
-    url: "../data/medical-deep-research.db",
+    url: process.env.DATABASE_PATH || "./data/medical-research.db",
   },
 } satisfies Config;

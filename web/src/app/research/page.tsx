@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "@/i18n/client";
 
 function ResearchSkeleton() {
   return (
@@ -52,6 +53,8 @@ function ResearchSkeleton() {
 }
 
 function EmptyState() {
+  const { t } = useTranslations("research");
+
   return (
     <Card className="border-dashed border-2 bg-gradient-to-br from-muted/30 to-transparent">
       <CardContent className="py-20 text-center">
@@ -62,15 +65,15 @@ function EmptyState() {
           </div>
         </div>
         <h3 className="font-serif text-2xl mb-3">
-          No research yet
+          {t("noResearchYet")}
         </h3>
         <p className="text-muted-foreground mb-8 max-w-md mx-auto">
-          Start your first evidence-based medical research query using the PICO or PCC framework
+          {t("noResearchDescription")}
         </p>
         <Link href="/research/new">
           <Button size="lg" className="gap-2 shadow-lg shadow-primary/20">
             <Plus className="h-4 w-4" />
-            Start New Research
+            {t("startNewResearch")}
           </Button>
         </Link>
       </CardContent>
@@ -79,18 +82,20 @@ function EmptyState() {
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslations("status");
+
   const config: Record<
     string,
-    { className: string; label: string; pulse?: boolean }
+    { className: string; labelKey: string; pulse?: boolean }
   > = {
-    pending: { className: "status-pending", label: "Pending" },
-    running: { className: "status-running", label: "Running", pulse: true },
-    completed: { className: "status-completed", label: "Completed" },
-    failed: { className: "status-failed", label: "Failed" },
-    cancelled: { className: "status-pending", label: "Cancelled" },
+    pending: { className: "status-pending", labelKey: "pending" },
+    running: { className: "status-running", labelKey: "running", pulse: true },
+    completed: { className: "status-completed", labelKey: "completed" },
+    failed: { className: "status-failed", labelKey: "failed" },
+    cancelled: { className: "status-pending", labelKey: "cancelled" },
   };
 
-  const { className, label, pulse } = config[status] || config.pending;
+  const { className, labelKey, pulse } = config[status] || config.pending;
 
   return (
     <Badge
@@ -104,7 +109,7 @@ function StatusBadge({ status }: { status: string }) {
       {pulse && (
         <span className="absolute inset-0 bg-status-running/20 animate-pulse" />
       )}
-      <span className="relative">{label}</span>
+      <span className="relative">{t(labelKey)}</span>
     </Badge>
   );
 }
@@ -133,6 +138,7 @@ function QueryTypeBadge({ type }: { type?: string }) {
 
 export default function ResearchListPage() {
   const { data: research, isLoading, error } = useResearchList();
+  const { t } = useTranslations("research");
 
   return (
     <div className="space-y-8 stagger-fade">
@@ -140,16 +146,16 @@ export default function ResearchListPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl sm:text-4xl tracking-tight">
-            Research History
+            {t("history")}
           </h1>
           <p className="text-muted-foreground mt-2">
-            View and manage your medical research queries
+            {t("historyDescription")}
           </p>
         </div>
         <Link href="/research/new">
           <Button size="lg" className="gap-2 shadow-lg shadow-primary/25 bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary">
             <Plus className="h-4 w-4" />
-            New Research
+            {t("newResearch")}
           </Button>
         </Link>
       </div>
@@ -162,7 +168,7 @@ export default function ResearchListPage() {
         <Card className="border-destructive/50 bg-destructive/5">
           <CardContent className="pt-6">
             <p className="text-destructive">
-              Failed to load research history. Please try again.
+              {t("loadError")}
             </p>
           </CardContent>
         </Card>
@@ -212,7 +218,7 @@ export default function ResearchListPage() {
                 <CardContent>
                   <div className="space-y-2">
                     <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>Progress</span>
+                      <span>{t("progress")}</span>
                       <span className="font-semibold text-foreground">{item.progress}%</span>
                     </div>
                     <Progress

@@ -1,9 +1,7 @@
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
-import { ChatOpenAI } from "@langchain/openai";
-import { ChatAnthropic } from "@langchain/anthropic";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { createVerifierLLM, type LLMProvider, type SupportedLLM } from "./llm-factory";
 
 /**
  * Claim Verifier - Post-Synthesis Safety Net
@@ -249,7 +247,7 @@ const CLAIM_VERIFIER_SYSTEM_PROMPT = `You are a text comparison specialist. Your
   "suggestion": "Correction" | null
 }`;
 
-type SupportedLLM = ChatOpenAI | ChatAnthropic | ChatGoogleGenerativeAI;
+// SupportedLLM type is imported from llm-factory
 
 /**
  * Verify a single claim against fetched abstract
@@ -336,27 +334,8 @@ export async function verifyReportClaims(
     skipPmidValidation?: boolean;
   }
 ): Promise<ClaimVerificationReport> {
-  // Create LLM for text comparison only
-  let llm: SupportedLLM;
-  if (llmProvider === "anthropic") {
-    llm = new ChatAnthropic({
-      modelName: options?.model || "claude-3-5-haiku-20241022",
-      anthropicApiKey: apiKey,
-      temperature: 0,
-    });
-  } else if (llmProvider === "google") {
-    llm = new ChatGoogleGenerativeAI({
-      model: options?.model || "gemini-1.5-flash",
-      apiKey: apiKey,
-      temperature: 0,
-    });
-  } else {
-    llm = new ChatOpenAI({
-      modelName: options?.model || "gpt-4o-mini",
-      openAIApiKey: apiKey,
-      temperature: 0,
-    });
-  }
+  // Create LLM for text comparison using shared factory
+  const llm = createVerifierLLM(llmProvider, apiKey, options?.model);
 
   // Extract citations from report
   const citations = extractCitationsFromReport(reportText);
@@ -502,16 +481,16 @@ export async function verifyReportClaims(
  * LangChain tool for claim verification
  */
 export const claimVerifierTool = tool(
-  async ({ reportText, searchResultsJson, llmProvider, apiKey, model, ncbiApiKey }) => {
+  async ({ reportText, searchResultsJson, provider, apiKey, model, ncbiApiKey }) => {
     try {
       const searchResults = JSON.parse(searchResultsJson);
 
       const report = await verifyReportClaims(
         reportText,
         searchResults,
-        llmProvider as "openai" | "anthropic" | "google",
+        provider as "openai" | "anthropic" | "google",
         apiKey,
-        { model, ncbiApiKey }
+        { model: model ?? undefined, ncbiApiKey: ncbiApiKey ?? undefined }
       );
 
       let summary: string;
@@ -544,10 +523,10 @@ export const claimVerifierTool = tool(
     schema: z.object({
       reportText: z.string().describe("The synthesized report to verify"),
       searchResultsJson: z.string().describe("JSON array with title, pmid, abstract, referenceNumber"),
-      llmProvider: z.enum(["openai", "anthropic", "google"]).describe("LLM for text comparison"),
+      provider: z.enum(["openai", "anthropic", "google"]).describe("LLM provider for text comparison"),
       apiKey: z.string().describe("API key for LLM"),
-      model: z.string().optional().describe("Model name"),
-      ncbiApiKey: z.string().optional().describe("NCBI API key for higher rate limits"),
+      model: z.string().optional().nullable().describe("Model name"),
+      ncbiApiKey: z.string().optional().nullable().describe("NCBI API key for higher rate limits"),
     }),
   }
 );

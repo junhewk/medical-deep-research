@@ -1,0 +1,193 @@
+{
+  "common": {
+    "save": "저장",
+    "cancel": "취소",
+    "delete": "삭제",
+    "loading": "로딩 중...",
+    "error": "오류",
+    "success": "성공",
+    "configured": "설정됨",
+    "required": "필수",
+    "optional": "선택사항",
+    "current": "현재",
+    "byok": "BYOK — Bring Your Own Key"
+  },
+  "navigation": {
+    "research": "연구",
+    "newQuery": "새 검색",
+    "settings": "설정",
+    "title": "Medical Deep Research",
+    "subtitle": "근거 기반 분석"
+  },
+  "footer": {
+    "title": "Medical Deep Research",
+    "version": "v2.0 — 근거 기반 연구 도우미",
+    "langGraphPowered": "LangGraph 기반",
+    "byokModel": "BYOK 모델"
+  },
+  "settings": {
+    "title": "설정",
+    "description": "연구를 위한 LLM 모델 및 API 키 설정",
+    "defaultLlmModel": "기본 LLM 모델",
+    "defaultLlmDescription": "연구 작업에 사용할 기본 언어 모델을 선택하세요",
+    "provider": "제공자",
+    "model": "모델",
+    "selectModel": "모델 선택",
+    "saveAsDefault": "기본값으로 저장",
+    "language": "언어",
+    "languageDescription": "인터페이스 및 보고서 언어를 선택하세요",
+    "securityNote": "보안 안내",
+    "securityDescription": "API 키는 로컬 데이터베이스에 저장되며, 해당 API 서버 외에는 외부 서버로 전송되지 않습니다. 프로덕션 배포 시에는 환경 변수 사용을 권장합니다.",
+    "getApiKey": "API 키 발급",
+    "enterApiKey": "API 키를 입력하세요...",
+    "enterNewKey": "새 키를 입력하여 업데이트...",
+    "deleteApiKey": "API 키 삭제",
+    "deleteApiKeyConfirm": "{service} API 키를 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
+    "apiKeySaved": "{service} API 키가 저장되었습니다",
+    "apiKeyDeleted": "{service} API 키가 삭제되었습니다",
+    "llmConfigSaved": "LLM 설정이 저장되었습니다",
+    "languageSaved": "언어 설정이 저장되었습니다"
+  },
+  "apiServices": {
+    "openai": {
+      "name": "OpenAI",
+      "description": "GPT 기반 연구에 필요 (기본 LLM)"
+    },
+    "anthropic": {
+      "name": "Anthropic",
+      "description": "Claude 기반 연구에 필요"
+    },
+    "google": {
+      "name": "Google AI",
+      "description": "Gemini 기반 연구에 필요"
+    },
+    "ncbi": {
+      "name": "NCBI/PubMed",
+      "description": "선택사항 - PubMed 요청 한도 증가 (무료)"
+    },
+    "scopus": {
+      "name": "Scopus/Elsevier",
+      "description": "Scopus 데이터베이스 검색에 필요"
+    }
+  },
+  "research": {
+    "history": "연구 기록",
+    "historyDescription": "의학 연구 검색 내역 보기 및 관리",
+    "newResearch": "새 연구",
+    "startNewResearch": "새 연구 시작",
+    "noResearchYet": "아직 연구 기록이 없습니다",
+    "noResearchDescription": "PICO 또는 PCC 프레임워크를 사용하여 첫 번째 근거 기반 의학 연구를 시작하세요",
+    "progress": "진행률",
+    "loadError": "연구 기록을 불러오지 못했습니다. 다시 시도해 주세요."
+  },
+  "status": {
+    "pending": "대기 중",
+    "running": "실행 중",
+    "completed": "완료",
+    "failed": "실패",
+    "cancelled": "취소됨"
+  },
+  "newResearch": {
+    "title": "연구 검색",
+    "description": "근거 기반 프레임워크를 사용하여 임상 질문을 구조화하세요",
+    "framework": "연구 프레임워크",
+    "frameworkDescription": "연구 질문을 구조화할 프레임워크를 선택하세요",
+    "picoFramework": "PICO 프레임워크",
+    "picoDescription": "중재, 치료 또는 요법에 관한 임상 질문에 적합",
+    "pccFramework": "PCC 프레임워크",
+    "pccDescription": "범위 검토, 질적 연구 또는 탐색적 질문에 적합",
+    "freeForm": "자유 형식 검색",
+    "freeFormDescription": "자연어로 연구 질문을 입력하세요. 에이전트가 최적의 검색 전략을 결정합니다.",
+    "researchQuestion": "연구 질문",
+    "freeFormPlaceholder": "예: '제2형 당뇨병 환자의 심혈관 결과에 대한 메트포르민 대비 SGLT2 억제제의 효과는?'",
+    "startResearch": "연구 시작",
+    "startingResearch": "연구 시작 중...",
+    "databaseNote": "에이전트가 PubMed, Scopus, Cochrane 데이터베이스를 검색합니다",
+    "errorStarting": "연구 시작 오류"
+  },
+  "pico": {
+    "population": {
+      "label": "대상 집단 / 환자",
+      "short": "P",
+      "placeholder": "예: 제2형 당뇨병 성인 환자",
+      "help": "관심 있는 환자 또는 대상 집단은?"
+    },
+    "intervention": {
+      "label": "중재 / 노출",
+      "short": "I",
+      "placeholder": "예: SGLT2 억제제",
+      "help": "연구되는 치료 또는 노출은?"
+    },
+    "comparison": {
+      "label": "비교군",
+      "short": "C",
+      "placeholder": "예: 메트포르민 단독 요법",
+      "help": "대안 또는 대조군은?"
+    },
+    "outcome": {
+      "label": "결과",
+      "short": "O",
+      "placeholder": "예: 심혈관 사건, 사망률",
+      "help": "중요한 결과 또는 성과는?"
+    }
+  },
+  "pcc": {
+    "population": {
+      "label": "대상 집단",
+      "short": "P",
+      "placeholder": "예: 의료 종사자",
+      "help": "연구되는 대상 집단은?"
+    },
+    "concept": {
+      "label": "개념",
+      "short": "C",
+      "placeholder": "예: 번아웃 경험",
+      "help": "관심 있는 현상 또는 개념은?"
+    },
+    "context": {
+      "label": "맥락",
+      "short": "C",
+      "placeholder": "예: COVID-19 팬데믹 기간",
+      "help": "어떤 환경 또는 맥락에서?"
+    }
+  },
+  "progress": {
+    "picoQuery": "PICO 검색",
+    "pccQuery": "PCC 검색",
+    "generatedPubmedQuery": "생성된 PubMed 검색어",
+    "generatedQuery": "생성된 검색어",
+    "meshTerms": "MeSH 용어",
+    "notSpecified": "지정되지 않음",
+    "researchReport": "연구 보고서",
+    "words": "단어",
+    "refs": "참고문헌",
+    "formatted": "포맷됨",
+    "rawMarkdown": "Raw Markdown",
+    "errorOccurred": "오류 발생",
+    "searchResults": "검색 결과",
+    "articlesRetrieved": "검색된 논문",
+    "fromDatabases": "PubMed, Scopus, Cochrane 데이터베이스에서",
+    "completed": "완료",
+    "original": "원문",
+    "originalDescription": "번역 전 원본 영문 보고서입니다. 의학 용어와 인용은 두 버전 모두 동일하게 유지됩니다.",
+    "copy": "복사",
+    "copied": "복사됨!"
+  },
+  "agent": {
+    "title": "에이전트 상태",
+    "translating": "보고서를 한국어로 번역 중...",
+    "translatingDescription": "의학 용어를 유지하며 연구 결과를 변환 중입니다",
+    "initializing": "에이전트 초기화 중...",
+    "settingUp": "연구 환경 설정 중",
+    "using": "사용 중",
+    "done": "완료",
+    "phases": {
+      "init": "초기화 중",
+      "planning": "계획 중",
+      "execution": "실행 중",
+      "synthesis": "종합 중",
+      "translating": "번역 중",
+      "complete": "완료"
+    }
+  }
+}

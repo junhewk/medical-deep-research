@@ -8,6 +8,14 @@ Evidence-Based Medical Research Assistant
 
 Medical Deep Research is an **evidence-based medicine (EBM)** research assistant for healthcare professionals and medical researchers. It uses autonomous AI agents to search medical literature, classify evidence levels, and synthesize findings into comprehensive reports.
 
+### What's New in v2.3 (Dynamic MeSH & Context Analysis)
+
+- **Dynamic MeSH Resolver**: Queries NLM's MeSH RDF API instead of hardcoded mappings
+- **LLM-based Context Analysis**: AI understands query intent (clinical, economic, safety, etc.)
+- **Korean Translation**: Full report translation with medical terminology preservation
+- **Citation Fix**: Prevents out-of-range citation numbers in synthesized reports
+- **Multi-provider Support**: OpenAI, Anthropic, Google LLMs with unified factory
+
 ### What's New in v2.0 (TypeScript Migration)
 
 - **Full TypeScript Stack**: Unified Next.js application (no Python backend)
@@ -22,11 +30,13 @@ Medical Deep Research is an **evidence-based medicine (EBM)** research assistant
 |---------|-------------|
 | **Architecture** | **LangGraph StateGraph** with autonomous planning |
 | **Query Framework** | **PICO** (clinical) + **PCC** (scoping reviews) |
-| **Terminology** | **MeSH term mapping** (60+ medical terms) |
+| **Terminology** | **Dynamic MeSH** via NLM API + SQLite caching |
+| **Context Analysis** | **LLM-based** intent detection (clinical, economic, safety) |
 | **Evidence** | **Evidence level tagging** (Level I-V) |
 | **Search** | PubMed, Scopus (BYOK), Cochrane |
+| **Translation** | Korean report translation with terminology preservation |
 | **Stack** | Next.js 14 + Drizzle ORM + SQLite |
-| **API Keys** | BYOK - OpenAI, Anthropic, Scopus, NCBI |
+| **API Keys** | BYOK - OpenAI, Anthropic, Google, Scopus, NCBI |
 
 ## Quick Start
 
@@ -118,7 +128,7 @@ medical-deep-research/web/
 │   ├── app/                    # Next.js App Router
 │   │   ├── api/
 │   │   │   ├── research/       # Research CRUD + agent trigger
-│   │   │   └── settings/       # API key management
+│   │   │   └── settings/       # API key + language management
 │   │   ├── research/           # Research pages
 │   │   │   ├── new/            # PICO/PCC query builder
 │   │   │   └── [id]/           # Research progress/results
@@ -128,24 +138,31 @@ medical-deep-research/web/
 │   │   ├── research/           # Progress, planning, tool log
 │   │   └── ui/                 # shadcn/ui components
 │   ├── db/
-│   │   ├── schema.ts           # Drizzle schema
+│   │   ├── schema.ts           # Drizzle schema (+ MeSH cache)
 │   │   └── index.ts            # SQLite connection
+│   ├── i18n/                   # Internationalization
 │   ├── lib/
 │   │   ├── agent/
 │   │   │   ├── deep-agent.ts   # LangGraph StateGraph agent
 │   │   │   └── tools/
-│   │   │       ├── pubmed.ts       # NCBI E-utilities
-│   │   │       ├── scopus.ts       # Elsevier API
-│   │   │       ├── cochrane.ts     # Cochrane + PubMed fallback
-│   │   │       ├── mesh-mapping.ts # Term mapping + evidence levels
-│   │   │       ├── pico-query.ts   # PICO → PubMed query
-│   │   │       └── pcc-query.ts    # PCC → PubMed query
+│   │   │       ├── pubmed.ts               # NCBI E-utilities
+│   │   │       ├── scopus.ts               # Elsevier API
+│   │   │       ├── cochrane.ts             # Cochrane + PubMed fallback
+│   │   │       ├── mesh-mapping.ts         # Static MeSH mapping
+│   │   │       ├── mesh-resolver.ts        # Dynamic MeSH via NLM API (new)
+│   │   │       ├── query-context-analyzer.ts # LLM context analysis (new)
+│   │   │       ├── llm-factory.ts          # Shared LLM creation (new)
+│   │   │       ├── pico-query.ts           # PICO → PubMed query
+│   │   │       ├── pcc-query.ts            # PCC → PubMed query
+│   │   │       ├── population-validator.ts # Population matching
+│   │   │       ├── claim-verifier.ts       # Citation verification
+│   │   │       └── report-translator.ts    # Korean translation (new)
 │   │   ├── research.ts         # React Query hooks
 │   │   ├── state-export.ts     # Markdown file export
 │   │   └── utils.ts
 │   └── types/
 └── data/
-    ├── medical-deep-research.db  # SQLite database
+    ├── medical-deep-research.db  # SQLite database (+ MeSH cache)
     └── research/                  # Markdown exports per research
 ```
 
@@ -160,8 +177,8 @@ picoQueries: { id, researchId, population, intervention, comparison, outcome, ..
 pccQueries: { id, researchId, population, concept, context, ... }
 
 // Results
-reports: { id, researchId, title, content, wordCount, referenceCount, ... }
-searchResults: { id, researchId, title, source, evidenceLevel, pmid, doi, ... }
+reports: { id, researchId, title, content, originalContent, language, wordCount, referenceCount, ... }
+searchResults: { id, researchId, title, source, evidenceLevel, pmid, doi, compositeScore, ... }
 
 // Agent state
 agentStates: { id, researchId, phase, planningSteps, toolExecutions, ... }
@@ -169,19 +186,29 @@ agentStates: { id, researchId, phase, planningSteps, toolExecutions, ... }
 // Configuration
 apiKeys: { id, service, apiKey, ... }
 settings: { key, value, category, ... }
+llmConfig: { id, provider, model, isDefault, ... }
+
+// MeSH cache (for dynamic NLM API lookups)
+meshCache: { id, label, alternateLabels, treeNumbers, broaderTerms, narrowerTerms, scopeNote, fetchedAt }
+meshLookupIndex: { id, searchTerm, meshId, matchType }
 ```
 
 ## Medical Research Tools
 
 | Tool | Description |
 |------|-------------|
-| `pico_query_builder` | Builds PubMed query from PICO components |
-| `pcc_query_builder` | Builds query from PCC components |
-| `mesh_mapping` | Maps terms to MeSH vocabulary |
+| `pico_query_builder` | Builds PubMed query from PICO with context analysis |
+| `pcc_query_builder` | Builds query from PCC with context analysis |
+| `mesh_resolver` | Dynamic MeSH lookup via NLM RDF API (new) |
+| `query_context_analyzer` | LLM-based query intent detection (new) |
+| `mesh_mapping` | Static MeSH term lookup (legacy) |
 | `evidence_level` | Classifies study evidence (I-V) |
 | `pubmed_search` | Searches PubMed via NCBI E-utilities |
 | `scopus_search` | Searches Scopus (requires API key) |
 | `cochrane_search` | Searches Cochrane Library |
+| `population_validator` | AI-based population matching |
+| `claim_verifier` | Post-synthesis verification against PubMed |
+| `report_translator` | Korean translation with terminology preservation (new) |
 
 ## Evidence Level Classification
 
@@ -236,8 +263,9 @@ All API keys are stored locally in SQLite. Configure in Settings > API Keys:
 
 | Service | Required | Description |
 |---------|----------|-------------|
-| OpenAI | Yes* | GPT-4o, GPT-4 for research |
-| Anthropic | Yes* | Claude 3.5 Sonnet alternative |
+| OpenAI | Yes* | GPT-4o, GPT-4o-mini for research |
+| Anthropic | Yes* | Claude 3.5 Sonnet, Claude 3.5 Haiku alternative |
+| Google | Yes* | Gemini 1.5 Pro, Gemini 1.5 Flash alternative |
 | NCBI | No | Higher PubMed rate limits (free) |
 | Scopus | No | Scopus/Elsevier database access |
 | Cochrane | No | Direct Cochrane API (falls back to PubMed) |
@@ -266,12 +294,12 @@ npm run lint
 
 Contributions welcome! Areas for improvement:
 
-- [ ] Additional MeSH term mappings
 - [ ] OpenAlex / Semantic Scholar integration
 - [ ] GRADE evidence assessment
 - [ ] Citation export (RIS, BibTeX)
-- [ ] Multilingual support
+- [ ] Additional language translations
 - [ ] Streaming progress updates
+- [ ] Mandatory claim verification node
 
 ## License
 

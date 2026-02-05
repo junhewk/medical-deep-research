@@ -23,13 +23,56 @@ export { cochraneSearchTool, searchCochrane, type CochraneReview } from "./cochr
 export {
   picoQueryBuilderTool,
   buildPubMedQuery,
+  buildPubMedQueryEnhanced,
   parsePopulationCriteria,
   generateExclusionKeywords,
   type PicoQueryInput,
   type GeneratedPicoQuery,
   type ParsedPopulationCriteria,
+  type EnhancedPicoQueryOptions,
 } from "./pico-query";
-export { pccQueryBuilderTool, buildPccPubMedQuery, type PccQueryInput, type GeneratedPccQuery } from "./pcc-query";
+export {
+  pccQueryBuilderTool,
+  buildPccPubMedQuery,
+  buildPccPubMedQueryEnhanced,
+  type PccQueryInput,
+  type GeneratedPccQuery,
+  type EnhancedPccQueryOptions,
+} from "./pcc-query";
+
+// Dynamic MeSH resolver (NLM API integration)
+export {
+  meshResolverTool,
+  lookupMeshTerm,
+  batchLookupMeshTerms,
+  extractMeshLabels,
+  extractKeyPhrases,
+  type MeshLookupResult,
+} from "./mesh-resolver";
+
+// Shared LLM factory
+export {
+  createLLM,
+  createVerifierLLM,
+  DEFAULT_FAST_MODELS,
+  type LLMProvider,
+  type SupportedLLM,
+} from "./llm-factory";
+
+// Query context analyzer (LLM-based semantic analysis)
+export {
+  queryContextAnalyzerTool,
+  analyzeQueryContext,
+  detectContextHeuristic,
+  createFallbackContextAnalysis,
+  getOutcomeDomainMeshTerms,
+  getOutcomeDomainTextTerms,
+  type QueryIntent,
+  type OutcomeDomain,
+  type ComparisonStructure,
+  type SearchModifiers,
+  type QueryContextAnalysis,
+} from "./query-context-analyzer";
 
 // Query formatting utilities
 export {
@@ -101,6 +144,8 @@ import { pccQueryBuilderTool } from "./pcc-query";
 import { meshMappingTool, evidenceLevelTool } from "./mesh-mapping";
 import { populationValidatorTool } from "./population-validator";
 import { claimVerifierTool } from "./claim-verifier";
+import { meshResolverTool } from "./mesh-resolver";
+import { queryContextAnalyzerTool } from "./query-context-analyzer";
 
 export const allMedicalTools = [
   pubmedSearchTool,
@@ -109,6 +154,8 @@ export const allMedicalTools = [
   picoQueryBuilderTool,
   pccQueryBuilderTool,
   meshMappingTool,
+  meshResolverTool,
+  queryContextAnalyzerTool,
   evidenceLevelTool,
   populationValidatorTool,
   claimVerifierTool,

@@ -16,11 +16,7 @@ import {
   Dna,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const navLinks = [
-  { href: "/research", label: "Research", icon: FileText },
-  { href: "/research/new", label: "New Query", icon: Plus, highlight: true },
-];
+import { useTranslations } from "@/i18n/client";
 
 export function Navigation() {
   const pathname = usePathname();
@@ -28,6 +24,12 @@ export function Navigation() {
   const [mounted, setMounted] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const { t } = useTranslations("navigation");
+
+  const navLinks = [
+    { href: "/research", labelKey: "research", icon: FileText },
+    { href: "/research/new", labelKey: "newQuery", icon: Plus, highlight: true },
+  ];
 
   useEffect(() => {
     setMounted(true);
@@ -83,10 +85,10 @@ export function Navigation() {
             </div>
             <div className="hidden sm:block">
               <h1 className="font-serif text-xl tracking-tight text-foreground">
-                Medical Deep Research
+                {t("title")}
               </h1>
               <p className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-medium">
-                Evidence-Based Analysis
+                {t("subtitle")}
               </p>
             </div>
           </Link>
@@ -108,7 +110,7 @@ export function Navigation() {
                     )}
                   >
                     <Icon className="h-4 w-4" />
-                    {link.label}
+                    {t(link.labelKey)}
                   </Button>
                 </Link>
               );
@@ -123,7 +125,7 @@ export function Navigation() {
                 variant="ghost"
                 size="icon"
                 className="w-9 h-9 rounded-xl hover:bg-muted"
-                aria-label="Settings"
+                aria-label={t("settings")}
               >
                 <Settings className="h-[18px] w-[18px]" />
               </Button>
@@ -202,7 +204,7 @@ export function Navigation() {
                     )}
                   >
                     <Icon className="h-4 w-4" />
-                    {link.label}
+                    {t(link.labelKey)}
                   </Button>
                 </Link>
               );

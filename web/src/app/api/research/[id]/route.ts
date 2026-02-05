@@ -8,10 +8,10 @@ import { safeJsonParse } from "@/lib/utils";
 // GET /api/research/[id] - Get research details and progress
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = params;
+    const { id } = await params;
 
     // Get research record
     const researchRecord = await db.query.research.findFirst({
@@ -114,10 +114,10 @@ export async function GET(
 // DELETE /api/research/[id] - Delete research
 export async function DELETE(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = params;
+    const { id } = await params;
 
     // Check if research exists
     const researchRecord = await db.query.research.findFirst({
@@ -141,10 +141,10 @@ export async function DELETE(
 // PATCH /api/research/[id] - Cancel research
 export async function PATCH(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = params;
+    const { id } = await params;
     const body = await request.json();
     const { action } = body;
 

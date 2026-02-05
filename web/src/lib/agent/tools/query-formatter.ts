@@ -157,7 +157,7 @@ export function buildProfessionalQuery(
  */
 export function formatQueryForDisplay(query: string): string {
   // Replace top-level AND with newlines
-  let formatted = query;
+  const formatted = query;
 
   // Track parenthesis depth
   let depth = 0;

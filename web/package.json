@@ -52,7 +52,7 @@
     "tailwind-merge": "^2.4.0",
     "tailwindcss-animate": "^1.0.7",
     "typescript-eslint": "^8.54.0",
-    "zod": "^3.23.8"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.13",

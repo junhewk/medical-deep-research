@@ -24,7 +24,6 @@ const MODEL_OPTIONS = {
     { id: "gemini-3-pro-preview", name: "Gemini 3 Pro (Recommended)", description: "Latest pro model" },
     { id: "gemini-3-flash-preview", name: "Gemini 3 Flash", description: "Fast, capable" },
     { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", description: "Balanced performance" },
-    { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite", description: "Lightweight, fast" },
   ],
 } as const;
 

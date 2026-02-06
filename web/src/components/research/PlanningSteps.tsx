@@ -1,32 +1,55 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import type { PlanningStep } from "@/lib/research";
+import type { PlanningStep, TodoItem } from "@/lib/research";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle, Circle, Loader2, XCircle, ListChecks } from "lucide-react";
+import { CheckCircle, Circle, Loader2, XCircle, ListChecks, ListTodo } from "lucide-react";
+import { useTranslations } from "@/i18n/client";
 
 interface PlanningStepsProps {
-  steps: PlanningStep[];
+  steps?: PlanningStep[];
+  todos?: TodoItem[];
 }
 
-export function PlanningSteps({ steps }: PlanningStepsProps) {
-  if (!steps || steps.length === 0) {
+/**
+ * Display research tasks - supports both legacy planning_steps and new todos format
+ * Prefers todos (DeepAgents-style) if available, falls back to planning_steps
+ */
+export function PlanningSteps({ steps, todos }: PlanningStepsProps) {
+  const { t } = useTranslations();
+
+  // Convert todos to steps format if available
+  const displaySteps: PlanningStep[] = todos && todos.length > 0
+    ? todos.map(todo => ({
+        id: todo.id,
+        name: todo.content,
+        status: todo.status,
+      }))
+    : steps || [];
+
+  const hasTodos = todos && todos.length > 0;
+
+  if (displaySteps.length === 0) {
     return (
       <Card>
         <CardHeader className="border-b border-border/50">
           <CardTitle className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-primary/10">
-              <ListChecks className="h-4 w-4 text-primary" />
+              {hasTodos ? (
+                <ListTodo className="h-4 w-4 text-primary" />
+              ) : (
+                <ListChecks className="h-4 w-4 text-primary" />
+              )}
             </div>
-            Planning Steps
+            {hasTodos ? t("progress.taskList") : t("progress.planningSteps")}
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-6">
           <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/30 border border-dashed">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
             <div>
-              <span className="text-sm font-medium">Generating research plan...</span>
-              <p className="text-xs text-muted-foreground mt-0.5">Analyzing query structure</p>
+              <span className="text-sm font-medium">{t("progress.generatingPlan")}</span>
+              <p className="text-xs text-muted-foreground mt-0.5">{t("progress.analyzingQuery")}</p>
             </div>
           </div>
         </CardContent>
@@ -34,7 +57,8 @@ export function PlanningSteps({ steps }: PlanningStepsProps) {
     );
   }
 
-  const completedCount = steps.filter((s) => s.status === "completed").length;
+  const completedCount = displaySteps.filter((s) => s.status === "completed").length;
+  const inProgressCount = displaySteps.filter((s) => s.status === "in_progress").length;
 
   return (
     <Card>
@@ -42,19 +66,30 @@ export function PlanningSteps({ steps }: PlanningStepsProps) {
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-primary/10">
-              <ListChecks className="h-4 w-4 text-primary" />
+              {hasTodos ? (
+                <ListTodo className="h-4 w-4 text-primary" />
+              ) : (
+                <ListChecks className="h-4 w-4 text-primary" />
+              )}
             </div>
-            Planning Steps
+            {hasTodos ? t("progress.taskList") : t("progress.planningSteps")}
           </CardTitle>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Progress:</span>
-            <span className="font-semibold text-foreground">{completedCount}/{steps.length}</span>
+          <div className="flex items-center gap-3 text-sm">
+            {inProgressCount > 0 && (
+              <span className="flex items-center gap-1.5 text-status-running">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {inProgressCount} {t("progress.active")}
+              </span>
+            )}
+            <span className="text-muted-foreground">
+              {completedCount}/{displaySteps.length} {t("progress.complete")}
+            </span>
           </div>
         </div>
       </CardHeader>
       <CardContent className="pt-6">
         <div className="space-y-2">
-          {steps.map((step, index) => (
+          {displaySteps.map((step, index) => (
             <div
               key={step.id}
               className={cn(
@@ -107,9 +142,11 @@ export function PlanningSteps({ steps }: PlanningStepsProps) {
                     {step.name}
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground mt-1 pl-5">
-                  {step.action}
-                </p>
+                {step.action && (
+                  <p className="text-xs text-muted-foreground mt-1 pl-5">
+                    {step.action}
+                  </p>
+                )}
               </div>
             </div>
           ))}

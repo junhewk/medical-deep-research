@@ -160,3 +160,16 @@ export const allMedicalTools = [
   populationValidatorTool,
   claimVerifierTool,
 ];
+
+// Re-export middleware tools (dynamically created per research session)
+export {
+  createWriteTodosTool,
+  createFilesystemTools,
+  createTaskTool,
+  getResearchTodos,
+  getSubagentExecutions,
+  SUBAGENT_DEFINITIONS,
+  type TodoItem,
+  type SubagentType,
+  type SubagentConfig,
+} from "../middleware";

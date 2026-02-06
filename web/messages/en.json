@@ -171,16 +171,25 @@
     "original": "Original",
     "originalDescription": "This is the original English report before translation. Medical terminology and citations remain consistent across both versions.",
     "copy": "Copy",
-    "copied": "Copied!"
+    "copied": "Copied!",
+    "taskList": "Task List",
+    "planningSteps": "Planning Steps",
+    "generatingPlan": "Generating research plan...",
+    "analyzingQuery": "Analyzing query structure",
+    "active": "active",
+    "complete": "complete"
   },
   "agent": {
     "title": "Agent Status",
     "translating": "Translating report to Korean...",
     "translatingDescription": "Converting research findings while preserving medical terminology",
+    "synthesizing": "Synthesizing evidence report...",
+    "synthesizingDescription": "Analyzing search results and generating comprehensive report",
     "initializing": "Initializing agent...",
     "settingUp": "Setting up research environment",
     "using": "Using",
     "done": "Done",
+    "researchComplete": "Research has finished successfully",
     "phases": {
       "init": "Initializing",
       "planning": "Planning",

@@ -200,6 +200,52 @@ export const meshLookupIndex = sqliteTable("mesh_lookup_index", {
   searchTermIdx: index("mesh_lookup_search_term_idx").on(table.searchTerm),
 }));
 
+// Research todos (dynamic task tracking for DeepAgents)
+export const researchTodos = sqliteTable("research_todos", {
+  id: text("id").primaryKey(),
+  researchId: text("research_id").references(() => research.id, { onDelete: "cascade" }),
+  text: text("text").notNull(),
+  status: text("status", { enum: ["pending", "in_progress", "completed"] }).default("pending"),
+  order: integer("order").default(0),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+}, (table) => ({
+  researchIdIdx: index("research_todos_research_id_idx").on(table.researchId),
+}));
+
+// Research files (context offloading storage for DeepAgents)
+export const researchFiles = sqliteTable("research_files", {
+  id: text("id").primaryKey(),
+  researchId: text("research_id").references(() => research.id, { onDelete: "cascade" }),
+  path: text("path").notNull(),
+  content: text("content"),
+  size: integer("size"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }),
+}, (table) => ({
+  researchIdIdx: index("research_files_research_id_idx").on(table.researchId),
+  pathIdx: index("research_files_path_idx").on(table.path),
+}));
+
+// Subagent executions (audit trail for DeepAgents)
+export const subagentExecutions = sqliteTable("subagent_executions", {
+  id: text("id").primaryKey(),
+  researchId: text("research_id").references(() => research.id, { onDelete: "cascade" }),
+  subagentName: text("subagent_name").notNull(),
+  task: text("task").notNull(),
+  result: text("result"),
+  duration: integer("duration"), // milliseconds
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+}, (table) => ({
+  researchIdIdx: index("subagent_executions_research_id_idx").on(table.researchId),
+}));
+
 // Type exports
 export type Research = typeof research.$inferSelect;
 export type NewResearch = typeof research.$inferInsert;
@@ -223,3 +269,9 @@ export type MeshCache = typeof meshCache.$inferSelect;
 export type NewMeshCache = typeof meshCache.$inferInsert;
 export type MeshLookupIndex = typeof meshLookupIndex.$inferSelect;
 export type NewMeshLookupIndex = typeof meshLookupIndex.$inferInsert;
+export type ResearchTodo = typeof researchTodos.$inferSelect;
+export type NewResearchTodo = typeof researchTodos.$inferInsert;
+export type ResearchFile = typeof researchFiles.$inferSelect;
+export type NewResearchFile = typeof researchFiles.$inferInsert;
+export type SubagentExecution = typeof subagentExecutions.$inferSelect;
+export type NewSubagentExecution = typeof subagentExecutions.$inferInsert;

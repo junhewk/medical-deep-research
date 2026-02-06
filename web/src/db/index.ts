@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { drizzle, BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema";
 import path from "path";
 import fs from "fs";
@@ -29,34 +29,41 @@ function getDataDir(): string {
   return path.join(process.cwd(), "data");
 }
 
-// Lazy initialization to avoid issues during build
-let _db: BetterSQLite3Database<typeof schema> | null = null;
-
-function initializeDb(): BetterSQLite3Database<typeof schema> {
-  if (_db) return _db;
-
-  // Use DATABASE_PATH env var directly if set, otherwise use default location
-  let dbPath: string;
+// Get database path
+function getDbPath(): string {
   if (process.env.DATABASE_PATH) {
-    dbPath = process.env.DATABASE_PATH;
+    const dbPath = process.env.DATABASE_PATH;
     // Ensure parent directory exists
     const parentDir = path.dirname(dbPath);
     if (!fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });
     }
-  } else {
-    const dataDir = getDataDir();
-    // Ensure data directory exists
-    try {
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-      }
-    } catch (error) {
-      console.error(`Failed to create data directory at ${dataDir}:`, error);
-      throw new Error(`Cannot create data directory: ${dataDir}`);
-    }
-    dbPath = path.join(dataDir, "medical-deep-research.db");
+    return dbPath;
   }
+
+  const dataDir = getDataDir();
+  // Ensure data directory exists
+  try {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+  } catch (error) {
+    console.error(`Failed to create data directory at ${dataDir}:`, error);
+    throw new Error(`Cannot create data directory: ${dataDir}`);
+  }
+  return path.join(dataDir, "medical-deep-research.db");
+}
+
+// Create database connection
+// Note: In Next.js dev mode, this may be called multiple times due to hot reloading
+// Using a global variable to cache the connection across hot reloads
+const globalForDb = globalThis as unknown as {
+  sqlite: Database.Database | undefined;
+  db: ReturnType<typeof drizzle<typeof schema>> | undefined;
+};
+
+function createDb() {
+  const dbPath = getDbPath();
 
   let sqlite: Database.Database;
   try {
@@ -68,17 +75,17 @@ function initializeDb(): BetterSQLite3Database<typeof schema> {
     throw new Error(`Cannot open database: ${dbPath}`);
   }
 
-  _db = drizzle(sqlite, { schema });
-  return _db;
+  return { sqlite, db: drizzle(sqlite, { schema }) };
 }
 
-// Export as a getter to ensure lazy initialization
-export const db = new Proxy({} as BetterSQLite3Database<typeof schema>, {
-  get(_, prop) {
-    const realDb = initializeDb();
-    return (realDb as unknown as Record<string | symbol, unknown>)[prop];
-  },
-});
+// Use cached connection in development to prevent connection leaks during hot reload
+if (!globalForDb.db) {
+  const { sqlite, db } = createDb();
+  globalForDb.sqlite = sqlite;
+  globalForDb.db = db;
+}
+
+export const db = globalForDb.db!;
 
 // Export schema for convenience
 export * from "./schema";

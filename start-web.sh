@@ -49,13 +49,10 @@ fi
 # Create data directory
 mkdir -p "$WEB_DIR/data"
 
-# Run database migrations if needed
-if [ ! -f "$WEB_DIR/data/medical-deep-research.db" ]; then
-    echo ""
-    echo "🗄️  Setting up database..."
-    npm run db:generate 2>/dev/null || true
-    npm run db:migrate 2>/dev/null || true
-fi
+# Initialize/upgrade database (safe for both new and existing databases)
+echo ""
+echo "🗄️  Initializing database..."
+npm run db:init
 
 # Copy .env if it doesn't exist
 if [ ! -f "$WEB_DIR/.env" ] && [ -f "$WEB_DIR/.env.example" ]; then

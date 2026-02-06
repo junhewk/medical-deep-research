@@ -171,16 +171,25 @@
     "original": "원문",
     "originalDescription": "번역 전 원본 영문 보고서입니다. 의학 용어와 인용은 두 버전 모두 동일하게 유지됩니다.",
     "copy": "복사",
-    "copied": "복사됨!"
+    "copied": "복사됨!",
+    "taskList": "작업 목록",
+    "planningSteps": "계획 단계",
+    "generatingPlan": "연구 계획 생성 중...",
+    "analyzingQuery": "검색어 구조 분석 중",
+    "active": "진행 중",
+    "complete": "완료"
   },
   "agent": {
     "title": "에이전트 상태",
     "translating": "보고서를 한국어로 번역 중...",
     "translatingDescription": "의학 용어를 유지하며 연구 결과를 변환 중입니다",
+    "synthesizing": "근거 보고서 작성 중...",
+    "synthesizingDescription": "검색 결과를 분석하고 종합 보고서를 생성 중입니다",
     "initializing": "에이전트 초기화 중...",
     "settingUp": "연구 환경 설정 중",
     "using": "사용 중",
     "done": "완료",
+    "researchComplete": "연구가 성공적으로 완료되었습니다",
     "phases": {
       "init": "초기화 중",
       "planning": "계획 중",

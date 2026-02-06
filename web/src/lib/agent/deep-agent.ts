@@ -1,9 +1,20 @@
-import { ChatOpenAI } from "@langchain/openai";
-import { ChatAnthropic } from "@langchain/anthropic";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+/**
+ * Medical Deep Research Agent - DeepAgents Architecture
+ *
+ * Refactored from hardcoded StateGraph to dynamic DeepAgents-style workflow:
+ * - Todo management via write_todos tool
+ * - Filesystem tools for context offloading
+ * - Subagent delegation for specialized tasks
+ *
+ * The agent decides its own workflow via todos instead of following
+ * a predetermined sequence of nodes.
+ */
+
 import { HumanMessage, SystemMessage, AIMessage } from "@langchain/core/messages";
+import { createLLM as createBaseLLM } from "./tools/llm-factory";
 import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import {
   allMedicalTools,
   calculateCompositeScore,
@@ -14,8 +25,14 @@ import {
   convertToScopusQuery,
   buildScopusQueryFromPICO,
 } from "./tools";
+import {
+  createWriteTodosTool,
+  createFilesystemTools,
+  createTaskTool,
+  type SubagentConfig,
+} from "./middleware";
 import { db } from "@/db";
-import { research, agentStates, reports, picoQueries, pccQueries, searchResults } from "@/db/schema";
+import { research, agentStates, reports, picoQueries, pccQueries, searchResults, researchTodos } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { generateId } from "@/lib/utils";
 import { exportStateToMarkdown } from "../state-export";
@@ -25,7 +42,6 @@ import type { Locale } from "@/i18n/config";
 
 /**
  * Normalize authors field: convert string to array if needed
- * Handles formats like "Smith AB, Jones CD et al."
  */
 function normalizeAuthors(authors: unknown): string[] {
   if (Array.isArray(authors)) {
@@ -41,7 +57,7 @@ function normalizeAuthors(authors: unknown): string[] {
 }
 
 /**
- * Fast model for each LLM provider (used for population validation)
+ * Fast model for each LLM provider
  */
 const FAST_MODELS: Record<string, string> = {
   anthropic: "claude-3-5-haiku-20241022",
@@ -81,7 +97,6 @@ const AgentState = Annotation.Root({
   }),
   toolExecutions: Annotation<ToolExecution[]>({
     reducer: (current, update) => {
-      // Merge: update existing or add new
       const merged = [...current];
       for (const exec of update) {
         const existingIdx = merged.findIndex(
@@ -113,7 +128,6 @@ const AgentState = Annotation.Root({
     value: (_, update) => update,
     default: () => "",
   }),
-  // Track which databases have been searched to avoid duplicates
   searchedDatabases: Annotation<Set<string>>({
     reducer: (current, update) => new Set([...Array.from(current), ...Array.from(update)]),
     default: () => new Set<string>(),
@@ -142,13 +156,21 @@ export interface MedicalResearchConfig {
     concept?: string;
     context?: string;
   };
-  language?: Locale; // 'en' or 'ko' - defaults to 'en'
+  language?: Locale;
   onProgress?: (progress: { phase: string; progress: number; message: string }) => void;
 }
 
-const SYSTEM_PROMPT = `You are a Medical Research Agent specialized in evidence-based medicine and systematic literature review.
+/**
+ * System prompt with DeepAgents-style workflow instructions
+ * Now a function to include dynamic API key availability info
+ */
+function getSystemPrompt(config: { scopusApiKey?: string; ncbiApiKey?: string }): string {
+  const scopusAvailable = !!config.scopusApiKey;
+  const ncbiAvailable = !!config.ncbiApiKey;
 
-Your capabilities:
+  return `You are a Medical Research Agent specialized in evidence-based medicine and systematic literature review.
+
+## Core Capabilities
 1. Build optimized search queries using PICO or PCC frameworks
 2. Search medical databases (PubMed, Scopus, Cochrane Library)
 3. Map terms to MeSH headings for better search results
@@ -156,110 +178,92 @@ Your capabilities:
 5. Validate study populations against target criteria
 6. Synthesize findings into comprehensive reports
 
+## Available API Keys
+${scopusAvailable ? "- **Scopus API key: AVAILABLE** - USE scopus_search for citation counts and additional coverage" : "- Scopus API key: NOT configured - skip Scopus searches"}
+${ncbiAvailable ? "- **NCBI API key: AVAILABLE** - Enhanced PubMed rate limits" : "- NCBI API key: NOT configured - using public PubMed access"}
+
+## Task Management (write_todos)
+
+Before starting research, use write_todos to create a task list:
+1. Analyze research question
+2. Build search query (PICO/PCC)
+3. Search databases (PubMed${scopusAvailable ? ", Scopus" : ""}, Cochrane)
+4. Evaluate and score results
+5. Synthesize findings
+6. Verify claims (optional)
+7. Generate final report
+
+Update todo status as you progress:
+- "pending" - Not yet started
+- "in_progress" - Currently working on
+- "completed" - Finished
+
+## Context Management (Filesystem)
+
+For large result sets (>20 articles):
+- Use write_file to store raw results: write_file("search_results/pubmed.json", JSON.stringify(results))
+- Read back with read_file when synthesizing
+- Use ls to see what files have been stored
+
+## Subagent Delegation (task)
+
+For complex research, delegate to specialized subagents:
+- database_search: Focused database querying (PubMed, Scopus, Cochrane)
+- report_synthesis: Evidence synthesis and report generation
+- claim_verification: Post-synthesis verification against PubMed ground truth
+
 ## Search Strategy Guidelines
 
 ### For Clinical Questions (PICO)
 **CRITICAL: Use "comprehensive" search strategy** to prioritize recent landmark trials:
 - Always set searchStrategy: "comprehensive" when calling pubmed_search
 - This ensures recent RCTs (last 3 years) from NEJM, Lancet, JAMA are prioritized
-- Prevents older high-citation papers from overshadowing recent definitive trials
 
 ### Population Matching
 **CRITICAL: Validate population matches** to avoid evidence misapplication:
-- If query specifies LVEF >= 50% (preserved EF), exclude HFrEF studies (LVEF < 40%)
-- If query specifies acute MI, distinguish from chronic heart failure studies
+- If query specifies LVEF >= 50% (preserved EF), exclude HFrEF studies
 - Use the population_validator tool to verify study populations match criteria
-- Flag or exclude studies with clear population mismatches
 
-### Numeric Criteria
-Pay attention to numeric thresholds in queries:
-- LVEF >= 50% = preserved ejection fraction (HFpEF)
-- LVEF 40-49% = mildly reduced (HFmrEF)
-- LVEF < 40% = reduced ejection fraction (HFrEF)
-- These populations have DIFFERENT treatment responses
-
-### Clinical Context Distinctions
-Never conflate:
-- Acute MI (post-infarction) ≠ Chronic heart failure
-- Primary prevention ≠ Secondary prevention
-- Inpatient/ICU setting ≠ Outpatient/clinic
-
-## Research Workflow
-
-1. **Analyze** the research question and identify:
-   - Key PICO/PCC components
-   - Numeric criteria (LVEF, age, eGFR thresholds)
-   - Clinical context (acute vs chronic, inpatient vs outpatient)
-
-2. **Build search query** using PICO or PCC framework:
-   - Query builder automatically generates exclusion terms
-   - Review generated exclusions to ensure population targeting
-
-3. **Search multiple databases** with appropriate strategy:
-   - Use "comprehensive" strategy for clinical questions in PubMed
-   - **Always search both PubMed AND Scopus** for comprehensive coverage
-   - Scopus provides citation counts and covers different journals
-   - Search Cochrane for existing systematic reviews
-   - API keys are automatically injected - just call the tools without specifying apiKey
-
-4. **Validate populations** for top results:
-   - Use population_validator tool for key studies
-   - Exclude or flag studies with population mismatches
-   - Document exclusion reasons
-
-5. **Synthesize** findings with population awareness:
-   - Only include studies with matching populations
-   - Note any population limitations in applicability
-   - Highlight recent landmark trials that directly answer the question
-
-## Prioritization Criteria
-1. Recent RCTs from landmark journals (NEJM, Lancet, JAMA, Circulation)
-2. Studies with exact population match
-3. Systematic reviews/meta-analyses from last 5 years
-4. Large, well-designed observational studies if RCTs unavailable
+### Database Coverage
+**ALWAYS search multiple databases** for comprehensive coverage:
+- PubMed (comprehensive strategy)
+- Cochrane for systematic reviews
+${scopusAvailable ? "- **Scopus (API key available)** - USE THIS for citation counts and broader coverage" : "- Scopus: SKIP (no API key configured)"}
 
 ## Report Format (Markdown)
-- Executive summary (highlight key finding, cite landmark trial)
-- Background
-- Methods (search strategy, databases, population criteria)
-- Results (organized by evidence level, note population characteristics)
-- Discussion (address population-specific considerations)
-- Conclusions
-- References (with PMIDs/DOIs, note journal)
+
+Structure reports with:
+1. Executive Summary (highlight key finding, cite landmark trial)
+2. Background
+3. Methods (search strategy, databases, population criteria)
+4. Results (organized by evidence level, with [n] citations)
+5. Discussion (address population-specific considerations)
+6. Conclusions
+7. References (Vancouver format with PMIDs/DOIs)
+
+## Anti-Hallucination Rules
+
+**CRITICAL:**
+- ONLY cite sources from your search results
+- ONLY state what abstracts EXPLICITLY say
+- If conclusion says "no significant difference", report that
+- NEVER reverse or contradict what actual abstracts state
 
 ## Post-Synthesis Verification
 
-After synthesizing findings into a report, consider using the claim_verifier tool to validate your claims:
+After synthesizing, use claim_verifier tool to validate:
 - Verifies PMIDs exist in PubMed
-- Fetches actual abstracts and compares against your claims
-- Flags any directional mismatches (e.g., claiming "benefit" when study found "no benefit")
+- Compares claims against actual abstracts
+- Flags directional mismatches`;
+}
 
-This is especially important for clinical questions where accurate representation of findings is critical.`;
-
+/** Create LLM for agent with temperature 0.3 for balanced creativity */
 function createLLM(
   provider: "openai" | "anthropic" | "google",
   model: string,
   apiKey: string
-): ChatOpenAI | ChatAnthropic | ChatGoogleGenerativeAI {
-  if (provider === "anthropic") {
-    return new ChatAnthropic({
-      modelName: model,
-      anthropicApiKey: apiKey,
-      temperature: 0.3,
-    });
-  }
-  if (provider === "google") {
-    return new ChatGoogleGenerativeAI({
-      model: model,
-      apiKey: apiKey,
-      temperature: 0.3,
-    });
-  }
-  return new ChatOpenAI({
-    modelName: model,
-    openAIApiKey: apiKey,
-    temperature: 0.3,
-  });
+) {
+  return createBaseLLM(provider, apiKey, model, 0.3);
 }
 
 /**
@@ -290,7 +294,6 @@ async function persistSearchResults(
 ): Promise<void> {
   if (!results || results.length === 0) return;
 
-  // Calculate scores and sort
   const scoredResults = results.map((result) => {
     const scores = calculateCompositeScore(
       result.evidenceLevel as EvidenceLevel | undefined,
@@ -300,15 +303,12 @@ async function persistSearchResults(
     return { ...result, ...scores };
   });
 
-  // Sort by composite score
   scoredResults.sort((a, b) => b.compositeScore - a.compositeScore);
 
-  // Insert with reference numbers
   for (let i = 0; i < scoredResults.length; i++) {
     const result = scoredResults[i];
     const refNumber = i + 1;
 
-    // Generate Vancouver citation
     const citationData: CitationData = {
       id: generateId(),
       title: result.title,
@@ -363,7 +363,6 @@ async function updateProgress(
   const stateId = generateId();
   const now = new Date();
 
-  // Update research status
   await db
     .update(research)
     .set({
@@ -372,7 +371,19 @@ async function updateProgress(
     })
     .where(eq(research.id, researchId));
 
-  // Determine active agents based on phase
+  // Get current todos for planning steps
+  const todos = await db.query.researchTodos.findMany({
+    where: eq(researchTodos.researchId, researchId),
+    orderBy: (todos, { asc }) => [asc(todos.order)],
+  });
+
+  const planningSteps = todos.map((t, i) => ({
+    id: String(i + 1),
+    name: t.text,
+    status: t.status === "completed" ? "completed" :
+            t.status === "in_progress" ? "in_progress" : "pending",
+  }));
+
   const activeAgents = [];
   if (phase === "planning") {
     activeAgents.push({ name: "Query Builder", status: "active" });
@@ -384,24 +395,21 @@ async function updateProgress(
     activeAgents.push({ name: "Report Translator", status: "active" });
   }
 
-  // Save agent state
   await db.insert(agentStates).values({
     id: stateId,
     researchId,
     phase,
     message,
     overallProgress: progress,
-    planningSteps: JSON.stringify(state.planningSteps || []),
+    planningSteps: JSON.stringify(planningSteps),
     activeAgents: JSON.stringify(activeAgents),
     toolExecutions: JSON.stringify(state.toolExecutions || []),
     createdAt: now,
     updatedAt: now,
   });
 
-  // Export to markdown
   await exportStateToMarkdown(researchId, phase, state);
 
-  // Callback
   if (onProgress) {
     onProgress({ phase, progress, message });
   }
@@ -409,26 +417,54 @@ async function updateProgress(
 
 export async function createMedicalResearchAgent(config: MedicalResearchConfig) {
   const llm = createLLM(config.llmProvider, config.model, config.apiKey);
-  const llmWithTools = llm.bindTools(allMedicalTools);
 
-  // Original tool node
-  const baseToolNode = new ToolNode(allMedicalTools);
+  // Build tool map for subagent access
+  const toolMap = new Map<string, DynamicStructuredTool>();
+  for (const tool of allMedicalTools) {
+    toolMap.set(tool.name, tool as DynamicStructuredTool);
+  }
 
-  // Wrapped tool node that tracks executions and injects API keys
+  // Create middleware tools
+  const writeTodosTool = createWriteTodosTool(config.researchId);
+  const filesystemTools = createFilesystemTools(config.researchId);
+  const subagentConfig: SubagentConfig = {
+    researchId: config.researchId,
+    apiKey: config.apiKey,
+    provider: config.llmProvider,
+    model: FAST_MODELS[config.llmProvider] || FAST_MODELS.openai,
+    ncbiApiKey: config.ncbiApiKey,
+    scopusApiKey: config.scopusApiKey,
+  };
+  const taskTool = createTaskTool(subagentConfig, toolMap);
+
+  // Combine all tools
+  const allTools = [
+    ...allMedicalTools,
+    writeTodosTool,
+    ...filesystemTools,
+    taskTool,
+  ];
+
+  const llmWithTools = llm.bindTools(allTools);
+  const baseToolNode = new ToolNode(allTools);
+  const fastModel = FAST_MODELS[config.llmProvider] || FAST_MODELS.openai;
+
+  // Track tool calls
+  let toolCallCount = 0;
+  const maxToolCalls = 15;
+
+  // Wrapped tool node with tracking and API key injection
   async function toolNodeWithTracking(state: AgentStateType): Promise<Partial<AgentStateType>> {
     const lastMessage = state.messages[state.messages.length - 1];
     let toolCalls = ("tool_calls" in lastMessage && Array.isArray(lastMessage.tool_calls))
       ? lastMessage.tool_calls
       : [];
 
-    // Inject API keys into tool calls that need them
-    const fastModel = FAST_MODELS[config.llmProvider] || FAST_MODELS.openai;
-
+    // Inject API keys
     toolCalls = toolCalls.map((tc: { name: string; args?: Record<string, unknown>; id?: string }) => {
       const args = { ...tc.args };
       const toolName = tc.name;
 
-      // Database search tools - inject respective API keys
       if (toolName === "scopus_search" && config.scopusApiKey && !args.apiKey) {
         args.apiKey = config.scopusApiKey;
       }
@@ -436,7 +472,6 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
         args.apiKey = config.ncbiApiKey;
       }
 
-      // LLM-powered tools - inject API key, provider, and fast model
       const llmPoweredTools = [
         "population_validator",
         "query_context_analyzer",
@@ -450,13 +485,11 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
         if (!args.model) args.model = fastModel;
       }
 
-      // Query builders - enable enhanced mode by default when API key available
       if ((toolName === "pico_query_builder" || toolName === "pcc_query_builder") &&
           args.enhanced === undefined && config.apiKey) {
         args.enhanced = true;
       }
 
-      // Claim verifier - needs provider + ncbiApiKey
       if (toolName === "claim_verifier") {
         if (!args.apiKey) args.apiKey = config.apiKey;
         if (!args.provider) args.provider = config.llmProvider;
@@ -467,12 +500,10 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       return { ...tc, args };
     });
 
-    // Update the message with injected API keys
     if ("tool_calls" in lastMessage) {
       (lastMessage as { tool_calls: typeof toolCalls }).tool_calls = toolCalls;
     }
 
-    // Create execution entries for tools about to run
     const startTime = Date.now();
     const newExecutions: ToolExecution[] = toolCalls.map((tc: { name: string; args?: Record<string, unknown> }) => ({
       tool: tc.name,
@@ -481,39 +512,41 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       startTime,
     }));
 
-    // Update progress to show tools running
+    // Determine phase from tool calls
+    const hasSearchTools = toolCalls.some((tc: { name: string }) =>
+      ["pubmed_search", "scopus_search", "cochrane_search", "task"].includes(tc.name)
+    );
+    const phase = hasSearchTools ? "searching" : "planning";
+
     await updateProgress(
       config.researchId,
-      "searching",
-      Math.min(30 + toolCallCount * 5, 60),
+      phase,
+      Math.min(30 + toolCallCount * 3, 70),
       `Running ${toolCalls.map((tc: { name: string }) => tc.name).join(", ")}`,
       { ...state, toolExecutions: [...(state.toolExecutions || []), ...newExecutions] },
       config.onProgress
     );
 
-    // Run the actual tools
     const result = await baseToolNode.invoke(state);
     const endTime = Date.now();
     const duration = (endTime - startTime) / 1000;
 
-    // Update executions with results
     const completedExecutions: ToolExecution[] = newExecutions.map((exec) => ({
       ...exec,
       status: "completed" as const,
       duration,
     }));
 
-    // Update progress with completed tools
     await updateProgress(
       config.researchId,
-      "searching",
-      Math.min(35 + toolCallCount * 5, 65),
+      phase,
+      Math.min(35 + toolCallCount * 3, 75),
       `Completed ${toolCalls.map((tc: { name: string }) => tc.name).join(", ")}`,
       { ...state, toolExecutions: [...(state.toolExecutions || []), ...completedExecutions] },
       config.onProgress
     );
 
-    // Extract search results from tool responses for persistence
+    // Extract search results
     const extractedResults: unknown[] = [];
     if (result.messages && Array.isArray(result.messages)) {
       for (const msg of result.messages) {
@@ -522,7 +555,6 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
             const content = typeof msg.content === "string" ? msg.content : "";
             const parsed = JSON.parse(content);
             if (parsed.success && parsed.articles && Array.isArray(parsed.articles)) {
-              // Add source info based on tool name
               const toolName = "name" in msg ? msg.name : "";
               const sourceMap: Record<string, string> = {
                 scopus_search: "scopus",
@@ -538,13 +570,12 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
               }
             }
           } catch {
-            // Not JSON or not a search result, skip
+            // Not JSON, skip
           }
         }
       }
     }
 
-    // Track which search databases were used
     const searchToolsUsed = new Set<string>();
     for (const tc of toolCalls) {
       if (["pubmed_search", "cochrane_search", "scopus_search"].includes(tc.name)) {
@@ -560,21 +591,14 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
     };
   }
 
-  // Agent node - decides what to do next
+  // Agent node
   async function agentNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
     const response = await llmWithTools.invoke(state.messages);
-
-    return {
-      messages: [response],
-    };
+    return { messages: [response] };
   }
 
-  // Track tool calls to determine when to synthesize
-  let toolCallCount = 0;
-  const maxToolCalls = 10; // Prevent infinite loops
-
   // Should continue function
-  function shouldContinue(state: AgentStateType): "tools" | "synthesize" | "translation" | "completion" {
+  function shouldContinue(state: AgentStateType): "tools" | "mandatorySearch" | "synthesize" | "completion" {
     const lastMessage = state.messages[state.messages.length - 1];
 
     if (
@@ -584,32 +608,26 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       lastMessage.tool_calls.length > 0
     ) {
       toolCallCount++;
-      // If we've made enough tool calls, force synthesis
       if (toolCallCount >= maxToolCalls) {
+        // Force mandatory search then synthesis
+        if (state.searchResults.length < 8) {
+          return "mandatorySearch";
+        }
         return "synthesize";
       }
       return "tools";
     }
 
-    // Check if we're in searching phase and have made at least one tool call
-    if (state.phase === "searching" && toolCallCount > 0) {
+    // No tool calls - check if we have enough results
+    if (state.searchResults.length >= 8) {
       return "synthesize";
     }
 
-    // If we've completed planning and agent returns without tool calls, synthesize
-    if (state.phase === "planning" && toolCallCount > 0) {
-      return "synthesize";
-    }
-
-    // Agent is done - check if translation is needed
-    const language = config.language || "en";
-    if (language !== "en") {
-      return "translation";
-    }
-    return "completion";
+    // Not enough results, try mandatory search
+    return "mandatorySearch";
   }
 
-  // Planning node
+  // Planning node - initiate research
   async function planningNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
     await updateProgress(
       config.researchId,
@@ -629,87 +647,43 @@ Intervention: ${config.picoComponents.intervention || "Not specified"}
 Comparison: ${config.picoComponents.comparison || "Not specified"}
 Outcome: ${config.picoComponents.outcome || "Not specified"}
 
-Use the pico_query_builder tool first, then search PubMed and Cochrane.`;
+First, use write_todos to create your task list.
+Then use the pico_query_builder tool, followed by database searches.`;
     } else if (config.queryType === "pcc" && config.pccComponents) {
       planningPrompt = `Build a PCC-based search strategy for:
 Population: ${config.pccComponents.population || "Not specified"}
 Concept: ${config.pccComponents.concept || "Not specified"}
 Context: ${config.pccComponents.context || "Not specified"}
 
-Use the pcc_query_builder tool first, then search PubMed.`;
+First, use write_todos to create your task list.
+Then use the pcc_query_builder tool, followed by database searches.`;
     } else {
       planningPrompt = `Analyze this research question and build an appropriate search strategy: "${config.query}"
 
-First determine if this is a clinical question (use PICO) or a scoping/qualitative question (use PCC).
-Then build the appropriate query and search multiple databases.`;
+First, use write_todos to create your task list.
+Then determine if this is a clinical question (use PICO) or a scoping question (use PCC).
+Build the appropriate query and search multiple databases.`;
     }
 
     return {
       messages: [new HumanMessage(planningPrompt)],
       phase: "planning",
       progress: 10,
-      planningSteps: [
-        { id: "1", name: "Analyze question", status: "completed" },
-        { id: "2", name: "Build search query", status: "in_progress" },
-        { id: "3", name: "Search databases", status: "pending" },
-        { id: "4", name: "Synthesize results", status: "pending" },
-      ],
     };
   }
 
-  // Search node
-  async function searchNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
-    await updateProgress(
-      config.researchId,
-      "searching",
-      40,
-      "Searching medical databases",
-      state,
-      config.onProgress
-    );
-
-    return {
-      phase: "searching",
-      progress: 40,
-      planningSteps: state.planningSteps.map((step) =>
-        step.id === "2"
-          ? { ...step, status: "completed" }
-          : step.id === "3"
-            ? { ...step, status: "in_progress" }
-            : step
-      ),
-    };
-  }
-
-  /**
-   * MANDATORY MULTI-DATABASE SEARCH NODE
-   *
-   * This node ensures ALL configured databases are searched regardless of LLM decisions.
-   * Problem solved: Agent sometimes decides not to call Scopus even when API key is configured.
-   *
-   * Search strategy:
-   * - ALWAYS call PubMed with comprehensive strategy (recent RCTs + systematic reviews + relevance)
-   * - ALWAYS call Cochrane for systematic reviews
-   * - If Scopus API key available: call Scopus
-   * - If no Scopus key: additional PubMed search with date sorting as fallback
-   */
+  // Mandatory multi-database search
   async function mandatorySearchNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
-    // Extract search query from the last tool call or messages
     let searchQuery = "";
 
-    // Try to find query from previous tool executions (e.g., pico_query_builder result)
     for (const msg of [...state.messages].reverse()) {
       if (msg && typeof msg === "object" && "content" in msg) {
         const content = typeof msg.content === "string" ? msg.content : "";
-
-        // Look for PubMed query in pico_query_builder result
         const pubmedQueryMatch = content.match(/pubmedQuery['":\s]+([^"'}\n]+)/i);
         if (pubmedQueryMatch) {
           searchQuery = pubmedQueryMatch[1].trim();
           break;
         }
-
-        // Fallback: look for any quoted query-like string
         const quotedMatch = content.match(/["']([^"']{20,}(?:AND|OR)[^"']+)["']/);
         if (quotedMatch) {
           searchQuery = quotedMatch[1];
@@ -718,7 +692,6 @@ Then build the appropriate query and search multiple databases.`;
       }
     }
 
-    // If no query found, construct from PICO/PCC components
     if (!searchQuery) {
       if (config.picoComponents) {
         const parts = [
@@ -741,14 +714,60 @@ Then build the appropriate query and search multiple databases.`;
     }
 
     if (!searchQuery) {
-      console.warn("Mandatory search: No query found, skipping");
       return { phase: "searching" };
     }
+
+    /**
+     * Simplify query by removing conditions progressively
+     * Used when complex query returns 0 results
+     */
+    function simplifyQuery(query: string): string[] {
+      const simplifiedQueries: string[] = [query];
+
+      // Strategy 1: Remove outcome-related terms (often most restrictive)
+      const withoutOutcome = query
+        .replace(/\s+AND\s+\([^)]*(?:stroke|mortality|death|outcome|endpoint|event)[^)]*\)/gi, "")
+        .replace(/\s+AND\s+[^(]*(?:stroke|mortality|death|outcome|endpoint|event)[^)AND]*/gi, "")
+        .trim();
+      if (withoutOutcome !== query && withoutOutcome.length > 10) {
+        simplifiedQueries.push(withoutOutcome);
+      }
+
+      // Strategy 2: Keep only P and I (population and intervention)
+      if (config.picoComponents) {
+        const pAndI = [
+          config.picoComponents.population,
+          config.picoComponents.intervention,
+        ].filter(Boolean).join(" AND ");
+        if (pAndI && pAndI !== query) {
+          simplifiedQueries.push(pAndI);
+        }
+      }
+
+      // Strategy 3: Use just the main concepts (extract key terms)
+      const keyTerms = query
+        .replace(/\[MeSH\]/gi, "")
+        .replace(/\[tiab\]/gi, "")
+        .replace(/\[majr\]/gi, "")
+        .replace(/["']/g, "")
+        .split(/\s+(?:AND|OR)\s+/i)
+        .map(t => t.trim())
+        .filter(t => t.length > 3 && !t.match(/^\(|\)$/))
+        .slice(0, 3)
+        .join(" ");
+      if (keyTerms && keyTerms.length > 10) {
+        simplifiedQueries.push(keyTerms);
+      }
+
+      return simplifiedQueries;
+    }
+
+    const queryVariants = simplifyQuery(searchQuery);
 
     await updateProgress(
       config.researchId,
       "searching",
-      45,
+      50,
       "Running mandatory multi-database search",
       state,
       config.onProgress
@@ -757,11 +776,9 @@ Then build the appropriate query and search multiple databases.`;
     const allResults: unknown[] = [];
     const executions: ToolExecution[] = [];
     const startTime = Date.now();
-
-    // Get already-searched databases from state
     const alreadySearched = state.searchedDatabases || new Set<string>();
 
-    // Search 1: PubMed with comprehensive strategy (if not already searched)
+    // PubMed
     if (!alreadySearched.has("pubmed_search")) {
       try {
         executions.push({ tool: "pubmed_search", status: "running", query: searchQuery, startTime });
@@ -790,7 +807,6 @@ Then build the appropriate query and search multiple databases.`;
           startTime,
         });
       } catch (error) {
-        console.error("Mandatory PubMed search failed:", error);
         executions.push({
           tool: "pubmed_search",
           status: "failed",
@@ -799,11 +815,9 @@ Then build the appropriate query and search multiple databases.`;
           startTime,
         });
       }
-    } else {
-      console.log("Skipping PubMed search - already executed by agent");
     }
 
-    // Search 2: Cochrane (if not already searched)
+    // Cochrane
     if (!alreadySearched.has("cochrane_search")) {
       try {
         const cochraneStartTime = Date.now();
@@ -832,7 +846,6 @@ Then build the appropriate query and search multiple databases.`;
           startTime: cochraneStartTime,
         });
       } catch (error) {
-        console.error("Mandatory Cochrane search failed:", error);
         executions.push({
           tool: "cochrane_search",
           status: "failed",
@@ -841,58 +854,45 @@ Then build the appropriate query and search multiple databases.`;
           startTime: Date.now(),
         });
       }
-    } else {
-      console.log("Skipping Cochrane search - already executed by agent");
     }
 
-    // Search 3: Scopus (IF API KEY AVAILABLE) OR additional PubMed date-sorted search
-    if (config.scopusApiKey) {
-      if (alreadySearched.has("scopus_search")) {
-        console.log("Skipping Scopus search - already executed by agent");
-      } else {
+    // Scopus
+    if (config.scopusApiKey && !alreadySearched.has("scopus_search")) {
       try {
         const scopusStartTime = Date.now();
-
-        // Build Scopus-native query (PubMed syntax like [tiab] doesn't work in Scopus)
-        // Prefer PICO components when available for best results
         const scopusQuery = config.picoComponents
           ? buildScopusQueryFromPICO(config.picoComponents)
           : convertToScopusQuery(searchQuery);
 
-        // Skip Scopus search if query conversion failed
-        if (!scopusQuery) {
-          console.warn("Could not build Scopus query, skipping Scopus search");
-          throw new Error("Empty Scopus query");
-        }
-
-        executions.push({ tool: "scopus_search", status: "running", query: scopusQuery, startTime: scopusStartTime });
-        const scopusResult = await scopusSearchTool.invoke({
-          query: scopusQuery,
-          maxResults: 20,
-          apiKey: config.scopusApiKey,
-          sortBy: "pubyear", // Sort by recent publications
-        });
-        const scopusData = JSON.parse(scopusResult);
-        if (scopusData.success && scopusData.articles) {
-          for (const article of scopusData.articles) {
-            allResults.push({
-              ...article,
-              authors: normalizeAuthors(article.authors),
-              source: "scopus",
-              pmid: article.scopusId,
-            });
+        if (scopusQuery) {
+          executions.push({ tool: "scopus_search", status: "running", query: scopusQuery, startTime: scopusStartTime });
+          const scopusResult = await scopusSearchTool.invoke({
+            query: scopusQuery,
+            maxResults: 20,
+            apiKey: config.scopusApiKey,
+            sortBy: "pubyear",
+          });
+          const scopusData = JSON.parse(scopusResult);
+          if (scopusData.success && scopusData.articles) {
+            for (const article of scopusData.articles) {
+              allResults.push({
+                ...article,
+                authors: normalizeAuthors(article.authors),
+                source: "scopus",
+                pmid: article.scopusId,
+              });
+            }
           }
+          executions.push({
+            tool: "scopus_search",
+            status: "completed",
+            query: searchQuery,
+            resultCount: scopusData.articles?.length || 0,
+            duration: (Date.now() - scopusStartTime) / 1000,
+            startTime: scopusStartTime,
+          });
         }
-        executions.push({
-          tool: "scopus_search",
-          status: "completed",
-          query: searchQuery,
-          resultCount: scopusData.articles?.length || 0,
-          duration: (Date.now() - scopusStartTime) / 1000,
-          startTime: scopusStartTime,
-        });
       } catch (error) {
-        console.error("Mandatory Scopus search failed:", error);
         executions.push({
           tool: "scopus_search",
           status: "failed",
@@ -901,56 +901,57 @@ Then build the appropriate query and search multiple databases.`;
           startTime: Date.now(),
         });
       }
-      } // Close the inner else block
-    } else {
-      // Fallback: Additional PubMed search sorted by date to find recent papers (no Scopus API key)
-      try {
-        const pubmedDateStartTime = Date.now();
-        executions.push({ tool: "pubmed_search_date", status: "running", query: searchQuery, startTime: pubmedDateStartTime });
-        const currentYear = new Date().getFullYear();
-        const pubmedDateResult = await pubmedSearchTool.invoke({
-          query: searchQuery,
-          maxResults: 20,
-          apiKey: config.ncbiApiKey,
-          searchStrategy: "standard",
-          dateRange: {
-            start: `${currentYear - 2}/01/01`,
-            end: `${currentYear}/12/31`,
-          },
-        });
-        const pubmedDateData = JSON.parse(pubmedDateResult);
-        if (pubmedDateData.success && pubmedDateData.articles) {
-          for (const article of pubmedDateData.articles) {
-            // Check for duplicates by PMID
-            const isDuplicate = allResults.some(
-              (r: unknown) => r && typeof r === "object" && "pmid" in r && (r as { pmid: string }).pmid === article.pmid
-            );
-            if (!isDuplicate) {
+    }
+
+    // If 0 results, try simplified queries as fallback
+    if (allResults.length === 0 && queryVariants.length > 1) {
+      console.log(`[MandatorySearch] 0 results with main query, trying ${queryVariants.length - 1} simplified queries`);
+
+      for (let i = 1; i < queryVariants.length; i++) {
+        const fallbackQuery = queryVariants[i];
+        console.log(`[MandatorySearch] Trying fallback query ${i}: ${fallbackQuery.substring(0, 100)}...`);
+
+        try {
+          const fallbackStartTime = Date.now();
+          executions.push({ tool: "pubmed_search", status: "running", query: fallbackQuery, startTime: fallbackStartTime });
+
+          const pubmedResult = await pubmedSearchTool.invoke({
+            query: fallbackQuery,
+            maxResults: 30,
+            apiKey: config.ncbiApiKey,
+            searchStrategy: "comprehensive",
+          });
+
+          const pubmedData = JSON.parse(pubmedResult);
+          if (pubmedData.success && pubmedData.articles && pubmedData.articles.length > 0) {
+            for (const article of pubmedData.articles) {
               allResults.push({
                 ...article,
                 authors: normalizeAuthors(article.authors),
                 source: "pubmed",
               });
             }
+            executions.push({
+              tool: "pubmed_search",
+              status: "completed",
+              query: fallbackQuery,
+              resultCount: pubmedData.articles.length,
+              duration: (Date.now() - fallbackStartTime) / 1000,
+              startTime: fallbackStartTime,
+            });
+            console.log(`[MandatorySearch] Fallback query ${i} found ${pubmedData.articles.length} results`);
+            break; // Found results, stop trying fallbacks
           }
+        } catch (error) {
+          console.log(`[MandatorySearch] Fallback query ${i} failed: ${error}`);
         }
-        executions.push({
-          tool: "pubmed_search_date",
-          status: "completed",
-          query: searchQuery,
-          resultCount: pubmedDateData.articles?.length || 0,
-          duration: (Date.now() - pubmedDateStartTime) / 1000,
-          startTime: pubmedDateStartTime,
-        });
-      } catch (error) {
-        console.error("Additional PubMed date search failed:", error);
       }
     }
 
     await updateProgress(
       config.researchId,
       "searching",
-      55,
+      60,
       `Found ${allResults.length} articles from mandatory multi-database search`,
       { ...state, toolExecutions: [...(state.toolExecutions || []), ...executions] },
       config.onProgress
@@ -963,33 +964,20 @@ Then build the appropriate query and search multiple databases.`;
     };
   }
 
-  // Minimum results threshold check
-  const MIN_SEARCH_RESULTS = 8;
-
-  function shouldContinueAfterMandatorySearch(state: AgentStateType): "agent" | "synthesize" {
-    // Check if we have enough results
-    if (state.searchResults.length >= MIN_SEARCH_RESULTS) {
-      return "synthesize";
-    }
-    // If not enough, let agent try additional searches
-    return "agent";
-  }
-
-  // Synthesis node
+  // Synthesis node - actually calls LLM to generate report
   async function synthesisNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
     await updateProgress(
       config.researchId,
       "synthesizing",
-      70,
+      75,
       "Synthesizing findings into report",
       state,
       config.onProgress
     );
 
-    // Build context with full abstracts and conclusions for grounded synthesis
     const searchResultsContext = state.searchResults
       .filter((r): r is PersistableResult => r !== null && typeof r === "object" && "title" in r)
-      .slice(0, 30) // Limit to top 30 for context length
+      .slice(0, 30)
       .map((r, i) => {
         const result = r as PersistableResult & { conclusion?: string; results?: string };
         return `
@@ -1005,7 +993,6 @@ PMID: ${result.pmid || "N/A"} | DOI: ${result.doi || "N/A"}
       })
       .join("\n");
 
-    // Count actual sources available
     const sourceCount = state.searchResults
       .filter((r): r is PersistableResult => r !== null && typeof r === "object" && "title" in r)
       .slice(0, 30).length;
@@ -1029,81 +1016,73 @@ For each claim about a study's findings:
 **THERE ARE EXACTLY ${sourceCount} SOURCES AVAILABLE (numbered [1] through [${sourceCount}]).**
 - You may ONLY use citation numbers [1] through [${sourceCount}]
 - DO NOT use any citation number higher than [${sourceCount}]
-- DO NOT invent or hallucinate citation numbers
-- If you cannot find a source to support a claim, do not make that claim
 - Every citation number MUST correspond to a source listed below
 
-## Example of CORRECT vs INCORRECT reporting:
-
-If abstract says: "Beta-blockers did not significantly reduce all-cause death (HR 0.94, 95% CI 0.79-1.12)"
-
-- CORRECT: "The study found no significant reduction in all-cause mortality [n]"
-- WRONG: "The study highlighted clinical benefits in reducing mortality [n]" ← HALLUCINATION
-
-## Search Results with FULL Abstracts and Conclusions (${sourceCount} sources):
+## Search Results with FULL Abstracts (${sourceCount} sources):
 ${searchResultsContext}
 
 ## Report Structure
 
-IMPORTANT: When citing sources, use numbered in-text citations [1], [2], [3], etc.
-Citation numbers MUST match the source numbers above (maximum: [${sourceCount}]).
-Include a complete "References" section at the end using Vancouver style:
+Use numbered in-text citations [1], [2], [3], etc.
+Maximum citation number is [${sourceCount}].
+Include a complete "References" section at the end using Vancouver style.
 
-Example Vancouver format:
-1. Smith AB, Jones CD. Title of article. Journal Name. 2024;45(3):123-130. doi:10.1000/example
-
-Structure the report with:
-1. Executive Summary (MUST accurately reflect the actual findings - if studies show no benefit, say so)
+Structure:
+1. Executive Summary
 2. Background
-3. Methods (search strategy used)
-4. Results (organized by evidence level, with [n] citations - quote or closely paraphrase actual findings)
-5. Discussion (acknowledge when evidence contradicts expectations)
-6. Conclusions (based ONLY on what the evidence actually shows)
-7. References (numbered list in Vancouver format)
+3. Methods
+4. Results (by evidence level, with citations)
+5. Discussion
+6. Conclusions
+7. References (Vancouver format)
 
-Focus on:
-- ACCURATELY representing study findings, even if negative/null results
-- Highlighting recent landmark trials from major journals (NEJM, Lancet, JAMA)
-- Noting any conflicting findings between older and newer studies
-- Identifying gaps in the literature
-- Providing clinical implications based on actual evidence`;
+Focus on accurately representing study findings, even if negative/null results.`;
+
+    // Actually call the LLM to generate the synthesis report
+    const synthesisLLM = createLLM(config.llmProvider, config.model, config.apiKey);
+    const response = await synthesisLLM.invoke([
+      new SystemMessage("You are a medical research synthesizer. Generate comprehensive evidence-based reports with proper citations."),
+      new HumanMessage(synthesisPrompt),
+    ]);
+
+    const synthesizedReport = typeof response.content === "string"
+      ? response.content
+      : JSON.stringify(response.content);
 
     return {
-      messages: [new HumanMessage(synthesisPrompt)],
+      messages: [new HumanMessage(synthesisPrompt), response],
       phase: "synthesizing",
-      progress: 70,
-      planningSteps: state.planningSteps.map((step) =>
-        step.id === "3"
-          ? { ...step, status: "completed" }
-          : step.id === "4"
-            ? { ...step, status: "in_progress" }
-            : step
-      ),
+      progress: 80,
+      synthesizedContent: synthesizedReport,
     };
   }
 
-  /**
-   * Translation node - translates the report to Korean if language is set
-   * This node runs after synthesis if language !== 'en'
-   */
+  // Translation node
   async function translationNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
-    // Extract the English report from the last AI message
-    const lastAIMessage = [...state.messages]
-      .reverse()
-      .find((m): m is AIMessage => m instanceof AIMessage);
+    // Use synthesizedContent from state (set by synthesisNode)
+    const englishReport = state.synthesizedContent || "";
 
-    const englishReport = lastAIMessage
-      ? typeof lastAIMessage.content === "string"
-        ? lastAIMessage.content
-        : JSON.stringify(lastAIMessage.content)
-      : "";
+    if (!englishReport) {
+      // Fallback: try to get from last AI message
+      const lastAIMessage = [...state.messages]
+        .reverse()
+        .find((m): m is AIMessage => m instanceof AIMessage);
+      const fallbackReport = lastAIMessage
+        ? typeof lastAIMessage.content === "string"
+          ? lastAIMessage.content
+          : JSON.stringify(lastAIMessage.content)
+        : "";
 
-    if (!englishReport || englishReport === "No report content generated.") {
-      return {
-        phase: "translating",
-        progress: 95,
-        originalContent: englishReport,
-      };
+      if (!fallbackReport) {
+        return {
+          phase: "translating",
+          progress: 95,
+          originalContent: "",
+        };
+      }
+
+      // Use fallback
+      return translationNode({ ...state, synthesizedContent: fallbackReport });
     }
 
     await updateProgress(
@@ -1123,24 +1102,13 @@ Focus on:
         config.model
       );
 
-      await updateProgress(
-        config.researchId,
-        "translating",
-        95,
-        "Translation complete",
-        state,
-        config.onProgress
-      );
-
       return {
         phase: "translating",
         progress: 95,
         synthesizedContent: translatedReport,
         originalContent: englishReport,
       };
-    } catch (error) {
-      console.error("Translation failed:", error);
-      // If translation fails, keep English report
+    } catch {
       return {
         phase: "translating",
         progress: 95,
@@ -1152,6 +1120,59 @@ Focus on:
 
   // Completion node
   async function completionNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
+    const hasResults = state.searchResults && state.searchResults.length > 0;
+    const hasSynthesis = !!state.synthesizedContent;
+
+    // Handle no results case
+    if (!hasResults && !hasSynthesis) {
+      const noResultsMessage = config.language === "ko"
+        ? `# 검색 결과 없음\n\n검색 조건에 맞는 문헌을 찾을 수 없습니다.\n\n## 검색 쿼리\n${config.query}\n\n## 권장 사항\n- 검색어를 더 일반적인 용어로 변경해 보세요\n- 특정 조건(예: BMI 수치, 특정 약물명)을 제거해 보세요\n- 영어 검색어를 사용해 보세요`
+        : `# No Results Found\n\nNo literature matching the search criteria was found.\n\n## Search Query\n${config.query}\n\n## Recommendations\n- Try using more general search terms\n- Remove specific conditions (e.g., exact BMI values, specific drug names)\n- Consider broadening the population criteria`;
+
+      await updateProgress(
+        config.researchId,
+        "complete",
+        100,
+        "Research complete - No results found",
+        state,
+        config.onProgress
+      );
+
+      const reportId = generateId();
+      const now = new Date();
+
+      await db.insert(reports).values({
+        id: reportId,
+        researchId: config.researchId,
+        title: `No Results: ${config.query.substring(0, 100)}`,
+        content: noResultsMessage,
+        originalContent: noResultsMessage,
+        language: config.language || "en",
+        format: "markdown",
+        wordCount: noResultsMessage.split(/\s+/).length,
+        referenceCount: 0,
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await db
+        .update(research)
+        .set({
+          status: "completed",
+          progress: 100,
+          completedAt: now,
+          errorMessage: "No search results found matching the criteria",
+        })
+        .where(eq(research.id, config.researchId));
+
+      return {
+        phase: "complete",
+        progress: 100,
+        synthesizedContent: noResultsMessage,
+      };
+    }
+
     await updateProgress(
       config.researchId,
       "complete",
@@ -1161,8 +1182,7 @@ Focus on:
       config.onProgress
     );
 
-    // Persist search results if available
-    if (state.searchResults && state.searchResults.length > 0) {
+    if (hasResults) {
       try {
         const persistableResults = state.searchResults
           .filter((r): r is PersistableResult => r !== null && typeof r === "object" && "title" in r)
@@ -1190,12 +1210,10 @@ Focus on:
       }
     }
 
-    // Get report content - use translated content if available, otherwise extract from messages
     let reportContent = state.synthesizedContent;
     let originalContent = state.originalContent;
     const language = config.language || "en";
 
-    // If no synthesizedContent, extract from last AI message (for non-translated flow)
     if (!reportContent) {
       const lastAIMessage = [...state.messages]
         .reverse()
@@ -1208,26 +1226,28 @@ Focus on:
         : "No report content generated.";
     }
 
-    // If English (no translation), original is same as final content
     if (language === "en") {
       originalContent = reportContent;
     }
 
-    // Save report to database
     const reportId = generateId();
     const now = new Date();
-
-    // Count unique reference numbers (e.g., [1], [2], [3])
-    const refMatches = reportContent.match(/\[\d+\]/g) || [];
-    const uniqueRefs = new Set(refMatches);
-    const referenceCount = uniqueRefs.size;
+    // Match citation patterns including combined refs like [4,5] or [1,2,3]
+    const refMatches = reportContent.match(/\[[\d,\s]+\]/g) || [];
+    const uniqueRefNumbers = new Set<string>();
+    for (const match of refMatches) {
+      // Extract all numbers from the match (handles [1], [4,5], [1, 2, 3])
+      const numbers = match.match(/\d+/g) || [];
+      numbers.forEach(n => uniqueRefNumbers.add(n));
+    }
+    const referenceCount = uniqueRefNumbers.size;
 
     await db.insert(reports).values({
       id: reportId,
       researchId: config.researchId,
       title: `Research Report: ${config.query.substring(0, 100)}`,
       content: reportContent,
-      originalContent: originalContent || reportContent, // Always store English original
+      originalContent: originalContent || reportContent,
       language,
       format: "markdown",
       wordCount: reportContent.split(/\s+/).length,
@@ -1237,7 +1257,6 @@ Focus on:
       updatedAt: now,
     });
 
-    // Update research record
     await db
       .update(research)
       .set({
@@ -1247,24 +1266,71 @@ Focus on:
       })
       .where(eq(research.id, config.researchId));
 
+    // Update final todos
+    const todos = await db.query.researchTodos.findMany({
+      where: eq(researchTodos.researchId, config.researchId),
+    });
+    for (const todo of todos) {
+      if (todo.status !== "completed") {
+        await db
+          .update(researchTodos)
+          .set({ status: "completed", completedAt: now })
+          .where(eq(researchTodos.id, todo.id));
+      }
+    }
+
     return {
       phase: "complete",
       progress: 100,
       synthesizedContent: reportContent,
       originalContent,
       language,
-      planningSteps: state.planningSteps.map((step) => ({ ...step, status: "completed" })),
     };
   }
 
+  // Track mandatory search attempts to prevent infinite loops
+  let mandatorySearchAttempts = 0;
+  const MAX_MANDATORY_SEARCH_ATTEMPTS = 2;
+
+  // Conditional routing after mandatory search
+  function shouldContinueAfterMandatorySearch(state: AgentStateType): "synthesize" | "agent" | "completion" {
+    mandatorySearchAttempts++;
+
+    // If we have enough results, synthesize
+    if (state.searchResults.length >= 8) {
+      return "synthesize";
+    }
+
+    // If we have some results (1-7), synthesize with what we have
+    if (state.searchResults.length > 0) {
+      console.log(`[MandatorySearch] Proceeding to synthesis with ${state.searchResults.length} results`);
+      return "synthesize";
+    }
+
+    // If we've hit max attempts with 0 results, go to completion with error
+    if (mandatorySearchAttempts >= MAX_MANDATORY_SEARCH_ATTEMPTS) {
+      console.log(`[MandatorySearch] No results found after ${mandatorySearchAttempts} attempts, completing with no results`);
+      return "completion";
+    }
+
+    // Otherwise, let agent try a different approach
+    return "agent";
+  }
+
+  // Conditional routing after synthesis
+  function shouldContinueAfterSynthesis(state: AgentStateType): "translation" | "completion" {
+    const language = config.language || "en";
+    if (language !== "en") {
+      return "translation";
+    }
+    return "completion";
+  }
+
   // Build the graph
-  // Flow: planning -> agent (query building) -> tools -> search -> mandatorySearch -> synthesize OR agent
-  // After synthesis: agent -> (if language != 'en') translation -> completion
   const workflow = new StateGraph(AgentState)
     .addNode("planning", planningNode)
     .addNode("agent", agentNode)
     .addNode("tools", toolNodeWithTracking)
-    .addNode("search", searchNode)
     .addNode("mandatorySearch", mandatorySearchNode)
     .addNode("synthesis", synthesisNode)
     .addNode("translation", translationNode)
@@ -1273,35 +1339,33 @@ Focus on:
     .addEdge("planning", "agent")
     .addConditionalEdges("agent", shouldContinue, {
       tools: "tools",
+      mandatorySearch: "mandatorySearch",
       synthesize: "synthesis",
-      translation: "translation",
       completion: "completion",
     })
-    .addEdge("tools", "search")
-    .addEdge("search", "mandatorySearch")
-    // After mandatory search, decide: synthesize if enough results, else let agent try more
+    .addEdge("tools", "agent")
     .addConditionalEdges("mandatorySearch", shouldContinueAfterMandatorySearch, {
       synthesize: "synthesis",
       agent: "agent",
+      completion: "completion",
     })
-    // After synthesis, agent continues, which will eventually reach translation or completion
-    .addEdge("synthesis", "agent")
-    // After translation, go to completion
+    // After synthesis, decide translation vs completion (not back to agent)
+    .addConditionalEdges("synthesis", shouldContinueAfterSynthesis, {
+      translation: "translation",
+      completion: "completion",
+    })
     .addEdge("translation", "completion")
-    // Terminal edge: completion node ends the graph
     .addEdge("completion", END);
 
   const graph = workflow.compile();
-
   return graph;
 }
 
 export async function runMedicalResearch(config: MedicalResearchConfig): Promise<AgentStateType> {
   const graph = await createMedicalResearchAgent(config);
 
-  // Initialize with system message
   const initialState = {
-    messages: [new SystemMessage(SYSTEM_PROMPT)],
+    messages: [new SystemMessage(getSystemPrompt(config))],
     researchId: config.researchId,
     phase: "init",
     progress: 0,
@@ -1313,7 +1377,6 @@ export async function runMedicalResearch(config: MedicalResearchConfig): Promise
     originalContent: "",
   };
 
-  // Save PICO/PCC query if provided
   if (config.queryType === "pico" && config.picoComponents) {
     await db.insert(picoQueries).values({
       id: generateId(),
@@ -1335,8 +1398,6 @@ export async function runMedicalResearch(config: MedicalResearchConfig): Promise
     });
   }
 
-  // Run the graph
   const finalState = await graph.invoke(initialState);
-
   return finalState;
 }

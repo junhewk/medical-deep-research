@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { research, agentStates, reports, picoQueries, pccQueries, searchResults } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { research, agentStates, reports, picoQueries, pccQueries, searchResults, researchTodos, subagentExecutions } from "@/db/schema";
+import { eq, desc, asc } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { readResearchState, readFinalReport } from "@/lib/state-export";
 import { safeJsonParse } from "@/lib/utils";
@@ -51,6 +51,18 @@ export async function GET(
       where: eq(searchResults.researchId, id),
     });
 
+    // Get todos (dynamic task tracking)
+    const todos = await db.query.researchTodos.findMany({
+      where: eq(researchTodos.researchId, id),
+      orderBy: [asc(researchTodos.order)],
+    });
+
+    // Get subagent executions
+    const subagentHistory = await db.query.subagentExecutions.findMany({
+      where: eq(subagentExecutions.researchId, id),
+      orderBy: [desc(subagentExecutions.createdAt)],
+    });
+
     // Read state markdown file
     const stateMarkdown = await readResearchState(id);
     const reportMarkdown = await readFinalReport(id);
@@ -96,12 +108,30 @@ export async function GET(
             id: report.id,
             title: report.title,
             content: report.content,
+            originalContent: report.originalContent,
+            language: report.language,
             wordCount: report.wordCount,
             referenceCount: report.referenceCount,
             createdAt: report.createdAt,
           }
         : null,
       result: report?.content || null,
+      // Dynamic todos (DeepAgents-style task tracking)
+      todos: todos.map(t => ({
+        id: t.id,
+        content: t.text,
+        status: t.status,
+        order: t.order,
+        completedAt: t.completedAt,
+      })),
+      // Subagent execution history
+      subagentHistory: subagentHistory.map(s => ({
+        id: s.id,
+        subagent: s.subagentName,
+        task: s.task,
+        duration: s.duration,
+        createdAt: s.createdAt,
+      })),
       stateMarkdown,
       reportMarkdown,
     });

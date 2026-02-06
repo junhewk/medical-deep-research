@@ -44,6 +44,24 @@ export interface Report {
   createdAt?: string;
 }
 
+// Todo item (DeepAgents-style dynamic task tracking)
+export interface TodoItem {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  order: number;
+  completedAt?: string;
+}
+
+// Subagent execution (audit trail)
+export interface SubagentExecution {
+  id: string;
+  subagent: string;
+  task: string;
+  duration?: number;
+  createdAt?: string;
+}
+
 export interface ResearchProgress {
   id: string;
   query: string;
@@ -69,6 +87,9 @@ export interface ResearchProgress {
   durationSeconds?: number;
   stateMarkdown?: string;
   reportMarkdown?: string;
+  // DeepAgents-style dynamic tracking
+  todos?: TodoItem[];
+  subagentHistory?: SubagentExecution[];
 }
 
 export interface ResearchListItem {

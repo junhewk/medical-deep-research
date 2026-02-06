@@ -1,10 +1,13 @@
-import type { Config } from "drizzle-kit";
+import { defineConfig } from "drizzle-kit";
 
-export default {
+export default defineConfig({
   schema: "./src/db/schema.ts",
-  out: "./drizzle",
   dialect: "sqlite",
   dbCredentials: {
-    url: process.env.DATABASE_PATH || "./data/medical-research.db",
+    url: process.env.DATABASE_PATH || "./data/medical-deep-research.db",
   },
-} satisfies Config;
+  // Use verbose mode for better debugging
+  verbose: true,
+  // Strict mode ensures schema changes are intentional
+  strict: false,
+});

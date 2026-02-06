@@ -421,7 +421,7 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
 
       {/* Progress Panels */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <PlanningSteps steps={data.planning_steps || []} />
+        <PlanningSteps steps={data.planning_steps} todos={data.todos} />
         <AgentStatus agents={data.active_agents || []} phase={data.phase} />
       </div>
 

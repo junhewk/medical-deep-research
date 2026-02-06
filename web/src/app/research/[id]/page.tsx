@@ -1,5 +1,6 @@
 "use client";
 
+import { use } from "react";
 import { useRouter } from "next/navigation";
 import { useResearch, useDeleteResearch } from "@/lib/research";
 import { ResearchProgressView } from "@/components/research/ResearchProgress";
@@ -20,17 +21,18 @@ import { ArrowLeft, Loader2, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 interface ResearchPageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export default function ResearchPage({ params }: ResearchPageProps) {
+  const { id } = use(params);
   const router = useRouter();
-  const { data, isLoading, error } = useResearch(params.id);
+  const { data, isLoading, error } = useResearch(id);
   const deleteResearch = useDeleteResearch();
 
   const handleDelete = async () => {
     try {
-      await deleteResearch.mutateAsync(params.id);
+      await deleteResearch.mutateAsync(id);
       router.push("/research");
     } catch (err) {
       console.error("Failed to delete research:", err);

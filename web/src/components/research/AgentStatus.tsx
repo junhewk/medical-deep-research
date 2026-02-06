@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Bot, Loader2, CheckCircle2, XCircle, Sparkles, Languages } from "lucide-react";
+import { Bot, Loader2, CheckCircle2, XCircle, Sparkles, Languages, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "@/i18n/client";
 
@@ -39,24 +39,30 @@ export function AgentStatus({ agents, phase }: AgentStatusProps) {
   const hasActiveAgents = agents && agents.length > 0;
   const phaseInfo = phase ? phaseConfig[phase] || { labelKey: phase, color: "text-muted-foreground" } : null;
   const isTranslating = phase === "translating";
+  const isSynthesizing = phase === "synthesizing";
 
   return (
     <Card className={cn(
       "transition-all duration-500",
-      isTranslating && "ring-2 ring-[hsl(275,45%,48%)]/30 shadow-lg shadow-[hsl(275,45%,48%)]/10"
+      isTranslating && "ring-2 ring-[hsl(275,45%,48%)]/30 shadow-lg shadow-[hsl(275,45%,48%)]/10",
+      isSynthesizing && "ring-2 ring-[hsl(175,60%,40%)]/30 shadow-lg shadow-[hsl(175,60%,40%)]/10"
     )}>
       <CardHeader className={cn(
         "border-b border-border/50 transition-colors duration-500",
-        isTranslating && "bg-gradient-to-r from-[hsl(275,45%,48%)]/8 via-[hsl(275,45%,48%)]/4 to-transparent"
+        isTranslating && "bg-gradient-to-r from-[hsl(275,45%,48%)]/8 via-[hsl(275,45%,48%)]/4 to-transparent",
+        isSynthesizing && "bg-gradient-to-r from-[hsl(175,60%,40%)]/8 via-[hsl(175,60%,40%)]/4 to-transparent"
       )}>
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-3">
             <div className={cn(
               "p-2 rounded-lg transition-colors duration-500",
-              isTranslating ? "bg-[hsl(275,45%,48%)]/15" : "bg-primary/10"
+              isTranslating ? "bg-[hsl(275,45%,48%)]/15" :
+              isSynthesizing ? "bg-[hsl(175,60%,40%)]/15" : "bg-primary/10"
             )}>
               {isTranslating ? (
                 <Languages className="h-4 w-4 text-[hsl(275,45%,48%)] animate-pulse" />
+              ) : isSynthesizing ? (
+                <FileText className="h-4 w-4 text-[hsl(175,60%,40%)] animate-pulse" />
               ) : (
                 <Sparkles className="h-4 w-4 text-primary" />
               )}
@@ -69,7 +75,8 @@ export function AgentStatus({ agents, phase }: AgentStatusProps) {
               className={cn(
                 "capitalize font-medium transition-all duration-300",
                 phaseInfo.color,
-                isTranslating && "border-[hsl(275,45%,48%)]/40 bg-[hsl(275,45%,48%)]/10 animate-pulse"
+                isTranslating && "border-[hsl(275,45%,48%)]/40 bg-[hsl(275,45%,48%)]/10 animate-pulse",
+                isSynthesizing && "border-[hsl(175,60%,40%)]/40 bg-[hsl(175,60%,40%)]/10 animate-pulse"
               )}
             >
               {phaseInfo.icon && <phaseInfo.icon className="h-3 w-3 mr-1.5" />}
@@ -79,6 +86,36 @@ export function AgentStatus({ agents, phase }: AgentStatusProps) {
         </div>
       </CardHeader>
       <CardContent className="pt-6">
+        {/* Synthesis Progress Indicator */}
+        {isSynthesizing && (
+          <div className="mb-4 p-4 rounded-xl bg-gradient-to-br from-[hsl(175,60%,40%)]/10 via-[hsl(175,60%,40%)]/5 to-transparent border border-[hsl(175,60%,40%)]/20 animate-fade-in">
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <div className="p-3 rounded-xl bg-[hsl(175,60%,40%)]/15">
+                  <FileText className="h-6 w-6 text-[hsl(175,60%,40%)]" />
+                </div>
+                {/* Orbiting dots animation */}
+                <div className="absolute -inset-1 rounded-xl">
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 w-1.5 h-1.5 rounded-full bg-[hsl(175,60%,40%)] animate-[orbit_2s_linear_infinite]" />
+                  <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1 w-1.5 h-1.5 rounded-full bg-[hsl(175,60%,40%)]/60 animate-[orbit_2s_linear_infinite_1s]" />
+                </div>
+              </div>
+              <div className="flex-1">
+                <p className="font-serif text-base font-medium text-[hsl(175,60%,40%)]">
+                  {t("agent.synthesizing")}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t("agent.synthesizingDescription")}
+                </p>
+                {/* Progress bar */}
+                <div className="mt-3 h-1 rounded-full bg-[hsl(175,60%,40%)]/20 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-[hsl(175,60%,40%)] to-[hsl(205,65%,50%)] rounded-full animate-[translateProgress_2s_ease-in-out_infinite]" style={{ width: '60%' }} />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Translation Progress Indicator */}
         {isTranslating && (
           <div className="mb-4 p-4 rounded-xl bg-gradient-to-br from-[hsl(275,45%,48%)]/10 via-[hsl(275,45%,48%)]/5 to-transparent border border-[hsl(275,45%,48%)]/20 animate-fade-in">
@@ -110,17 +147,33 @@ export function AgentStatus({ agents, phase }: AgentStatusProps) {
         )}
 
         {!hasActiveAgents ? (
-          <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/30 border border-dashed">
-            <div className="p-2 rounded-lg bg-primary/10">
-              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          phase === "complete" ? (
+            // Research complete - show completion message instead of initializing
+            <div className="flex items-center gap-4 p-4 rounded-xl bg-status-completed/10 border border-status-completed/20">
+              <div className="p-2 rounded-lg bg-status-completed/10">
+                <CheckCircle2 className="h-5 w-5 text-status-completed" />
+              </div>
+              <div>
+                <span className="text-sm font-medium text-status-completed">{t("agent.phases.complete")}</span>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {t("agent.researchComplete")}
+                </p>
+              </div>
             </div>
-            <div>
-              <span className="text-sm font-medium">{t("agent.initializing")}</span>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {t("agent.settingUp")}
-              </p>
+          ) : (
+            // Still initializing
+            <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/30 border border-dashed">
+              <div className="p-2 rounded-lg bg-primary/10">
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              </div>
+              <div>
+                <span className="text-sm font-medium">{t("agent.initializing")}</span>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {t("agent.settingUp")}
+                </p>
+              </div>
             </div>
-          </div>
+          )
         ) : (
           <div className="space-y-2">
             {agents.map((agent, index) => (

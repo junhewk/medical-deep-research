@@ -4,6 +4,9 @@ import { EVIDENCE_LEVELS } from "./mesh-mapping";
 
 const NCBI_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
+/** Rate limit delay helper */
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 /**
  * Landmark medical journals - papers from these sources get scoring bonus
  */
@@ -37,6 +40,61 @@ export function isLandmarkJournal(journal: string): boolean {
   if (!journal) return false;
   const journalLower = journal.toLowerCase();
   return LANDMARK_JOURNALS.some((lj) => journalLower.includes(lj.toLowerCase()));
+}
+
+/**
+ * Sanitize query for PubMed API
+ * Removes invalid characters and converts natural language to keyword queries
+ */
+function sanitizePubMedQuery(query: string): string {
+  let sanitized = query;
+
+  // Remove comparison operators that PubMed doesn't accept
+  sanitized = sanitized.replace(/>=|<=|>|</g, " ");
+
+  // Remove "e.g." and "i.e." notations
+  sanitized = sanitized.replace(/\be\.g\.\s*/gi, "");
+  sanitized = sanitized.replace(/\bi\.e\.\s*/gi, "");
+
+  // Remove sentence-ending periods (but keep periods in abbreviations like "et al.")
+  sanitized = sanitized.replace(/\.\s*(?=AND|OR|NOT|$)/gi, " ");
+  sanitized = sanitized.replace(/\.\s*$/g, "");
+
+  // Remove percentage signs (50% -> 50)
+  sanitized = sanitized.replace(/%/g, "");
+
+  // Remove "Patients with" and similar prose phrases
+  sanitized = sanitized.replace(/\bPatients?\s+with\b/gi, "");
+  sanitized = sanitized.replace(/\bSubjects?\s+with\b/gi, "");
+  sanitized = sanitized.replace(/\bIndividuals?\s+with\b/gi, "");
+  sanitized = sanitized.replace(/\bRoutine\b/gi, "");
+
+  // Remove common filler words that aren't useful in queries
+  sanitized = sanitized.replace(/\btherapy\s*\(e\.g\.,?/gi, "therapy ");
+  sanitized = sanitized.replace(/\bsuch\s+as\b/gi, "");
+
+  // Fix double spaces
+  sanitized = sanitized.replace(/\s+/g, " ");
+
+  // Remove leading/trailing whitespace
+  sanitized = sanitized.trim();
+
+  // If query looks like natural language (has many words without operators), extract key terms
+  const hasOperators = /\b(AND|OR|NOT)\b/.test(sanitized);
+  const wordCount = sanitized.split(/\s+/).length;
+
+  if (!hasOperators && wordCount > 10) {
+    // Extract medical terms (capitalized words, abbreviations, drug names)
+    const medicalTerms = sanitized.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|[A-Z]{2,}(?:\d+)?|[a-z]+ol\b|[a-z]+ine\b|[a-z]+ide\b)/g);
+    if (medicalTerms && medicalTerms.length >= 3) {
+      // Join key terms with OR for broader search
+      const uniqueTerms = [...new Set(medicalTerms)].slice(0, 8);
+      sanitized = uniqueTerms.join(" OR ");
+      console.log(`[PubMed] Converted natural language query to: ${sanitized}`);
+    }
+  }
+
+  return sanitized;
 }
 
 /**
@@ -192,33 +250,93 @@ async function searchPubMed(
     dateRange?: DateRange;
   }
 ): Promise<string[]> {
-  const params = new URLSearchParams({
-    db: "pubmed",
-    term: query,
-    retmax: maxResults.toString(),
-    retmode: "json",
-    sort: options?.sort || "relevance",
-  });
+  // Sanitize query to remove invalid characters
+  const sanitizedQuery = sanitizePubMedQuery(query);
 
-  // Add date range filtering
-  if (options?.dateRange) {
-    if (options.dateRange.start) {
-      params.append("mindate", options.dateRange.start);
-    }
-    if (options.dateRange.end) {
-      params.append("maxdate", options.dateRange.end);
-    }
-    params.append("datetype", "pdat"); // Publication date
+  if (!sanitizedQuery || sanitizedQuery.length < 3) {
+    console.log(`[PubMed] Query too short after sanitization: "${sanitizedQuery}"`);
+    return [];
   }
 
-  if (apiKey) {
-    params.append("api_key", apiKey);
+  // Use API key directly if provided (validation happens on NCBI side)
+  const validApiKey = apiKey?.trim() || undefined;
+  if (validApiKey) {
+    console.log(`[PubMed] Using NCBI API key (${validApiKey.length} chars)`);
   }
 
-  const response = await fetch(`${NCBI_BASE_URL}/esearch.fcgi?${params}`);
+  const buildParams = (useApiKey: boolean): URLSearchParams => {
+    const params = new URLSearchParams({
+      db: "pubmed",
+      term: sanitizedQuery,
+      retmax: maxResults.toString(),
+      retmode: "json",
+      sort: options?.sort || "relevance",
+    });
+
+    if (options?.dateRange) {
+      if (options.dateRange.start) {
+        params.append("mindate", options.dateRange.start);
+      }
+      if (options.dateRange.end) {
+        params.append("maxdate", options.dateRange.end);
+      }
+      params.append("datetype", "pdat");
+    }
+
+    if (useApiKey && validApiKey) {
+      params.append("api_key", validApiKey);
+    }
+
+    return params;
+  };
+
+  const fetchWithRetry = async (useApiKey: boolean, retries = 3): Promise<Response> => {
+    const params = buildParams(useApiKey);
+    const url = `${NCBI_BASE_URL}/esearch.fcgi?${params}`;
+
+    for (let attempt = 0; attempt < retries; attempt++) {
+      const response = await fetch(url);
+
+      if (response.ok) return response;
+
+      // Handle rate limiting (429)
+      if (response.status === 429) {
+        const waitTime = Math.pow(2, attempt) * 500; // 500ms, 1s, 2s
+        console.warn(`[PubMed] Rate limited, waiting ${waitTime}ms before retry...`);
+        await delay(waitTime);
+        continue;
+      }
+
+      // Return non-retryable errors
+      return response;
+    }
+
+    // Last attempt
+    return fetch(url);
+  };
+
+  // First attempt with API key
+  let response = await fetchWithRetry(!!validApiKey);
+
+  // If API key error, retry without the key
+  if (!response.ok && validApiKey) {
+    const errorBody = await response.text().catch(() => "");
+    const isApiKeyError = errorBody.includes("API key invalid") ||
+                          errorBody.includes("api-key") ||
+                          response.status === 400;
+
+    if (isApiKeyError) {
+      console.warn(`[PubMed] API key rejected by NCBI, retrying without API key...`);
+      response = await fetchWithRetry(false);
+    }
+  }
 
   if (!response.ok) {
-    throw new Error(`PubMed search failed: ${response.statusText}`);
+    const errorBody = await response.text().catch(() => "");
+    console.error(`[PubMed] Search failed for query: "${sanitizedQuery}"`);
+    console.error(`[PubMed] Response: ${response.status} ${response.statusText}`);
+    if (errorBody) console.error(`[PubMed] Error body: ${errorBody.substring(0, 500)}`);
+    throw new Error(`PubMed search failed: ${response.statusText} (query: "${sanitizedQuery.substring(0, 100)}...")`);
   }
 
   const data = (await response.json()) as ESearchResult;
@@ -231,18 +349,40 @@ async function fetchPubMedDetails(
 ): Promise<PubMedArticle[]> {
   if (pmids.length === 0) return [];
 
-  const params = new URLSearchParams({
-    db: "pubmed",
-    id: pmids.join(","),
-    retmode: "xml",
-    rettype: "abstract",
-  });
+  // Use API key directly if provided
+  const validApiKey = apiKey?.trim() || undefined;
 
-  if (apiKey) {
-    params.append("api_key", apiKey);
+  const buildParams = (useApiKey: boolean): URLSearchParams => {
+    const params = new URLSearchParams({
+      db: "pubmed",
+      id: pmids.join(","),
+      retmode: "xml",
+      rettype: "abstract",
+    });
+
+    if (useApiKey && validApiKey) {
+      params.append("api_key", validApiKey);
+    }
+
+    return params;
+  };
+
+  let params = buildParams(!!validApiKey);
+  let response = await fetch(`${NCBI_BASE_URL}/efetch.fcgi?${params}`);
+
+  // Retry without API key if it was rejected
+  if (!response.ok && validApiKey) {
+    const errorBody = await response.text().catch(() => "");
+    const isApiKeyError = errorBody.includes("API key invalid") ||
+                          errorBody.includes("api-key") ||
+                          response.status === 400;
+
+    if (isApiKeyError) {
+      console.warn(`[PubMed] API key rejected for fetch, retrying without API key...`);
+      params = buildParams(false);
+      response = await fetch(`${NCBI_BASE_URL}/efetch.fcgi?${params}`);
+    }
   }
-
-  const response = await fetch(`${NCBI_BASE_URL}/efetch.fcgi?${params}`);
 
   if (!response.ok) {
     throw new Error(`PubMed fetch failed: ${response.statusText}`);
@@ -362,6 +502,8 @@ async function comprehensivePubMedSearch(
     console.warn("Phase 1 (RCT) search failed:", error);
   }
 
+  await delay(200); // Rate limit between phases
+
   // Phase 2: Recent systematic reviews (last 5 years)
   const srQuery = `${query} AND (systematic review[pt] OR meta-analysis[pt])`;
   try {
@@ -376,6 +518,8 @@ async function comprehensivePubMedSearch(
   } catch (error) {
     console.warn("Phase 2 (SR) search failed:", error);
   }
+
+  await delay(200); // Rate limit between phases
 
   // Phase 3: Relevance-based (standard search, no date filter)
   try {

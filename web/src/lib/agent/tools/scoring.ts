@@ -244,7 +244,7 @@ export interface UnifiedSearchResult {
   doi?: string;
   pmid?: string;
   url?: string;
-  source: "pubmed" | "scopus" | "cochrane" | "other";
+  source: "pubmed" | "scopus" | "cochrane" | "openalex" | "semantic_scholar" | "other";
   evidenceLevel?: EvidenceLevel | string;
   publicationType?: string;
   citationCount?: number;

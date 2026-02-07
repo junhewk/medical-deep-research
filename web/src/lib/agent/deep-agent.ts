@@ -22,6 +22,8 @@ import {
   pubmedSearchTool,
   scopusSearchTool,
   cochraneSearchTool,
+  openalexSearchTool,
+  semanticScholarSearchTool,
   convertToScopusQuery,
   buildScopusQueryFromPICO,
 } from "./tools";
@@ -181,13 +183,15 @@ function getSystemPrompt(config: { scopusApiKey?: string; ncbiApiKey?: string })
 ## Available API Keys
 ${scopusAvailable ? "- **Scopus API key: AVAILABLE** - USE scopus_search for citation counts and additional coverage" : "- Scopus API key: NOT configured - skip Scopus searches"}
 ${ncbiAvailable ? "- **NCBI API key: AVAILABLE** - Enhanced PubMed rate limits" : "- NCBI API key: NOT configured - using public PubMed access"}
+- **OpenAlex: ALWAYS AVAILABLE** - No API key needed. Use openalex_search for citation counts and broad coverage
+- **Semantic Scholar: ALWAYS AVAILABLE** - No API key needed. Use semantic_scholar_search for additional coverage (Medicine-filtered)
 
 ## Task Management (write_todos)
 
 Before starting research, use write_todos to create a task list:
 1. Analyze research question
 2. Build search query (PICO/PCC)
-3. Search databases (PubMed${scopusAvailable ? ", Scopus" : ""}, Cochrane)
+3. Search databases (PubMed${scopusAvailable ? ", Scopus" : ", OpenAlex, Semantic Scholar"}, Cochrane)
 4. Evaluate and score results
 5. Synthesize findings
 6. Verify claims (optional)
@@ -228,7 +232,7 @@ For complex research, delegate to specialized subagents:
 **ALWAYS search multiple databases** for comprehensive coverage:
 - PubMed (comprehensive strategy)
 - Cochrane for systematic reviews
-${scopusAvailable ? "- **Scopus (API key available)** - USE THIS for citation counts and broader coverage" : "- Scopus: SKIP (no API key configured)"}
+${scopusAvailable ? "- **Scopus (API key available)** - USE THIS for citation counts and broader coverage" : "- Scopus: SKIP (no API key configured)\n- **OpenAlex** - USE for citation counts and broad coverage (free, no key needed)\n- **Semantic Scholar** - USE for additional Medicine-filtered coverage (free, no key needed)"}
 
 ## Report Format (Markdown)
 
@@ -514,7 +518,7 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
 
     // Determine phase from tool calls
     const hasSearchTools = toolCalls.some((tc: { name: string }) =>
-      ["pubmed_search", "scopus_search", "cochrane_search", "task"].includes(tc.name)
+      ["pubmed_search", "scopus_search", "cochrane_search", "openalex_search", "semantic_scholar_search", "task"].includes(tc.name)
     );
     const phase = hasSearchTools ? "searching" : "planning";
 
@@ -559,6 +563,8 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
               const sourceMap: Record<string, string> = {
                 scopus_search: "scopus",
                 cochrane_search: "cochrane",
+                openalex_search: "openalex",
+                semantic_scholar_search: "semantic_scholar",
               };
               const source = sourceMap[toolName] || "pubmed";
               for (const article of parsed.articles) {
@@ -578,7 +584,7 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
 
     const searchToolsUsed = new Set<string>();
     for (const tc of toolCalls) {
-      if (["pubmed_search", "cochrane_search", "scopus_search"].includes(tc.name)) {
+      if (["pubmed_search", "cochrane_search", "scopus_search", "openalex_search", "semantic_scholar_search"].includes(tc.name)) {
         searchToolsUsed.add(tc.name);
       }
     }
@@ -597,6 +603,9 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
     return { messages: [response] };
   }
 
+  // Dynamic minimum article threshold: 8 with Scopus, 5 without
+  const minArticleThreshold = config.scopusApiKey ? 8 : 5;
+
   // Should continue function
   function shouldContinue(state: AgentStateType): "tools" | "mandatorySearch" | "synthesize" | "completion" {
     const lastMessage = state.messages[state.messages.length - 1];
@@ -610,7 +619,7 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       toolCallCount++;
       if (toolCallCount >= maxToolCalls) {
         // Force mandatory search then synthesis
-        if (state.searchResults.length < 8) {
+        if (state.searchResults.length < minArticleThreshold) {
           return "mandatorySearch";
         }
         return "synthesize";
@@ -619,7 +628,7 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
     }
 
     // No tool calls - check if we have enough results
-    if (state.searchResults.length >= 8) {
+    if (state.searchResults.length >= minArticleThreshold) {
       return "synthesize";
     }
 
@@ -903,6 +912,82 @@ Build the appropriate query and search multiple databases.`;
       }
     }
 
+    // OpenAlex (free fallback when Scopus unavailable)
+    if (!config.scopusApiKey && !alreadySearched.has("openalex_search")) {
+      try {
+        const oaStartTime = Date.now();
+        executions.push({ tool: "openalex_search", status: "running", query: searchQuery, startTime: oaStartTime });
+        const oaResult = await openalexSearchTool.invoke({
+          query: searchQuery,
+          maxResults: 15,
+        });
+        const oaData = JSON.parse(oaResult);
+        if (oaData.success && oaData.articles) {
+          for (const article of oaData.articles) {
+            allResults.push({
+              ...article,
+              authors: normalizeAuthors(article.authors),
+              source: "openalex",
+            });
+          }
+        }
+        executions.push({
+          tool: "openalex_search",
+          status: "completed",
+          query: searchQuery,
+          resultCount: oaData.articles?.length || 0,
+          duration: (Date.now() - oaStartTime) / 1000,
+          startTime: oaStartTime,
+        });
+      } catch (error) {
+        executions.push({
+          tool: "openalex_search",
+          status: "failed",
+          query: searchQuery,
+          error: error instanceof Error ? error.message : "Unknown error",
+          startTime: Date.now(),
+        });
+      }
+    }
+
+    // Semantic Scholar (free fallback when Scopus unavailable)
+    if (!config.scopusApiKey && !alreadySearched.has("semantic_scholar_search")) {
+      try {
+        const s2StartTime = Date.now();
+        executions.push({ tool: "semantic_scholar_search", status: "running", query: searchQuery, startTime: s2StartTime });
+        const s2Result = await semanticScholarSearchTool.invoke({
+          query: searchQuery,
+          maxResults: 15,
+        });
+        const s2Data = JSON.parse(s2Result);
+        if (s2Data.success && s2Data.articles) {
+          for (const article of s2Data.articles) {
+            allResults.push({
+              ...article,
+              authors: normalizeAuthors(article.authors),
+              source: "semantic_scholar",
+            });
+          }
+        }
+        executions.push({
+          tool: "semantic_scholar_search",
+          status: "completed",
+          query: searchQuery,
+          resultCount: s2Data.articles?.length || 0,
+          duration: (Date.now() - s2StartTime) / 1000,
+          startTime: s2StartTime,
+        });
+      } catch (error) {
+        executions.push({
+          tool: "semantic_scholar_search",
+          status: "failed",
+          query: searchQuery,
+          error: error instanceof Error ? error.message : "Unknown error",
+          startTime: Date.now(),
+        });
+      }
+    }
+
     // If 0 results, try simplified queries as fallback
     if (allResults.length === 0 && queryVariants.length > 1) {
       console.log(`[MandatorySearch] 0 results with main query, trying ${queryVariants.length - 1} simplified queries`);
@@ -948,18 +1033,84 @@ Build the appropriate query and search multiple databases.`;
       }
     }
 
+    // Deduplicate results by PMID or DOI
+    // Priority: pubmed > cochrane > scopus > semantic_scholar > openalex
+    const sourcePriority: Record<string, number> = {
+      pubmed: 0,
+      cochrane: 1,
+      scopus: 2,
+      semantic_scholar: 3,
+      openalex: 4,
+    };
+
+    const seenPmids = new Map<string, number>();
+    const seenDois = new Map<string, number>();
+    const deduplicatedResults: unknown[] = [];
+
+    for (const result of allResults) {
+      const r = result as PersistableResult & { pmid?: string; doi?: string };
+      const source = r.source || "other";
+      const priority = sourcePriority[source] ?? 5;
+      let isDuplicate = false;
+
+      if (r.pmid) {
+        const existingPriority = seenPmids.get(r.pmid);
+        if (existingPriority !== undefined) {
+          if (priority < existingPriority) {
+            // Replace existing with higher-priority source
+            const idx = deduplicatedResults.findIndex((d) => {
+              const dd = d as PersistableResult & { pmid?: string };
+              return dd.pmid === r.pmid;
+            });
+            if (idx >= 0) deduplicatedResults[idx] = result;
+            seenPmids.set(r.pmid, priority);
+          }
+          isDuplicate = true;
+        } else {
+          seenPmids.set(r.pmid, priority);
+        }
+      }
+
+      if (!isDuplicate && r.doi) {
+        const normalizedDoi = r.doi.toLowerCase();
+        const existingPriority = seenDois.get(normalizedDoi);
+        if (existingPriority !== undefined) {
+          if (priority < existingPriority) {
+            const idx = deduplicatedResults.findIndex((d) => {
+              const dd = d as PersistableResult & { doi?: string };
+              return dd.doi?.toLowerCase() === normalizedDoi;
+            });
+            if (idx >= 0) deduplicatedResults[idx] = result;
+            seenDois.set(normalizedDoi, priority);
+          }
+          isDuplicate = true;
+        } else {
+          seenDois.set(normalizedDoi, priority);
+        }
+      }
+
+      if (!isDuplicate) {
+        deduplicatedResults.push(result);
+      }
+    }
+
+    const removedCount = allResults.length - deduplicatedResults.length;
+    if (removedCount > 0) {
+      console.log(`[MandatorySearch] Deduplicated: removed ${removedCount} duplicates (${allResults.length} → ${deduplicatedResults.length})`);
+    }
+
     await updateProgress(
       config.researchId,
       "searching",
       60,
-      `Found ${allResults.length} articles from mandatory multi-database search`,
+      `Found ${deduplicatedResults.length} articles from mandatory multi-database search`,
       { ...state, toolExecutions: [...(state.toolExecutions || []), ...executions] },
       config.onProgress
     );
 
     return {
       phase: "searching",
-      searchResults: allResults,
+      searchResults: deduplicatedResults,
       toolExecutions: executions,
     };
   }
@@ -997,6 +1148,25 @@ PMID: ${result.pmid || "N/A"} | DOI: ${result.doi || "N/A"}
       .filter((r): r is PersistableResult => r !== null && typeof r === "object" && "title" in r)
       .slice(0, 30).length;
 
+    // Determine which databases were actually searched from results
+    const sourceDisplayNames: Record<string, string> = {
+      pubmed: "PubMed",
+      cochrane: "Cochrane Library",
+      scopus: "Scopus",
+      openalex: "OpenAlex",
+      semantic_scholar: "Semantic Scholar",
+    };
+    const actualSources = new Set<string>();
+    for (const r of state.searchResults) {
+      const result = r as PersistableResult;
+      if (result?.source && sourceDisplayNames[result.source]) {
+        actualSources.add(sourceDisplayNames[result.source]);
+      }
+    }
+    const databasesSearched = actualSources.size > 0
+      ? Array.from(actualSources).join(", ")
+      : "PubMed";
+
     const synthesisPrompt = `Based on the search results gathered, synthesize a comprehensive evidence-based report.
 
 ## CRITICAL ANTI-HALLUCINATION INSTRUCTIONS
@@ -1030,7 +1200,7 @@ Include a complete "References" section at the end using Vancouver style.
 Structure:
 1. Executive Summary
 2. Background
-3. Methods
+3. Methods - **State that the following databases were searched: ${databasesSearched}**
 4. Results (by evidence level, with citations)
 5. Discussion
 6. Conclusions
@@ -1297,7 +1467,7 @@ Focus on accurately representing study findings, even if negative/null results.`
     mandatorySearchAttempts++;
 
     // If we have enough results, synthesize
-    if (state.searchResults.length >= 8) {
+    if (state.searchResults.length >= minArticleThreshold) {
       return "synthesize";
     }
 

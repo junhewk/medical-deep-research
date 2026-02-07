@@ -18,6 +18,17 @@ export {
   type ScopusSortBy,
 } from "./scopus";
 export { cochraneSearchTool, searchCochrane, type CochraneReview } from "./cochrane";
+export {
+  openalexSearchTool,
+  searchOpenAlex,
+  reconstructAbstract,
+  type OpenAlexArticle,
+} from "./openalex";
+export {
+  semanticScholarSearchTool,
+  searchSemanticScholar,
+  type SemanticScholarArticle,
+} from "./semantic-scholar";
 
 // Query builder tools
 export {
@@ -146,11 +157,15 @@ import { populationValidatorTool } from "./population-validator";
 import { claimVerifierTool } from "./claim-verifier";
 import { meshResolverTool } from "./mesh-resolver";
 import { queryContextAnalyzerTool } from "./query-context-analyzer";
+import { openalexSearchTool } from "./openalex";
+import { semanticScholarSearchTool } from "./semantic-scholar";
 
 export const allMedicalTools = [
   pubmedSearchTool,
   scopusSearchTool,
   cochraneSearchTool,
+  openalexSearchTool,
+  semanticScholarSearchTool,
   picoQueryBuilderTool,
   pccQueryBuilderTool,
   meshMappingTool,

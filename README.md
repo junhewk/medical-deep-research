@@ -8,6 +8,14 @@ Evidence-Based Medical Research Assistant
 
 Medical Deep Research is an **evidence-based medicine (EBM)** research assistant for healthcare professionals and medical researchers. It uses autonomous AI agents to search medical literature, classify evidence levels, and synthesize findings into comprehensive reports.
 
+### What's New in v2.6 (Free Database Fallbacks)
+
+- **OpenAlex Integration**: Free search with citation counts and broad coverage (no API key needed)
+- **Semantic Scholar Integration**: Free Medicine-filtered search (no API key needed)
+- **Smart Fallbacks**: Automatically uses OpenAlex + Semantic Scholar when Scopus unavailable
+- **Deduplication**: Cross-database deduplication by PMID/DOI with source priority
+- **Dynamic Thresholds**: Article minimums adjust based on available database coverage
+
 ### What's New in v2.3 (Dynamic MeSH & Context Analysis)
 
 - **Dynamic MeSH Resolver**: Queries NLM's MeSH RDF API instead of hardcoded mappings
@@ -33,7 +41,7 @@ Medical Deep Research is an **evidence-based medicine (EBM)** research assistant
 | **Terminology** | **Dynamic MeSH** via NLM API + SQLite caching |
 | **Context Analysis** | **LLM-based** intent detection (clinical, economic, safety) |
 | **Evidence** | **Evidence level tagging** (Level I-V) |
-| **Search** | PubMed, Scopus (BYOK), Cochrane |
+| **Search** | PubMed, Scopus (BYOK), Cochrane, OpenAlex, Semantic Scholar |
 | **Translation** | Korean report translation with terminology preservation |
 | **Stack** | Next.js 14 + Drizzle ORM + SQLite |
 | **API Keys** | BYOK - OpenAI, Anthropic, Google, Scopus, NCBI |
@@ -156,7 +164,9 @@ medical-deep-research/web/
 │   │   │       ├── pcc-query.ts            # PCC → PubMed query
 │   │   │       ├── population-validator.ts # Population matching
 │   │   │       ├── claim-verifier.ts       # Citation verification
-│   │   │       └── report-translator.ts    # Korean translation (new)
+│   │   │       ├── report-translator.ts    # Korean translation
+│   │   │       ├── openalex.ts            # OpenAlex search (free)
+│   │   │       └── semantic-scholar.ts    # Semantic Scholar search (free)
 │   │   ├── research.ts         # React Query hooks
 │   │   ├── state-export.ts     # Markdown file export
 │   │   └── utils.ts
@@ -206,6 +216,8 @@ meshLookupIndex: { id, searchTerm, meshId, matchType }
 | `pubmed_search` | Searches PubMed via NCBI E-utilities |
 | `scopus_search` | Searches Scopus (requires API key) |
 | `cochrane_search` | Searches Cochrane Library |
+| `openalex_search` | Searches OpenAlex (free, no API key) |
+| `semantic_scholar_search` | Searches Semantic Scholar (free, Medicine-filtered) |
 | `population_validator` | AI-based population matching |
 | `claim_verifier` | Post-synthesis verification against PubMed |
 | `report_translator` | Korean translation with terminology preservation (new) |
@@ -241,6 +253,10 @@ meshLookupIndex: { id, searchTerm, meshId, matchType }
 │  │  MeSH    │  │  PubMed  │  │  Scopus  │  │ Cochrane │    │
 │  │ Mapping  │  │  Search  │  │  Search  │  │  Search  │    │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
+│  ┌──────────┐  ┌───────────────┐                            │
+│  │ OpenAlex │  │   Semantic    │                            │
+│  │  Search  │  │   Scholar     │                            │
+│  └──────────┘  └───────────────┘                            │
 │                          ↓                                   │
 ├─────────────────────────────────────────────────────────────┤
 │                 EVIDENCE PROCESSING                          │
@@ -294,7 +310,7 @@ npm run lint
 
 Contributions welcome! Areas for improvement:
 
-- [ ] OpenAlex / Semantic Scholar integration
+- [x] OpenAlex / Semantic Scholar integration
 - [ ] GRADE evidence assessment
 - [ ] Citation export (RIS, BibTeX)
 - [ ] Additional language translations

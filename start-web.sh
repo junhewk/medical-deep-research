@@ -49,10 +49,10 @@ fi
 # Create data directory
 mkdir -p "$WEB_DIR/data"
 
-# Initialize/upgrade database (safe for both new and existing databases)
+# Initialize/upgrade database schema (safe for both new and existing databases)
 echo ""
 echo "🗄️  Initializing database..."
-npm run db:init
+npx drizzle-kit push
 
 # Copy .env if it doesn't exist
 if [ ! -f "$WEB_DIR/.env" ] && [ -f "$WEB_DIR/.env.example" ]; then

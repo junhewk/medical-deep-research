@@ -63,13 +63,11 @@ if not exist "node_modules" (
 :: Create data directory
 if not exist "data" mkdir data
 
-:: Run database migrations if needed
-if not exist "data\medical-deep-research.db" (
-    echo.
-    echo [INFO] Setting up database...
-    call npm run db:generate 2>nul
-    call npm run db:migrate 2>nul
-)
+:: Initialize/upgrade database schema (safe for both new and existing databases)
+if not exist "data" mkdir data
+echo.
+echo [INFO] Initializing database...
+call npx drizzle-kit push
 
 :: Copy .env if it doesn't exist
 if not exist ".env" (

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { tool } from "@langchain/core/tools";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { createLLM, type LLMProvider, type SupportedLLM } from "./llm-factory";
+import { POLICY_KEYWORDS, ETHICS_KEYWORDS } from "../research-keywords";
 
 /**
  * LLM-based semantic context analyzer for PCC/PICO queries
@@ -73,6 +74,8 @@ Analyze the following research query components and identify:
    - prognostic: Risk factors, prediction, prognosis
    - qualitative: Experiences, perspectives, barriers, facilitators
    - epidemiologic: Prevalence, incidence, burden of disease
+   - policy_analysis: Health policy evaluation, regulation, governance, health systems, implementation science
+   - ethics_review: Ethical analysis, bioethics, moral reasoning, autonomy, consent, justice
 
 2. **Outcome Domains**: What measurement domains are relevant? Select ALL that apply:
    - clinical: Mortality, morbidity, disease-specific clinical outcomes
@@ -347,37 +350,14 @@ export function detectContextHeuristic(text: string): {
     intents.push("qualitative");
   }
 
-  // Policy indicators
-  const policyKeywords = [
-    "policy",
-    "regulation",
-    "legislation",
-    "governance",
-    "health system",
-    "workforce",
-    "reform",
-    "implementation science",
-    "health equity",
-    "disparit",
-  ];
-  if (policyKeywords.some((kw) => lowerText.includes(kw))) {
+  // Policy indicators (shared keywords from research-keywords.ts)
+  if (POLICY_KEYWORDS.some((kw) => lowerText.includes(kw))) {
     intents.push("policy_analysis");
     if (!domains.includes("process")) domains.push("process");
   }
 
-  // Ethics indicators
-  const ethicsKeywords = [
-    "ethic",
-    "bioethic",
-    "moral",
-    "autonomy",
-    "consent",
-    "justice",
-    "beneficence",
-    "dignity",
-    "human rights",
-  ];
-  if (ethicsKeywords.some((kw) => lowerText.includes(kw))) {
+  // Ethics indicators (shared keywords from research-keywords.ts)
+  if (ETHICS_KEYWORDS.some((kw) => lowerText.includes(kw))) {
     intents.push("ethics_review");
   }
 

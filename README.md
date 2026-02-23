@@ -6,7 +6,16 @@ Evidence-Based Medical Research Assistant
 
 ## Overview
 
-Medical Deep Research is an **evidence-based medicine (EBM)** research assistant for healthcare professionals and medical researchers. It uses autonomous AI agents to search medical literature, classify evidence levels, and synthesize findings into comprehensive reports.
+Medical Deep Research is an **evidence-based medicine (EBM)** research assistant for healthcare professionals and medical researchers. It uses autonomous AI agents to search medical literature, classify evidence levels, and synthesize findings into comprehensive reports. It also supports **broader healthcare research** topics such as ethics, policy, informatics, and social care with adapted thematic analysis pipelines.
+
+### What's New in v2.7.0 (Healthcare Research Domain)
+
+- **Research Domain Classification**: Free-form queries are automatically classified as "clinical" or "healthcare_research" using word-boundary-aware keyword heuristics (minimum 2-keyword threshold to prevent single-keyword flips)
+- **Healthcare Research Pipeline**: Broader topics (ethics, policy, informatics, social care, etc.) get keyword-based search strategies, thematic report structure, and cross-disciplinary database coverage
+- **Cross-Disciplinary Semantic Scholar**: Semantic Scholar searches omit the Medicine field filter for healthcare research queries; clinical agent calls auto-inject `fieldsOfStudy: "Medicine"`
+- **Expanded Context Analysis**: New `policy_analysis` and `ethics_review` query intents in both LLM prompt and heuristic fallback
+- **Cochrane/Scopus Skipped for Non-Clinical**: Healthcare research queries skip Cochrane and Scopus in mandatory search (OpenAlex + Semantic Scholar provide broad coverage)
+- **Shared Keyword Constants**: Policy and ethics keywords centralized in `research-keywords.ts` to prevent drift between domain classifier and context analyzer
 
 ### What's New in v2.6 (Free Database Fallbacks)
 
@@ -37,9 +46,9 @@ Medical Deep Research is an **evidence-based medicine (EBM)** research assistant
 | Feature | Description |
 |---------|-------------|
 | **Architecture** | **LangGraph StateGraph** with autonomous planning |
-| **Query Framework** | **PICO** (clinical) + **PCC** (scoping reviews) |
+| **Query Framework** | **PICO** (clinical) + **PCC** (scoping reviews) + **Free-form** (auto-classified) |
 | **Terminology** | **Dynamic MeSH** via NLM API + SQLite caching |
-| **Context Analysis** | **LLM-based** intent detection (clinical, economic, safety) |
+| **Context Analysis** | **LLM-based** intent detection (clinical, economic, safety, policy, ethics) |
 | **Evidence** | **Evidence level tagging** (Level I-V) |
 | **Search** | PubMed, Scopus (BYOK), Cochrane, OpenAlex, Semantic Scholar |
 | **Translation** | Korean report translation with terminology preservation |
@@ -105,6 +114,8 @@ Open http://localhost:3000
    - **Free-form** - Natural language query
 3. Fill in the components and click **Start Research**
 
+> **Note:** Free-form queries are automatically classified as **clinical** or **healthcare research**. Clinical queries use PICO/PCC frameworks with evidence-level reporting. Healthcare research queries (ethics, policy, informatics, social care, etc.) use keyword-based search strategies with thematic report structure.
+
 ## Query Frameworks
 
 ### PICO (Clinical Questions)
@@ -151,7 +162,8 @@ medical-deep-research/web/
 │   ├── i18n/                   # Internationalization
 │   ├── lib/
 │   │   ├── agent/
-│   │   │   ├── deep-agent.ts   # LangGraph StateGraph agent
+│   │   │   ├── deep-agent.ts           # LangGraph StateGraph agent
+│   │   │   ├── research-keywords.ts    # Shared keyword constants
 │   │   │   └── tools/
 │   │   │       ├── pubmed.ts               # NCBI E-utilities
 │   │   │       ├── scopus.ts               # Elsevier API
@@ -217,7 +229,7 @@ meshLookupIndex: { id, searchTerm, meshId, matchType }
 | `scopus_search` | Searches Scopus (requires API key) |
 | `cochrane_search` | Searches Cochrane Library |
 | `openalex_search` | Searches OpenAlex (free, no API key) |
-| `semantic_scholar_search` | Searches Semantic Scholar (free, Medicine-filtered) |
+| `semantic_scholar_search` | Searches Semantic Scholar (free, cross-disciplinary or Medicine-filtered) |
 | `population_validator` | AI-based population matching |
 | `claim_verifier` | Post-synthesis verification against PubMed |
 | `report_translator` | Korean translation with terminology preservation (new) |
@@ -246,7 +258,7 @@ meshLookupIndex: { id, searchTerm, meshId, matchType }
 ├─────────────────────────────────────────────────────────────┤
 │                  LANGGRAPH AGENT                             │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  Planning → Tool Execution → Synthesis → Report       │  │
+│  │  Domain Classification → Planning → Tools → Synthesis  │  │
 │  └─────────────────────────────────────────────────────┘    │
 │                          ↓                                   │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │

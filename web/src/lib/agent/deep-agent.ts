@@ -41,6 +41,7 @@ import { exportStateToMarkdown } from "../state-export";
 import { formatVancouverCitation, type CitationData } from "@/lib/citation/vancouver";
 import { translateReport } from "./tools/report-translator";
 import type { Locale } from "@/i18n/config";
+import { POLICY_KEYWORDS, ETHICS_KEYWORDS, matchesKeyword } from "./research-keywords";
 
 /**
  * Research domain classification
@@ -49,27 +50,27 @@ import type { Locale } from "@/i18n/config";
  */
 export type ResearchDomain = "clinical" | "healthcare_research";
 
-const HEALTHCARE_RESEARCH_KEYWORDS = [
-  "health policy", "healthcare policy", "health system",
-  "ethic", "bioethic", "moral",
+const HEALTHCARE_RESEARCH_KEYWORDS = [...new Set([
+  ...POLICY_KEYWORDS,
+  ...ETHICS_KEYWORDS,
+  "health policy", "healthcare policy",
   "informatics", "health informatics", "digital health",
   "social care", "social work", "community health",
   "qualitative", "grounded theory", "phenomenolog", "thematic analysis",
   "nursing education", "nursing workforce", "nursing practice",
-  "health equity", "health disparit", "social determinant",
-  "implementation science", "knowledge translation",
+  "social determinant",
+  "knowledge translation",
   "patient safety culture", "organizational culture",
   "public health", "health promotion", "health literacy",
   "interprofessional", "multidisciplinary",
   "global health", "planetary health",
-  "robot", "artificial intelligence in healthcare",
+  "robotics", "artificial intelligence in healthcare",
   "telehealth", "telemedicine",
   "caregiver", "caregiving",
   "palliative", "end of life", "hospice",
   "mental health policy", "mental health service",
-  "governance", "regulation", "legislation",
-  "workforce", "burnout", "wellbeing",
-];
+  "burnout", "wellbeing",
+])];
 
 const CLINICAL_KEYWORDS = [
   "randomized", "randomised", "rct",
@@ -97,14 +98,14 @@ export function classifyResearchDomain(query: string): ResearchDomain {
   let clinicalScore = 0;
 
   for (const kw of HEALTHCARE_RESEARCH_KEYWORDS) {
-    if (lower.includes(kw)) healthcareScore++;
+    if (matchesKeyword(lower, kw)) healthcareScore++;
   }
   for (const kw of CLINICAL_KEYWORDS) {
-    if (lower.includes(kw)) clinicalScore++;
+    if (matchesKeyword(lower, kw)) clinicalScore++;
   }
 
-  // Default to clinical (conservative)
-  if (healthcareScore > clinicalScore) return "healthcare_research";
+  // Require at least 2 healthcare keyword matches to avoid single-keyword flips
+  if (healthcareScore >= 2 && healthcareScore > clinicalScore) return "healthcare_research";
   return "clinical";
 }
 
@@ -230,16 +231,11 @@ export interface MedicalResearchConfig {
 }
 
 /**
- * System prompt with DeepAgents-style workflow instructions
- * Now a function to include dynamic API key availability info
+ * Healthcare research system prompt for cross-disciplinary topics
  */
-function getSystemPrompt(config: { scopusApiKey?: string; ncbiApiKey?: string; researchDomain?: ResearchDomain }): string {
-  const scopusAvailable = !!config.scopusApiKey;
-  const ncbiAvailable = !!config.ncbiApiKey;
-  const domain = config.researchDomain || "clinical";
-
-  if (domain === "healthcare_research") {
-    return `You are a Healthcare Research Agent specialized in comprehensive academic literature review across healthcare disciplines including ethics, policy, informatics, social care, nursing, public health, and implementation science.
+function getHealthcareResearchPrompt(config: { scopusAvailable: boolean; ncbiAvailable: boolean }): string {
+  const { scopusAvailable, ncbiAvailable } = config;
+  return `You are a Healthcare Research Agent specialized in comprehensive academic literature review across healthcare disciplines including ethics, policy, informatics, social care, nursing, public health, and implementation science.
 
 ## Core Capabilities
 1. Build keyword-based search strategies for broad healthcare topics
@@ -316,8 +312,13 @@ Structure reports thematically:
 - ONLY state what abstracts EXPLICITLY say
 - NEVER reverse or contradict what actual abstracts state
 - If findings are mixed or inconclusive, report that accurately`;
-  }
+}
 
+/**
+ * Clinical research system prompt for evidence-based medicine
+ */
+function getClinicalPrompt(config: { scopusAvailable: boolean; ncbiAvailable: boolean }): string {
+  const { scopusAvailable, ncbiAvailable } = config;
   return `You are a Medical Research Agent specialized in evidence-based medicine and systematic literature review.
 
 ## Core Capabilities
@@ -407,6 +408,23 @@ After synthesizing, use claim_verifier tool to validate:
 - Verifies PMIDs exist in PubMed
 - Compares claims against actual abstracts
 - Flags directional mismatches`;
+}
+
+/**
+ * System prompt with DeepAgents-style workflow instructions
+ * Delegates to domain-specific prompt functions
+ */
+function getSystemPrompt(config: { scopusApiKey?: string; ncbiApiKey?: string; researchDomain?: ResearchDomain }): string {
+  const promptConfig = {
+    scopusAvailable: !!config.scopusApiKey,
+    ncbiAvailable: !!config.ncbiApiKey,
+  };
+  const domain = config.researchDomain || "clinical";
+
+  if (domain === "healthcare_research") {
+    return getHealthcareResearchPrompt(promptConfig);
+  }
+  return getClinicalPrompt(promptConfig);
 }
 
 /** Create LLM for agent with temperature 0.3 for balanced creativity */
@@ -647,6 +665,11 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
         if (!args.provider) args.provider = config.llmProvider;
         if (!args.model) args.model = fastModel;
         if (!args.ncbiApiKey && config.ncbiApiKey) args.ncbiApiKey = config.ncbiApiKey;
+      }
+
+      // Inject Medicine field filter for agent-initiated Semantic Scholar calls in clinical domain
+      if (toolName === "semantic_scholar_search" && config.researchDomain !== "healthcare_research" && !args.fieldsOfStudy) {
+        args.fieldsOfStudy = "Medicine";
       }
 
       return { ...tc, args };
@@ -1019,8 +1042,8 @@ Build the appropriate query and search multiple databases.`;
       }
     }
 
-    // Scopus
-    if (config.scopusApiKey && !alreadySearched.has("scopus_search")) {
+    // Scopus (skip for healthcare_research — OpenAlex + Semantic Scholar provide broad coverage)
+    if (config.scopusApiKey && !alreadySearched.has("scopus_search") && config.researchDomain !== "healthcare_research") {
       try {
         const scopusStartTime = Date.now();
         const scopusQuery = config.picoComponents
@@ -1709,15 +1732,12 @@ ${reportStructure}`;
   return graph;
 }
 
-export async function runMedicalResearch(config: MedicalResearchConfig): Promise<AgentStateType> {
+export async function runMedicalResearch(inputConfig: MedicalResearchConfig): Promise<AgentStateType> {
   // Classify research domain for free-form queries; PICO/PCC always clinical
-  if (!config.researchDomain) {
-    if (config.queryType === "free") {
-      config.researchDomain = classifyResearchDomain(config.query);
-    } else {
-      config.researchDomain = "clinical";
-    }
-  }
+  // Use spread to avoid mutating the caller's config object
+  const researchDomain = inputConfig.researchDomain
+    ?? (inputConfig.queryType === "free" ? classifyResearchDomain(inputConfig.query) : "clinical");
+  const config = { ...inputConfig, researchDomain };
   console.log(`[ResearchDomain] Classified as: ${config.researchDomain} (queryType: ${config.queryType})`);
 
   const graph = await createMedicalResearchAgent(config);

@@ -20,7 +20,9 @@ export type QueryIntent =
   | "diagnostic"
   | "prognostic"
   | "qualitative"
-  | "epidemiologic";
+  | "epidemiologic"
+  | "policy_analysis"
+  | "ethics_review";
 
 export type OutcomeDomain =
   | "clinical"
@@ -343,6 +345,40 @@ export function detectContextHeuristic(text: string): {
   ];
   if (qualKeywords.some((kw) => lowerText.includes(kw))) {
     intents.push("qualitative");
+  }
+
+  // Policy indicators
+  const policyKeywords = [
+    "policy",
+    "regulation",
+    "legislation",
+    "governance",
+    "health system",
+    "workforce",
+    "reform",
+    "implementation science",
+    "health equity",
+    "disparit",
+  ];
+  if (policyKeywords.some((kw) => lowerText.includes(kw))) {
+    intents.push("policy_analysis");
+    if (!domains.includes("process")) domains.push("process");
+  }
+
+  // Ethics indicators
+  const ethicsKeywords = [
+    "ethic",
+    "bioethic",
+    "moral",
+    "autonomy",
+    "consent",
+    "justice",
+    "beneficence",
+    "dignity",
+    "human rights",
+  ];
+  if (ethicsKeywords.some((kw) => lowerText.includes(kw))) {
+    intents.push("ethics_review");
   }
 
   // Default to clinical if nothing else detected

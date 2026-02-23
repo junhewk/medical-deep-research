@@ -43,6 +43,72 @@ import { translateReport } from "./tools/report-translator";
 import type { Locale } from "@/i18n/config";
 
 /**
+ * Research domain classification
+ * - "clinical": evidence-based medicine (PICO/PCC, MeSH, Cochrane, evidence levels)
+ * - "healthcare_research": broader healthcare topics (ethics, policy, informatics, social care, etc.)
+ */
+export type ResearchDomain = "clinical" | "healthcare_research";
+
+const HEALTHCARE_RESEARCH_KEYWORDS = [
+  "health policy", "healthcare policy", "health system",
+  "ethic", "bioethic", "moral",
+  "informatics", "health informatics", "digital health",
+  "social care", "social work", "community health",
+  "qualitative", "grounded theory", "phenomenolog", "thematic analysis",
+  "nursing education", "nursing workforce", "nursing practice",
+  "health equity", "health disparit", "social determinant",
+  "implementation science", "knowledge translation",
+  "patient safety culture", "organizational culture",
+  "public health", "health promotion", "health literacy",
+  "interprofessional", "multidisciplinary",
+  "global health", "planetary health",
+  "robot", "artificial intelligence in healthcare",
+  "telehealth", "telemedicine",
+  "caregiver", "caregiving",
+  "palliative", "end of life", "hospice",
+  "mental health policy", "mental health service",
+  "governance", "regulation", "legislation",
+  "workforce", "burnout", "wellbeing",
+];
+
+const CLINICAL_KEYWORDS = [
+  "randomized", "randomised", "rct",
+  "clinical trial", "placebo",
+  "efficacy", "effectiveness",
+  "dose", "dosage", "mg",
+  "surgery", "surgical",
+  "diagnosis", "diagnostic",
+  "prognosis", "prognostic",
+  "mortality", "survival",
+  "adverse event", "side effect",
+  "blood pressure", "heart rate",
+  "ejection fraction", "lvef",
+  "hemoglobin", "hba1c",
+  "meta-analysis", "systematic review",
+  "cohort", "case-control",
+  "inhibitor", "antagonist", "agonist",
+  "receptor", "biomarker",
+];
+
+export function classifyResearchDomain(query: string): ResearchDomain {
+  const lower = query.toLowerCase();
+
+  let healthcareScore = 0;
+  let clinicalScore = 0;
+
+  for (const kw of HEALTHCARE_RESEARCH_KEYWORDS) {
+    if (lower.includes(kw)) healthcareScore++;
+  }
+  for (const kw of CLINICAL_KEYWORDS) {
+    if (lower.includes(kw)) clinicalScore++;
+  }
+
+  // Default to clinical (conservative)
+  if (healthcareScore > clinicalScore) return "healthcare_research";
+  return "clinical";
+}
+
+/**
  * Normalize authors field: convert string to array if needed
  */
 function normalizeAuthors(authors: unknown): string[] {
@@ -159,6 +225,7 @@ export interface MedicalResearchConfig {
     context?: string;
   };
   language?: Locale;
+  researchDomain?: ResearchDomain;
   onProgress?: (progress: { phase: string; progress: number; message: string }) => void;
 }
 
@@ -166,9 +233,90 @@ export interface MedicalResearchConfig {
  * System prompt with DeepAgents-style workflow instructions
  * Now a function to include dynamic API key availability info
  */
-function getSystemPrompt(config: { scopusApiKey?: string; ncbiApiKey?: string }): string {
+function getSystemPrompt(config: { scopusApiKey?: string; ncbiApiKey?: string; researchDomain?: ResearchDomain }): string {
   const scopusAvailable = !!config.scopusApiKey;
   const ncbiAvailable = !!config.ncbiApiKey;
+  const domain = config.researchDomain || "clinical";
+
+  if (domain === "healthcare_research") {
+    return `You are a Healthcare Research Agent specialized in comprehensive academic literature review across healthcare disciplines including ethics, policy, informatics, social care, nursing, public health, and implementation science.
+
+## Core Capabilities
+1. Build keyword-based search strategies for broad healthcare topics
+2. Search academic databases (PubMed, OpenAlex, Semantic Scholar)
+3. Identify and include diverse study methodologies (qualitative, mixed methods, policy analyses, theoretical frameworks)
+4. Synthesize findings into thematic reports
+
+## Available API Keys
+${scopusAvailable ? "- **Scopus API key: AVAILABLE** - USE scopus_search for citation counts and additional coverage" : "- Scopus API key: NOT configured - skip Scopus searches"}
+${ncbiAvailable ? "- **NCBI API key: AVAILABLE** - Enhanced PubMed rate limits" : "- NCBI API key: NOT configured - using public PubMed access"}
+- **OpenAlex: ALWAYS AVAILABLE** - No API key needed. Primary database for cross-disciplinary healthcare research
+- **Semantic Scholar: ALWAYS AVAILABLE** - No API key needed. Cross-disciplinary coverage (no field filter)
+
+## Task Management (write_todos)
+
+Before starting research, use write_todos to create a task list:
+1. Analyze research question and identify key themes
+2. Build keyword-based search queries
+3. Search databases (OpenAlex, Semantic Scholar, PubMed${scopusAvailable ? ", Scopus" : ""})
+4. Evaluate and organize results by theme
+5. Synthesize findings into thematic report
+6. Generate final report
+
+Update todo status as you progress:
+- "pending" - Not yet started
+- "in_progress" - Currently working on
+- "completed" - Finished
+
+## Context Management (Filesystem)
+
+For large result sets (>20 articles):
+- Use write_file to store raw results: write_file("search_results/openalex.json", JSON.stringify(results))
+- Read back with read_file when synthesizing
+- Use ls to see what files have been stored
+
+## Subagent Delegation (task)
+
+For complex research, delegate to specialized subagents:
+- database_search: Focused database querying
+- report_synthesis: Thematic synthesis and report generation
+
+## Search Strategy Guidelines
+
+### For Healthcare Research Topics
+- Build keyword-based search queries using natural language terms
+- Do NOT use PICO or PCC frameworks
+- Do NOT attempt MeSH term mapping (most healthcare research topics lack precise MeSH coverage)
+- Prioritize OpenAlex and Semantic Scholar for cross-disciplinary coverage
+- Use PubMed for healthcare topics it indexes well (nursing, bioethics, public health)
+- Skip Cochrane (focused on clinical interventions, not broader healthcare topics)
+
+### Database Coverage
+**ALWAYS search multiple databases** for comprehensive coverage:
+- **OpenAlex** - Primary database for broad academic coverage (free, no key needed)
+- **Semantic Scholar** - Cross-disciplinary coverage without field restrictions (free, no key needed)
+- PubMed - For healthcare topics it indexes (nursing, bioethics, public health)
+${scopusAvailable ? "- **Scopus (API key available)** - USE THIS for broad academic coverage and citation counts" : "- Scopus: SKIP (no API key configured)"}
+
+## Report Format (Markdown)
+
+Structure reports thematically:
+1. Executive Summary
+2. Background & Context
+3. Methods (search strategy, databases searched)
+4. Findings organized by theme (consider diverse study types as equally valid)
+5. Implications for Practice and Policy
+6. Recommendations
+7. References (Vancouver format with DOIs)
+
+## Anti-Hallucination Rules
+
+**CRITICAL:**
+- ONLY cite sources from your search results
+- ONLY state what abstracts EXPLICITLY say
+- NEVER reverse or contradict what actual abstracts state
+- If findings are mixed or inconclusive, report that accurately`;
+  }
 
   return `You are a Medical Research Agent specialized in evidence-based medicine and systematic literature review.
 
@@ -666,6 +814,12 @@ Context: ${config.pccComponents.context || "Not specified"}
 
 First, use write_todos to create your task list.
 Then use the pcc_query_builder tool, followed by database searches.`;
+    } else if (config.researchDomain === "healthcare_research") {
+      planningPrompt = `Analyze this healthcare research question and build a keyword-based search strategy: "${config.query}"
+
+First, use write_todos to create your task list.
+Do NOT use PICO or PCC frameworks. Build keyword-based search queries using natural language terms relevant to this topic.
+Search OpenAlex, Semantic Scholar, and PubMed for broad academic coverage.`;
     } else {
       planningPrompt = `Analyze this research question and build an appropriate search strategy: "${config.query}"
 
@@ -826,8 +980,8 @@ Build the appropriate query and search multiple databases.`;
       }
     }
 
-    // Cochrane
-    if (!alreadySearched.has("cochrane_search")) {
+    // Cochrane (skip for healthcare_research — focused on clinical interventions)
+    if (!alreadySearched.has("cochrane_search") && config.researchDomain !== "healthcare_research") {
       try {
         const cochraneStartTime = Date.now();
         executions.push({ tool: "cochrane_search", status: "running", query: searchQuery, startTime: cochraneStartTime });
@@ -912,14 +1066,15 @@ Build the appropriate query and search multiple databases.`;
       }
     }
 
-    // OpenAlex (free fallback when Scopus unavailable)
-    if (!config.scopusApiKey && !alreadySearched.has("openalex_search")) {
+    // OpenAlex (always for healthcare_research; free fallback when Scopus unavailable for clinical)
+    if ((!config.scopusApiKey || config.researchDomain === "healthcare_research") && !alreadySearched.has("openalex_search")) {
       try {
         const oaStartTime = Date.now();
+        const oaMaxResults = config.researchDomain === "healthcare_research" ? 25 : 15;
         executions.push({ tool: "openalex_search", status: "running", query: searchQuery, startTime: oaStartTime });
         const oaResult = await openalexSearchTool.invoke({
           query: searchQuery,
-          maxResults: 15,
+          maxResults: oaMaxResults,
         });
         const oaData = JSON.parse(oaResult);
         if (oaData.success && oaData.articles) {
@@ -950,14 +1105,18 @@ Build the appropriate query and search multiple databases.`;
       }
     }
 
-    // Semantic Scholar (free fallback when Scopus unavailable)
-    if (!config.scopusApiKey && !alreadySearched.has("semantic_scholar_search")) {
+    // Semantic Scholar (always for healthcare_research without field filter; free fallback when Scopus unavailable for clinical)
+    if ((!config.scopusApiKey || config.researchDomain === "healthcare_research") && !alreadySearched.has("semantic_scholar_search")) {
       try {
         const s2StartTime = Date.now();
+        const s2MaxResults = config.researchDomain === "healthcare_research" ? 25 : 15;
         executions.push({ tool: "semantic_scholar_search", status: "running", query: searchQuery, startTime: s2StartTime });
         const s2Result = await semanticScholarSearchTool.invoke({
           query: searchQuery,
-          maxResults: 15,
+          maxResults: s2MaxResults,
+          // For healthcare_research, omit fieldsOfStudy to get cross-disciplinary results
+          // For clinical, filter to Medicine
+          ...(config.researchDomain !== "healthcare_research" ? { fieldsOfStudy: "Medicine" } : {}),
         });
         const s2Data = JSON.parse(s2Result);
         if (s2Data.success && s2Data.articles) {
@@ -1167,7 +1326,31 @@ PMID: ${result.pmid || "N/A"} | DOI: ${result.doi || "N/A"}
       ? Array.from(actualSources).join(", ")
       : "PubMed";
 
-    const synthesisPrompt = `Based on the search results gathered, synthesize a comprehensive evidence-based report.
+    const isHealthcareResearch = config.researchDomain === "healthcare_research";
+
+    const reportStructure = isHealthcareResearch
+      ? `Structure (thematic):
+1. Executive Summary
+2. Background & Context
+3. Methods - **State that the following databases were searched: ${databasesSearched}**
+4. Findings organized by theme (consider diverse study types — qualitative, mixed methods, policy analyses, reviews — as equally valid; do NOT rank by evidence level hierarchy)
+5. Implications for Practice and Policy
+6. Recommendations
+7. References (Vancouver format)
+
+Organize findings thematically rather than by evidence level. Group related studies together and identify key themes, agreements, and disagreements across the literature.`
+      : `Structure:
+1. Executive Summary
+2. Background
+3. Methods - **State that the following databases were searched: ${databasesSearched}**
+4. Results (by evidence level, with citations)
+5. Discussion
+6. Conclusions
+7. References (Vancouver format)
+
+Focus on accurately representing study findings, even if negative/null results.`;
+
+    const synthesisPrompt = `Based on the search results gathered, synthesize a comprehensive ${isHealthcareResearch ? "thematic literature review" : "evidence-based report"}.
 
 ## CRITICAL ANTI-HALLUCINATION INSTRUCTIONS
 
@@ -1197,21 +1380,16 @@ Use numbered in-text citations [1], [2], [3], etc.
 Maximum citation number is [${sourceCount}].
 Include a complete "References" section at the end using Vancouver style.
 
-Structure:
-1. Executive Summary
-2. Background
-3. Methods - **State that the following databases were searched: ${databasesSearched}**
-4. Results (by evidence level, with citations)
-5. Discussion
-6. Conclusions
-7. References (Vancouver format)
+${reportStructure}`;
 
-Focus on accurately representing study findings, even if negative/null results.`;
+    const synthesizerRole = isHealthcareResearch
+      ? "You are a healthcare research synthesizer. Generate comprehensive thematic literature reviews with proper citations, organized by theme rather than evidence level."
+      : "You are a medical research synthesizer. Generate comprehensive evidence-based reports with proper citations.";
 
     // Actually call the LLM to generate the synthesis report
     const synthesisLLM = createLLM(config.llmProvider, config.model, config.apiKey);
     const response = await synthesisLLM.invoke([
-      new SystemMessage("You are a medical research synthesizer. Generate comprehensive evidence-based reports with proper citations."),
+      new SystemMessage(synthesizerRole),
       new HumanMessage(synthesisPrompt),
     ]);
 
@@ -1532,6 +1710,16 @@ Focus on accurately representing study findings, even if negative/null results.`
 }
 
 export async function runMedicalResearch(config: MedicalResearchConfig): Promise<AgentStateType> {
+  // Classify research domain for free-form queries; PICO/PCC always clinical
+  if (!config.researchDomain) {
+    if (config.queryType === "free") {
+      config.researchDomain = classifyResearchDomain(config.query);
+    } else {
+      config.researchDomain = "clinical";
+    }
+  }
+  console.log(`[ResearchDomain] Classified as: ${config.researchDomain} (queryType: ${config.queryType})`);
+
   const graph = await createMedicalResearchAgent(config);
 
   const initialState = {

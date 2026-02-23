@@ -98,14 +98,17 @@ async function fetchWithRetry(
 export async function searchSemanticScholar(
   query: string,
   maxResults: number = 20,
-  apiKey?: string
+  apiKey?: string,
+  fieldsOfStudy?: string
 ): Promise<SemanticScholarArticle[]> {
   const params = new URLSearchParams({
     query,
     limit: Math.min(maxResults, 100).toString(),
     fields: S2_FIELDS,
-    fieldsOfStudy: "Medicine",
   });
+  if (fieldsOfStudy) {
+    params.set("fieldsOfStudy", fieldsOfStudy);
+  }
 
   const response = await fetchWithRetry(
     `${S2_BASE_URL}?${params}`,
@@ -138,12 +141,13 @@ export async function searchSemanticScholar(
 }
 
 export const semanticScholarSearchTool = tool(
-  async ({ query, maxResults, apiKey }) => {
+  async ({ query, maxResults, apiKey, fieldsOfStudy }) => {
     try {
       const articles = await searchSemanticScholar(
         query,
         maxResults || 20,
-        apiKey || undefined
+        apiKey || undefined,
+        fieldsOfStudy || undefined
       );
 
       return JSON.stringify({
@@ -174,7 +178,7 @@ export const semanticScholarSearchTool = tool(
   {
     name: "semantic_scholar_search",
     description:
-      "Searches Semantic Scholar for scientific literature. No API key required (100 req/5min free tier). Filters by Medicine field of study. Good fallback when Scopus is unavailable.",
+      "Searches Semantic Scholar for scientific literature. No API key required (100 req/5min free tier). By default returns cross-disciplinary results; set fieldsOfStudy to 'Medicine' to filter. Good fallback when Scopus is unavailable.",
     schema: z.object({
       query: z.string().describe("Search query"),
       maxResults: z
@@ -188,6 +192,11 @@ export const semanticScholarSearchTool = tool(
         .optional()
         .nullable()
         .describe("Optional Semantic Scholar API key for higher rate limits"),
+      fieldsOfStudy: z
+        .string()
+        .optional()
+        .nullable()
+        .describe("Field of study filter (e.g. 'Medicine'). Omit for cross-disciplinary results."),
     }),
   }
 );

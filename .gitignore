@@ -55,3 +55,8 @@ CLAUDE.md
 
 # Local research data
 data/research/
+
+# Tauri
+src-tauri/target/
+src-tauri/resources/standalone/
+src-tauri/binaries/bun-*

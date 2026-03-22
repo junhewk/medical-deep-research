@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 use std::time::Duration;
+use rand::Rng;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
@@ -17,9 +18,13 @@ impl Default for ServerState {
     }
 }
 
-pub async fn start_server(app: &AppHandle) -> Result<String, String> {
-    // 1. Find available port
+pub async fn start_server(app: &AppHandle) -> Result<(String, String), String> {
+    // 1. Find available port and generate auth token
     let port = portpicker::pick_unused_port().ok_or("No available port found")?;
+    let auth_token: String = {
+        let mut rng = rand::thread_rng();
+        (0..32).map(|_| format!("{:02x}", rng.gen::<u8>())).collect()
+    };
 
     // 2. Resolve data paths
     let app_data_dir = app
@@ -88,6 +93,7 @@ pub async fn start_server(app: &AppHandle) -> Result<String, String> {
         .env("PORT", port.to_string())
         .env("HOSTNAME", "127.0.0.1")
         .env("NODE_ENV", "production")
+        .env("INTERNAL_AUTH_TOKEN", &auth_token)
         .env("DATABASE_PATH", db_path.to_string_lossy().to_string())
         .env("DATA_DIR", data_dir.to_string_lossy().to_string())
         .current_dir(standalone_dir)
@@ -123,13 +129,13 @@ pub async fn start_server(app: &AppHandle) -> Result<String, String> {
     *state.child.lock().unwrap() = Some(child);
 
     // 7. Wait for server to be ready
-    wait_for_server(&server_url, Duration::from_secs(30)).await?;
+    wait_for_server(&server_url, &auth_token, Duration::from_secs(30)).await?;
 
     log::info!("Server ready at {server_url}");
-    Ok(server_url)
+    Ok((server_url, auth_token))
 }
 
-async fn wait_for_server(url: &str, timeout: Duration) -> Result<(), String> {
+async fn wait_for_server(url: &str, token: &str, timeout: Duration) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
@@ -144,7 +150,7 @@ async fn wait_for_server(url: &str, timeout: Duration) -> Result<(), String> {
             ));
         }
 
-        match client.get(url).send().await {
+        match client.get(url).header("x-internal-token", token).send().await {
             Ok(resp) if resp.status().is_success() || resp.status().is_redirection() => {
                 return Ok(());
             }

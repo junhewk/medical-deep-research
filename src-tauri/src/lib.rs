@@ -16,10 +16,11 @@ pub fn run() {
             // Start the Next.js server in background
             tauri::async_runtime::spawn(async move {
                 match start_server(&handle).await {
-                    Ok(url) => {
+                    Ok((url, token)) => {
+                        let auth_url = format!("{}/?__auth_token={}", url, token);
                         log::info!("Navigating to {url}");
                         if let Some(window) = handle.get_webview_window("main") {
-                            let _ = window.navigate(url.parse().unwrap());
+                            let _ = window.navigate(auth_url.parse().unwrap());
                             let _ = window.show();
                             let _ = window.set_focus();
                         }

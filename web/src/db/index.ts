@@ -1,4 +1,5 @@
 import * as schema from "./schema";
+import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import path from "path";
 import fs from "fs";
 
@@ -93,7 +94,7 @@ if (!globalForDb.db) {
   globalForDb.db = db;
 }
 
-export const db = globalForDb.db!;
+export const db = globalForDb.db as BetterSQLite3Database<typeof schema>;
 
 // Export schema for convenience
 export * from "./schema";

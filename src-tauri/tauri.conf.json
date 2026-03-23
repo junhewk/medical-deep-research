@@ -54,6 +54,12 @@
       "deb": {
         "depends": []
       }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
     }
   },
   "plugins": {

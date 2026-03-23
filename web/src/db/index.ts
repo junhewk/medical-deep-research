@@ -87,14 +87,24 @@ function createDb() {
 }
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-// Use cached connection in development to prevent connection leaks during hot reload
-if (!globalForDb.db) {
-  const { sqlite, db } = createDb();
-  globalForDb.sqlite = sqlite;
-  globalForDb.db = db;
+// Lazy initialization — avoid opening the database at module load time,
+// which causes SQLITE_BUSY errors when Next.js build spawns multiple workers.
+function getDb(): BetterSQLite3Database<typeof schema> {
+  if (!globalForDb.db) {
+    const { sqlite, db } = createDb();
+    globalForDb.sqlite = sqlite;
+    globalForDb.db = db;
+  }
+  return globalForDb.db as BetterSQLite3Database<typeof schema>;
 }
 
-export const db = globalForDb.db as BetterSQLite3Database<typeof schema>;
+export const db = new Proxy({} as BetterSQLite3Database<typeof schema>, {
+  get(_target, prop, receiver) {
+    const real = getDb();
+    const value = Reflect.get(real, prop, receiver);
+    return typeof value === "function" ? value.bind(real) : value;
+  },
+});
 
 // Export schema for convenience
 export * from "./schema";

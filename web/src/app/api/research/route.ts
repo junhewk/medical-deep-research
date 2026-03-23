@@ -92,19 +92,11 @@ export async function POST(request: Request) {
       where: eq(llmConfig.isDefault, true),
     });
 
-    const llmProvider: "openai" | "anthropic" | "google" = requestedProvider
-      || (defaultLlmConfig?.provider as "openai" | "anthropic" | "google")
-      || "openai";
-
     const getDefaultModel = (provider: string) => {
       if (provider === "anthropic") return "claude-opus-4-5-20251101";
       if (provider === "google") return "gemini-3-pro-preview";
       return "gpt-5.2";
     };
-
-    const model: string = requestedModel
-      || defaultLlmConfig?.model
-      || getDefaultModel(llmProvider);
 
     const getApiKey = (provider: string) => {
       if (provider === "anthropic") return keyMap.anthropic;
@@ -112,12 +104,29 @@ export async function POST(request: Request) {
       return keyMap.openai;
     };
 
+    // Resolve provider: explicit request > saved default > first provider with a key configured
+    const resolveProvider = (): "openai" | "anthropic" | "google" => {
+      if (requestedProvider && getApiKey(requestedProvider)) return requestedProvider;
+      const savedProvider = defaultLlmConfig?.provider as "openai" | "anthropic" | "google" | undefined;
+      if (savedProvider && getApiKey(savedProvider)) return savedProvider;
+      // Fall back to whichever provider has a key
+      for (const p of ["openai", "anthropic", "google"] as const) {
+        if (getApiKey(p)) return p;
+      }
+      return requestedProvider || (savedProvider as "openai" | "anthropic" | "google") || "openai";
+    };
+
+    const llmProvider = resolveProvider();
+    const model: string = requestedModel
+      || defaultLlmConfig?.model
+      || getDefaultModel(llmProvider);
+
     const llmApiKey = getApiKey(llmProvider);
 
     if (!llmApiKey) {
       await db.update(research).set({ status: "failed", errorMessage: `${llmProvider} API key not configured` }).where(eq(research.id, researchId));
       return NextResponse.json(
-        { error: `${llmProvider} API key not configured. Please add it in Settings > API Keys.` },
+        { error: `No LLM API key configured. Please add one in Settings > API Keys.` },
         { status: 400 }
       );
     }

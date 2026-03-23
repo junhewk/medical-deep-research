@@ -58,15 +58,7 @@
   },
   "plugins": {
     "shell": {
-      "open": true,
-      "scope": [
-        {
-          "name": "bun",
-          "cmd": "binaries/bun",
-          "sidecar": true,
-          "args": false
-        }
-      ]
+      "open": true
     }
   }
 }

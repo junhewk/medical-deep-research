@@ -14,6 +14,7 @@ export interface ToolExecution {
   startTime?: string;
   endTime?: string;
   duration?: number;
+  resultCount?: number;
   error?: string;
 }
 

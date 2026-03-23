@@ -177,7 +177,10 @@
     "generatingPlan": "Generating research plan...",
     "analyzingQuery": "Analyzing query structure",
     "active": "active",
-    "complete": "complete"
+    "complete": "complete",
+    "searchStrategy": "Search Strategy",
+    "databases": "databases",
+    "articlesFound": "articles"
   },
   "agent": {
     "title": "Agent Status",

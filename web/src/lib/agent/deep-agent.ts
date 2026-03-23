@@ -305,6 +305,16 @@ Structure reports thematically:
 6. Recommendations
 7. References (Vancouver format with DOIs)
 
+## Search Scope Constraints (CRITICAL)
+
+You MUST only search for what the user explicitly asked about:
+- DO NOT add related concepts, adjacent topics, or broader context not mentioned by the user
+- DO NOT generalize specific terms to broader categories (e.g., if user asks about "SGLT2 inhibitors", do NOT search for "antidiabetic agents" broadly)
+- DO NOT add outcomes or populations the user did not specify
+- Use the user's exact terminology as primary search terms; only add MeSH equivalents of those same concepts
+- If the user provides PICO/PCC components, derive search terms ONLY from those components
+- When in doubt, search narrower — precision over recall
+
 ## Anti-Hallucination Rules
 
 **CRITICAL:**
@@ -393,6 +403,16 @@ Structure reports with:
 5. Discussion (address population-specific considerations)
 6. Conclusions
 7. References (Vancouver format with PMIDs/DOIs)
+
+## Search Scope Constraints (CRITICAL)
+
+You MUST only search for what the user explicitly asked about:
+- DO NOT add related concepts, adjacent topics, or broader context not mentioned by the user
+- DO NOT generalize specific terms to broader categories (e.g., if user asks about "empagliflozin", do NOT search for "antidiabetic agents" broadly)
+- DO NOT add outcomes or populations the user did not specify
+- Use the user's exact terminology as primary search terms; only add MeSH equivalents of those same concepts
+- If the user provides PICO/PCC components, derive search terms ONLY from those components
+- When in doubt, search narrower — precision over recall
 
 ## Anti-Hallucination Rules
 
@@ -585,8 +605,51 @@ async function updateProgress(
   }
 }
 
+/** Canonical set of database search tool names — used for phase detection, scope guard, and result tracking */
+const SEARCH_TOOL_NAMES = new Set([
+  "pubmed_search", "scopus_search", "cochrane_search", "openalex_search", "semantic_scholar_search",
+]);
+
+const SEARCH_SCOPE_STOP_WORDS = new Set([
+  "the", "a", "an", "of", "in", "for", "with", "and", "or", "not", "is", "are",
+  "to", "from", "by", "on", "at", "its", "their", "this", "that", "has", "have",
+  "been", "was", "were", "be", "will", "can", "may", "who", "which", "what",
+  "how", "patients", "patient", "studies", "study", "versus", "compared",
+]);
+
+/**
+ * Extract key terms from user's original query/PICO/PCC components
+ * for search scope validation
+ */
+function extractOriginalTerms(config: MedicalResearchConfig): string[] {
+  const sources = [
+    config.query,
+    config.picoComponents?.population,
+    config.picoComponents?.intervention,
+    config.picoComponents?.comparison,
+    config.picoComponents?.outcome,
+    config.pccComponents?.population,
+    config.pccComponents?.concept,
+    config.pccComponents?.context,
+  ].filter(Boolean) as string[];
+
+  const terms: string[] = [];
+  for (const source of sources) {
+    const words = source.toLowerCase()
+      .replace(/[^\w\s-]/g, " ")
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !SEARCH_SCOPE_STOP_WORDS.has(w));
+    terms.push(...words);
+  }
+
+  return [...new Set(terms)];
+}
+
 export async function createMedicalResearchAgent(config: MedicalResearchConfig) {
   const llm = createLLM(config.llmProvider, config.model, config.apiKey);
+
+  // Cache original terms once — config is immutable for the research session
+  const cachedOriginalTerms = extractOriginalTerms(config);
 
   // Build tool map for subagent access
   const toolMap = new Map<string, DynamicStructuredTool>();
@@ -675,6 +738,23 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       return { ...tc, args };
     });
 
+    // Search scope guard: validate search terms overlap with user's original query
+    const originalTerms = cachedOriginalTerms;
+    if (originalTerms.length > 0) {
+      for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i];
+        if (SEARCH_TOOL_NAMES.has(tc.name) && tc.args?.query && typeof tc.args.query === "string") {
+          const queryLower = tc.args.query.toLowerCase();
+          const overlap = originalTerms.filter(term => queryLower.includes(term));
+          if (overlap.length === 0) {
+            const constraint = originalTerms.slice(0, 3).join(" ");
+            console.warn(`[SearchScopeGuard] ${tc.name} query has no overlap with user terms. Prepending: "${constraint}"`);
+            tc.args.query = `${constraint} ${tc.args.query}`;
+          }
+        }
+      }
+    }
+
     if ("tool_calls" in lastMessage) {
       (lastMessage as { tool_calls: typeof toolCalls }).tool_calls = toolCalls;
     }
@@ -689,7 +769,7 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
 
     // Determine phase from tool calls
     const hasSearchTools = toolCalls.some((tc: { name: string }) =>
-      ["pubmed_search", "scopus_search", "cochrane_search", "openalex_search", "semantic_scholar_search", "task"].includes(tc.name)
+      SEARCH_TOOL_NAMES.has(tc.name) || tc.name === "task"
     );
     const phase = hasSearchTools ? "searching" : "planning";
 
@@ -706,23 +786,9 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
     const endTime = Date.now();
     const duration = (endTime - startTime) / 1000;
 
-    const completedExecutions: ToolExecution[] = newExecutions.map((exec) => ({
-      ...exec,
-      status: "completed" as const,
-      duration,
-    }));
-
-    await updateProgress(
-      config.researchId,
-      phase,
-      Math.min(35 + toolCallCount * 3, 75),
-      `Completed ${toolCalls.map((tc: { name: string }) => tc.name).join(", ")}`,
-      { ...state, toolExecutions: [...(state.toolExecutions || []), ...completedExecutions] },
-      config.onProgress
-    );
-
-    // Extract search results
+    // Extract search results and count per tool call (before building completedExecutions)
     const extractedResults: unknown[] = [];
+    const resultCountByToolCallId = new Map<string, number>();
     if (result.messages && Array.isArray(result.messages)) {
       for (const msg of result.messages) {
         if (msg && typeof msg === "object" && "content" in msg) {
@@ -730,7 +796,8 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
             const content = typeof msg.content === "string" ? msg.content : "";
             const parsed = JSON.parse(content);
             if (parsed.success && parsed.articles && Array.isArray(parsed.articles)) {
-              const toolName = "name" in msg ? msg.name : "";
+              const toolName = "name" in msg ? (msg.name as string) : "";
+              const toolCallId = "tool_call_id" in msg ? (msg.tool_call_id as string) : toolName;
               const sourceMap: Record<string, string> = {
                 scopus_search: "scopus",
                 cochrane_search: "cochrane",
@@ -738,6 +805,7 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
                 semantic_scholar_search: "semantic_scholar",
               };
               const source = sourceMap[toolName] || "pubmed";
+              resultCountByToolCallId.set(toolCallId, parsed.articles.length);
               for (const article of parsed.articles) {
                 extractedResults.push({
                   ...article,
@@ -753,9 +821,25 @@ export async function createMedicalResearchAgent(config: MedicalResearchConfig) 
       }
     }
 
+    const completedExecutions: ToolExecution[] = toolCalls.map((tc: { name: string; id?: string }, idx: number) => ({
+      ...newExecutions[idx],
+      status: "completed" as const,
+      duration,
+      resultCount: resultCountByToolCallId.get(tc.id || tc.name),
+    }));
+
+    await updateProgress(
+      config.researchId,
+      phase,
+      Math.min(35 + toolCallCount * 3, 75),
+      `Completed ${toolCalls.map((tc: { name: string }) => tc.name).join(", ")}`,
+      { ...state, toolExecutions: [...(state.toolExecutions || []), ...completedExecutions] },
+      config.onProgress
+    );
+
     const searchToolsUsed = new Set<string>();
     for (const tc of toolCalls) {
-      if (["pubmed_search", "cochrane_search", "scopus_search", "openalex_search", "semantic_scholar_search"].includes(tc.name)) {
+      if (SEARCH_TOOL_NAMES.has(tc.name)) {
         searchToolsUsed.add(tc.name);
       }
     }
@@ -827,24 +911,40 @@ Intervention: ${config.picoComponents.intervention || "Not specified"}
 Comparison: ${config.picoComponents.comparison || "Not specified"}
 Outcome: ${config.picoComponents.outcome || "Not specified"}
 
+IMPORTANT: Your search queries MUST use terms derived ONLY from the PICO components above.
+Do NOT add related concepts, adjacent conditions, or broader terms that the user did not specify.
+Use the exact terms provided, along with their standard medical synonyms and MeSH equivalents.
+
 First, use write_todos to create your task list.
-Then use the pico_query_builder tool, followed by database searches.`;
+Then use the pico_query_builder tool with EXACTLY the components above, followed by database searches.`;
     } else if (config.queryType === "pcc" && config.pccComponents) {
       planningPrompt = `Build a PCC-based search strategy for:
 Population: ${config.pccComponents.population || "Not specified"}
 Concept: ${config.pccComponents.concept || "Not specified"}
 Context: ${config.pccComponents.context || "Not specified"}
 
+IMPORTANT: Your search queries MUST use terms derived ONLY from the PCC components above.
+Do NOT add related concepts or broader terms that the user did not specify.
+Use the exact terms provided, along with their standard synonyms.
+
 First, use write_todos to create your task list.
 Then use the pcc_query_builder tool, followed by database searches.`;
     } else if (config.researchDomain === "healthcare_research") {
       planningPrompt = `Analyze this healthcare research question and build a keyword-based search strategy: "${config.query}"
+
+IMPORTANT: Your search queries MUST focus strictly on the concepts mentioned in the question above.
+Do NOT broaden the search beyond what was asked. Do NOT add related topics the user did not mention.
+Stick to the user's exact terminology plus standard synonyms.
 
 First, use write_todos to create your task list.
 Do NOT use PICO or PCC frameworks. Build keyword-based search queries using natural language terms relevant to this topic.
 Search OpenAlex, Semantic Scholar, and PubMed for broad academic coverage.`;
     } else {
       planningPrompt = `Analyze this research question and build an appropriate search strategy: "${config.query}"
+
+IMPORTANT: Your search queries MUST focus strictly on the concepts mentioned in the question above.
+Do NOT broaden the search beyond what was asked. Do NOT add related topics the user did not mention.
+Stick to the user's exact terminology plus standard medical synonyms.
 
 First, use write_todos to create your task list.
 Then determine if this is a clinical question (use PICO) or a scoping question (use PCC).

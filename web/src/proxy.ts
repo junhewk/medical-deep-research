@@ -7,7 +7,7 @@ const TOKEN_HEADER = "x-internal-token";
 // Read once at module load — stable for the process lifetime
 const EXPECTED_TOKEN = process.env.INTERNAL_AUTH_TOKEN;
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   // No token configured (dev mode) — skip auth
   if (!EXPECTED_TOKEN) return NextResponse.next();
 

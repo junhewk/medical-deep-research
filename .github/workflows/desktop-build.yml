@@ -33,12 +33,13 @@ jobs:
             bun_ext: ''
             bundle_type: dmg
             artifact_glob: 'src-tauri/target/release/bundle/dmg/*.dmg'
-          - os: macos-13
+          - os: macos-14
             target_triple: x86_64-apple-darwin
             bun_suffix: darwin-x64
             bun_ext: ''
             bundle_type: dmg
-            artifact_glob: 'src-tauri/target/release/bundle/dmg/*.dmg'
+            rust_target: x86_64-apple-darwin
+            artifact_glob: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg'
 
     runs-on: ${{ matrix.os }}
     env:
@@ -55,6 +56,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target || '' }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -85,7 +88,7 @@ jobs:
       # Step 2: Build Next.js standalone
       - name: Install web dependencies
         working-directory: web
-        run: npm ci
+        run: npm install
 
       - name: Build Next.js
         working-directory: web
@@ -112,7 +115,13 @@ jobs:
         run: cargo install tauri-cli --locked
 
       - name: Build Tauri app
-        run: cargo tauri build --bundles ${{ matrix.bundle_type }}
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            cargo tauri build --bundles ${{ matrix.bundle_type }} --target ${{ matrix.rust_target }}
+          else
+            cargo tauri build --bundles ${{ matrix.bundle_type }}
+          fi
 
       # Step 5: Upload artifacts
       - name: Upload build artifacts

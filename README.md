@@ -3,6 +3,7 @@
 Evidence-Based Medical Research Assistant
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Latest Release](https://img.shields.io/github/v/release/junhewk/medical-deep-research)](https://github.com/junhewk/medical-deep-research/releases/latest)
 
 ## Overview
 
@@ -29,13 +30,13 @@ Available as a **web application** and a **desktop application** (Windows, macOS
 
 ### Desktop App (Recommended)
 
-Download the latest installer from [GitHub Releases](https://github.com/junhewk/medical-deep-research/releases):
+Download the latest installer from [GitHub Releases](https://github.com/junhewk/medical-deep-research/releases/latest):
 
-| Platform | Download |
-|----------|----------|
-| **Windows** (x64) | `.exe` (NSIS installer) |
-| **macOS** (Apple Silicon) | `.dmg` |
-| **macOS** (Intel) | `.dmg` |
+| Platform | File | Notes |
+|----------|------|-------|
+| **Windows** (x64) | [`Medical.Deep.Research_2.0.0_x64-setup.exe`](https://github.com/junhewk/medical-deep-research/releases/latest) | NSIS installer |
+| **macOS** (Apple Silicon) | [`Medical.Deep.Research_2.0.0_aarch64.dmg`](https://github.com/junhewk/medical-deep-research/releases/latest) | M1/M2/M3/M4 |
+| **macOS** (Intel) | [`Medical.Deep.Research_2.0.0_x64.dmg`](https://github.com/junhewk/medical-deep-research/releases/latest) | Intel Macs |
 
 The desktop app bundles everything — no Node.js or other dependencies required.
 

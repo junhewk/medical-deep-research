@@ -34,9 +34,9 @@ Download the latest installer from [GitHub Releases](https://github.com/junhewk/
 
 | Platform | File | Notes |
 |----------|------|-------|
-| **Windows** (x64) | [`Medical.Deep.Research_2.0.0_x64-setup.exe`](https://github.com/junhewk/medical-deep-research/releases/latest) | NSIS installer |
-| **macOS** (Apple Silicon) | [`Medical.Deep.Research_2.0.0_aarch64.dmg`](https://github.com/junhewk/medical-deep-research/releases/latest) | M1/M2/M3/M4 |
-| **macOS** (Intel) | [`Medical.Deep.Research_2.0.0_x64.dmg`](https://github.com/junhewk/medical-deep-research/releases/latest) | Intel Macs |
+| **Windows** (x64) | [`Medical.Deep.Research_2.7.1_x64-setup.exe`](https://github.com/junhewk/medical-deep-research/releases/latest) | NSIS installer |
+| **macOS** (Apple Silicon) | [`Medical.Deep.Research_2.7.1_aarch64.dmg`](https://github.com/junhewk/medical-deep-research/releases/latest) | M1/M2/M3/M4 |
+| **macOS** (Intel) | [`Medical.Deep.Research_2.7.1_x64.dmg`](https://github.com/junhewk/medical-deep-research/releases/latest) | Intel Macs |
 
 The desktop app bundles everything — no Node.js or other dependencies required.
 

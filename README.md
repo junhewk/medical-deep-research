@@ -8,38 +8,7 @@ Evidence-Based Medical Research Assistant
 
 Medical Deep Research is an **evidence-based medicine (EBM)** research assistant for healthcare professionals and medical researchers. It uses autonomous AI agents to search medical literature, classify evidence levels, and synthesize findings into comprehensive reports. It also supports **broader healthcare research** topics such as ethics, policy, informatics, and social care with adapted thematic analysis pipelines.
 
-### What's New in v2.7.0 (Healthcare Research Domain)
-
-- **Research Domain Classification**: Free-form queries are automatically classified as "clinical" or "healthcare_research" using word-boundary-aware keyword heuristics (minimum 2-keyword threshold to prevent single-keyword flips)
-- **Healthcare Research Pipeline**: Broader topics (ethics, policy, informatics, social care, etc.) get keyword-based search strategies, thematic report structure, and cross-disciplinary database coverage
-- **Cross-Disciplinary Semantic Scholar**: Semantic Scholar searches omit the Medicine field filter for healthcare research queries; clinical agent calls auto-inject `fieldsOfStudy: "Medicine"`
-- **Expanded Context Analysis**: New `policy_analysis` and `ethics_review` query intents in both LLM prompt and heuristic fallback
-- **Cochrane/Scopus Skipped for Non-Clinical**: Healthcare research queries skip Cochrane and Scopus in mandatory search (OpenAlex + Semantic Scholar provide broad coverage)
-- **Shared Keyword Constants**: Policy and ethics keywords centralized in `research-keywords.ts` to prevent drift between domain classifier and context analyzer
-
-### What's New in v2.6 (Free Database Fallbacks)
-
-- **OpenAlex Integration**: Free search with citation counts and broad coverage (no API key needed)
-- **Semantic Scholar Integration**: Free Medicine-filtered search (no API key needed)
-- **Smart Fallbacks**: Automatically uses OpenAlex + Semantic Scholar when Scopus unavailable
-- **Deduplication**: Cross-database deduplication by PMID/DOI with source priority
-- **Dynamic Thresholds**: Article minimums adjust based on available database coverage
-
-### What's New in v2.3 (Dynamic MeSH & Context Analysis)
-
-- **Dynamic MeSH Resolver**: Queries NLM's MeSH RDF API instead of hardcoded mappings
-- **LLM-based Context Analysis**: AI understands query intent (clinical, economic, safety, etc.)
-- **Korean Translation**: Full report translation with medical terminology preservation
-- **Citation Fix**: Prevents out-of-range citation numbers in synthesized reports
-- **Multi-provider Support**: OpenAI, Anthropic, Google LLMs with unified factory
-
-### What's New in v2.0 (TypeScript Migration)
-
-- **Full TypeScript Stack**: Unified Next.js application (no Python backend)
-- **Single-User Mode**: No authentication required - just install and use
-- **BYOK Model**: Bring Your Own Keys for LLM and search APIs
-- **LangGraph Agent**: Autonomous research with StateGraph-based planning
-- **PICO-First UI**: PICO framework as default, with PCC for scoping reviews
+Available as a **web application** and a **desktop application** (Windows, macOS) powered by [Tauri](https://v2.tauri.app/).
 
 ### Key Features
 
@@ -52,17 +21,32 @@ Medical Deep Research is an **evidence-based medicine (EBM)** research assistant
 | **Evidence** | **Evidence level tagging** (Level I-V) |
 | **Search** | PubMed, Scopus (BYOK), Cochrane, OpenAlex, Semantic Scholar |
 | **Translation** | Korean report translation with terminology preservation |
-| **Stack** | Next.js 14 + Drizzle ORM + SQLite |
+| **Stack** | Next.js + Drizzle ORM + SQLite |
+| **Desktop** | Tauri 2 (Windows NSIS installer, macOS DMG) |
 | **API Keys** | BYOK - OpenAI, Anthropic, Google, Scopus, NCBI |
 
-## Quick Start
+## Installation
 
-### Prerequisites
+### Desktop App (Recommended)
+
+Download the latest installer from [GitHub Releases](https://github.com/junhewk/medical-deep-research/releases):
+
+| Platform | Download |
+|----------|----------|
+| **Windows** (x64) | `.exe` (NSIS installer) |
+| **macOS** (Apple Silicon) | `.dmg` |
+| **macOS** (Intel) | `.dmg` |
+
+The desktop app bundles everything — no Node.js or other dependencies required.
+
+### Web App
+
+#### Prerequisites
 
 - Node.js 18+
-- npm or pnpm
+- npm
 
-### One-Click Start
+#### One-Click Start
 
 **macOS / Linux:**
 ```bash
@@ -74,22 +58,16 @@ Medical Deep Research is an **evidence-based medicine (EBM)** research assistant
 start-web.bat
 ```
 
-The startup script will automatically:
-- Install dependencies
-- Set up the SQLite database
-- Start the development server
-
-### Manual Installation
+#### Manual Installation
 
 ```bash
-cd medical-deep-research/web
+cd web
 
 # Install dependencies
 npm install
 
-# Generate and run database migrations
-npm run db:generate
-npm run db:migrate
+# Initialize database
+npm run db:init
 
 # Start development server
 npm run dev
@@ -97,11 +75,27 @@ npm run dev
 
 Open http://localhost:3000
 
+### Build Desktop from Source
+
+**macOS / Linux:**
+```bash
+./scripts/build-desktop.sh
+```
+
+**Windows:**
+```cmd
+scripts\build-desktop.bat
+```
+
+Requires Rust toolchain and Node.js. The build script automatically downloads the Bun sidecar binary, builds the Next.js standalone server, and produces the Tauri installer.
+
+## Getting Started
+
 ### Configure API Keys
 
 1. Go to **Settings > API Keys**
 2. Add your API keys:
-   - **OpenAI** or **Anthropic** (required for LLM)
+   - **OpenAI**, **Anthropic**, or **Google** (one LLM provider required)
    - **NCBI** (optional - higher PubMed rate limits)
    - **Scopus** (optional - for Scopus searches)
 
@@ -142,78 +136,42 @@ Best for exploratory questions and qualitative research.
 ## Architecture
 
 ```
-medical-deep-research/web/
-├── src/
-│   ├── app/                    # Next.js App Router
-│   │   ├── api/
-│   │   │   ├── research/       # Research CRUD + agent trigger
-│   │   │   └── settings/       # API key + language management
-│   │   ├── research/           # Research pages
-│   │   │   ├── new/            # PICO/PCC query builder
-│   │   │   └── [id]/           # Research progress/results
-│   │   └── settings/
-│   │       └── api-keys/       # BYOK configuration
-│   ├── components/
-│   │   ├── research/           # Progress, planning, tool log
-│   │   └── ui/                 # shadcn/ui components
-│   ├── db/
-│   │   ├── schema.ts           # Drizzle schema (+ MeSH cache)
-│   │   └── index.ts            # SQLite connection
-│   ├── i18n/                   # Internationalization
-│   ├── lib/
-│   │   ├── agent/
-│   │   │   ├── deep-agent.ts           # LangGraph StateGraph agent
-│   │   │   ├── research-keywords.ts    # Shared keyword constants
-│   │   │   └── tools/
-│   │   │       ├── pubmed.ts               # NCBI E-utilities
-│   │   │       ├── scopus.ts               # Elsevier API
-│   │   │       ├── cochrane.ts             # Cochrane + PubMed fallback
-│   │   │       ├── mesh-mapping.ts         # Static MeSH mapping
-│   │   │       ├── mesh-resolver.ts        # Dynamic MeSH via NLM API (new)
-│   │   │       ├── query-context-analyzer.ts # LLM context analysis (new)
-│   │   │       ├── llm-factory.ts          # Shared LLM creation (new)
-│   │   │       ├── pico-query.ts           # PICO → PubMed query
-│   │   │       ├── pcc-query.ts            # PCC → PubMed query
-│   │   │       ├── population-validator.ts # Population matching
-│   │   │       ├── claim-verifier.ts       # Citation verification
-│   │   │       ├── report-translator.ts    # Korean translation
-│   │   │       ├── openalex.ts            # OpenAlex search (free)
-│   │   │       └── semantic-scholar.ts    # Semantic Scholar search (free)
-│   │   ├── research.ts         # React Query hooks
-│   │   ├── state-export.ts     # Markdown file export
-│   │   └── utils.ts
-│   └── types/
-└── data/
-    ├── medical-deep-research.db  # SQLite database (+ MeSH cache)
-    └── research/                  # Markdown exports per research
+medical-deep-research/
+├── web/                          # Next.js web application
+│   └── src/
+│       ├── app/                  # App Router (pages + API routes)
+│       ├── components/           # React components (shadcn/ui)
+│       ├── db/                   # Drizzle ORM schema + SQLite
+│       ├── i18n/                 # Internationalization
+│       ├── lib/
+│       │   ├── agent/            # LangGraph research agent
+│       │   │   ├── deep-agent.ts
+│       │   │   ├── research-keywords.ts
+│       │   │   └── tools/        # PubMed, Scopus, Cochrane,
+│       │   │                     # OpenAlex, Semantic Scholar,
+│       │   │                     # MeSH, evidence, translation
+│       │   ├── research.ts       # React Query hooks
+│       │   └── state-export.ts   # Markdown export
+│       └── types/
+├── src-tauri/                    # Tauri desktop shell
+│   ├── src/                      # Rust backend (server management)
+│   ├── binaries/                 # Bun sidecar (per-platform)
+│   ├── resources/                # Bundled Next.js standalone
+│   ├── icons/                    # App icons
+│   └── tauri.conf.json
+└── scripts/
+    ├── build-desktop.sh          # macOS/Linux build script
+    └── build-desktop.bat         # Windows build script
 ```
 
-## Database Schema
+### Desktop Architecture
 
-```typescript
-// Research sessions
-research: { id, query, queryType, mode, status, progress, ... }
+The desktop app uses Tauri 2 to wrap the Next.js web application:
 
-// Query components
-picoQueries: { id, researchId, population, intervention, comparison, outcome, ... }
-pccQueries: { id, researchId, population, concept, context, ... }
-
-// Results
-reports: { id, researchId, title, content, originalContent, language, wordCount, referenceCount, ... }
-searchResults: { id, researchId, title, source, evidenceLevel, pmid, doi, compositeScore, ... }
-
-// Agent state
-agentStates: { id, researchId, phase, planningSteps, toolExecutions, ... }
-
-// Configuration
-apiKeys: { id, service, apiKey, ... }
-settings: { key, value, category, ... }
-llmConfig: { id, provider, model, isDefault, ... }
-
-// MeSH cache (for dynamic NLM API lookups)
-meshCache: { id, label, alternateLabels, treeNumbers, broaderTerms, narrowerTerms, scopeNote, fetchedAt }
-meshLookupIndex: { id, searchTerm, meshId, matchType }
-```
+1. **Tauri shell** spawns a bundled **Bun** runtime as a sidecar process
+2. Bun runs the **Next.js standalone server** on a random local port
+3. A session auth token secures communication between the webview and server
+4. SQLite database is stored in the platform's app data directory
 
 ## Medical Research Tools
 
@@ -221,18 +179,17 @@ meshLookupIndex: { id, searchTerm, meshId, matchType }
 |------|-------------|
 | `pico_query_builder` | Builds PubMed query from PICO with context analysis |
 | `pcc_query_builder` | Builds query from PCC with context analysis |
-| `mesh_resolver` | Dynamic MeSH lookup via NLM RDF API (new) |
-| `query_context_analyzer` | LLM-based query intent detection (new) |
-| `mesh_mapping` | Static MeSH term lookup (legacy) |
+| `mesh_resolver` | Dynamic MeSH lookup via NLM RDF API |
+| `query_context_analyzer` | LLM-based query intent detection |
 | `evidence_level` | Classifies study evidence (I-V) |
 | `pubmed_search` | Searches PubMed via NCBI E-utilities |
 | `scopus_search` | Searches Scopus (requires API key) |
 | `cochrane_search` | Searches Cochrane Library |
 | `openalex_search` | Searches OpenAlex (free, no API key) |
-| `semantic_scholar_search` | Searches Semantic Scholar (free, cross-disciplinary or Medicine-filtered) |
+| `semantic_scholar_search` | Searches Semantic Scholar (free) |
 | `population_validator` | AI-based population matching |
-| `claim_verifier` | Post-synthesis verification against PubMed |
-| `report_translator` | Korean translation with terminology preservation (new) |
+| `claim_verifier` | Post-synthesis citation verification |
+| `report_translator` | Korean translation with terminology preservation |
 
 ## Evidence Level Classification
 
@@ -263,7 +220,7 @@ meshLookupIndex: { id, searchTerm, meshId, matchType }
 │                          ↓                                   │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
 │  │  MeSH    │  │  PubMed  │  │  Scopus  │  │ Cochrane │    │
-│  │ Mapping  │  │  Search  │  │  Search  │  │  Search  │    │
+│  │ Resolver │  │  Search  │  │  Search  │  │  Search  │    │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
 │  ┌──────────┐  ┌───────────────┐                            │
 │  │ OpenAlex │  │   Semantic    │                            │
@@ -274,8 +231,9 @@ meshLookupIndex: { id, searchTerm, meshId, matchType }
 │                 EVIDENCE PROCESSING                          │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │  • Evidence Level Classification (I-V)              │    │
-│  │  • MeSH Term Extraction                             │    │
-│  │  • Abstract Analysis                                │    │
+│  │  • Cross-database Deduplication (PMID/DOI)          │    │
+│  │  • Population Validation                            │    │
+│  │  • Claim Verification                               │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          ↓                                   │
 │              ┌───────────────────────┐                       │
@@ -291,9 +249,9 @@ All API keys are stored locally in SQLite. Configure in Settings > API Keys:
 
 | Service | Required | Description |
 |---------|----------|-------------|
-| OpenAI | Yes* | GPT-4o, GPT-4o-mini for research |
-| Anthropic | Yes* | Claude 3.5 Sonnet, Claude 3.5 Haiku alternative |
-| Google | Yes* | Gemini 1.5 Pro, Gemini 1.5 Flash alternative |
+| OpenAI | Yes* | GPT-4o for research |
+| Anthropic | Yes* | Claude for research |
+| Google | Yes* | Gemini for research |
 | NCBI | No | Higher PubMed rate limits (free) |
 | Scopus | No | Scopus/Elsevier database access |
 | Cochrane | No | Direct Cochrane API (falls back to PubMed) |
@@ -303,6 +261,8 @@ All API keys are stored locally in SQLite. Configure in Settings > API Keys:
 ## Development
 
 ```bash
+cd web
+
 # Development
 npm run dev
 
@@ -310,24 +270,12 @@ npm run dev
 npm run build
 
 # Database commands
-npm run db:generate  # Generate migrations
-npm run db:migrate   # Run migrations
-npm run db:push      # Push schema changes
+npm run db:init   # Initialize database
+npm run db:push   # Push schema changes
 
 # Lint
 npm run lint
 ```
-
-## Contributing
-
-Contributions welcome! Areas for improvement:
-
-- [x] OpenAlex / Semantic Scholar integration
-- [ ] GRADE evidence assessment
-- [ ] Citation export (RIS, BibTeX)
-- [ ] Additional language translations
-- [ ] Streaming progress updates
-- [ ] Mandatory claim verification node
 
 ## License
 
@@ -335,10 +283,11 @@ MIT License - see [LICENSE](LICENSE)
 
 ## Acknowledgments
 
-- Original concept: [Local Deep Research](https://github.com/LearningCircuit/local-deep-research) by LearningCircuit
+- Inspired by [Local Deep Research](https://github.com/LearningCircuit/local-deep-research) by LearningCircuit
 - PubMed/MeSH: [NCBI/NLM](https://www.ncbi.nlm.nih.gov/)
 - UI components: [shadcn/ui](https://ui.shadcn.com/)
 - Agent framework: [LangGraph](https://langchain-ai.github.io/langgraph/)
+- Desktop framework: [Tauri](https://v2.tauri.app/)
 
 ## Citation
 

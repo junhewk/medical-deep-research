@@ -9,7 +9,7 @@ on:
       create_release:
         description: 'Create a GitHub Release'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 permissions:
@@ -123,7 +123,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release)
     needs: build
     runs-on: ubuntu-latest
     steps:

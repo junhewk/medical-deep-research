@@ -37,7 +37,7 @@
     "better-sqlite3": "^12.6.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
-    "deepagents": "^1.6.1",
+    "deepagents": "^1.7.2",
     "drizzle-orm": "^0.44.2",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",

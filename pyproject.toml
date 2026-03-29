@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "medical-deep-research"
+version = "0.1.0"
+description = "Python-first rewrite of the Medical Deep Research desktop application"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+  { name = "Junhewk" },
+]
+dependencies = [
+  "anyio",
+  "httpx",
+  "mcp[cli]",
+  "nicegui",
+  "pydantic-settings",
+  "sqlmodel",
+]
+
+[project.optional-dependencies]
+desktop = ["pywebview"]
+openai = ["openai-agents"]
+anthropic = ["claude-agent-sdk"]
+pdf = ["opendataloader-pdf", "unpywall"]
+google = ["google-adk"]
+
+[project.scripts]
+medical-deep-research = "medical_deep_research.main:main"
+medical-deep-research-mcp = "medical_deep_research.mcp.servers:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/medical_deep_research"]
+

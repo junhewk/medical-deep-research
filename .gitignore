@@ -10,7 +10,9 @@ dist/
 
 # Database
 *.db
+*.sqlite
 data/*.db
+python_data/
 
 # Environment
 .env
@@ -34,6 +36,11 @@ npm-debug.log*
 # Cache
 .cache/
 .turbo/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+unpaywall_cache
 
 # TypeScript
 *.tsbuildinfo

@@ -417,14 +417,16 @@ async def tool_translate_report(
     model = request.model
 
     try:
+        _log.info("Calling LLM for translation: provider=%s model=%s", provider, model)
         translated = await _call_llm_for_translation(
             provider, model, api_keys, translation_prompt, report_markdown,
         )
+        _log.info("Translation returned %d chars", len(translated))
         bridge._intermediate["submitted_report"] = translated
         bridge.set_result(translated)
         return {"status": "ok", "length": len(translated)}
     except Exception as exc:
-        _log.warning("Translation failed: %s", exc)
+        _log.warning("Translation failed: %s", exc, exc_info=True)
         return {"error": f"Translation failed: {exc}"}
 
 
@@ -478,11 +480,18 @@ async def _call_llm_for_translation(
         api_key = api_keys.get("google") or api_keys.get("gemini") or os.getenv("GOOGLE_API_KEY", "")
         from google import genai
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
+        response = await client.aio.models.generate_content(
             model=model,
             contents=f"{system_prompt}\n\nTranslate the following research report:\n\n{report}",
         )
-        return response.text or ""
+        # response.text may raise ValueError on blocked content
+        try:
+            return response.text or ""
+        except (ValueError, AttributeError):
+            parts = getattr(response, "candidates", [])
+            if parts:
+                return str(parts[0])
+            return ""
 
     if provider == "anthropic":
         api_key = api_keys.get("anthropic") or os.getenv("ANTHROPIC_API_KEY", "")
@@ -499,28 +508,28 @@ async def _call_llm_for_translation(
     if provider == "openai":
         api_key = api_keys.get("openai") or os.getenv("OPENAI_API_KEY", "")
         from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=api_key)
-        response = await client.chat.completions.create(
+        oai_client = AsyncOpenAI(api_key=api_key)
+        oai_resp = await oai_client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Translate the following research report:\n\n{report}"},
             ],
         )
-        return response.choices[0].message.content or ""
+        return oai_resp.choices[0].message.content or ""
 
     # Local / fallback — use OpenAI-compatible endpoint
     base_url = os.getenv("MDR_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1")
     from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key="local", base_url=base_url)
-    response = await client.chat.completions.create(
+    local_client = AsyncOpenAI(api_key="local", base_url=base_url)
+    local_resp = await local_client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Translate the following research report:\n\n{report}"},
         ],
     )
-    return response.choices[0].message.content or ""
+    return local_resp.choices[0].message.content or ""
 
 
 async def tool_write_todos(request: RunRequest, bridge: AgenticEventBridge, items: list[str]) -> dict[str, Any]:

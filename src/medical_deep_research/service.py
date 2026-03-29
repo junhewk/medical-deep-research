@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 
 from sqlmodel import col, desc, select
@@ -29,9 +30,6 @@ DEFAULT_MODELS = {
     "google": "gemini-2.5-flash",
     "local": "qwen3.5-27b",
 }
-
-
-from collections.abc import Callable
 
 _UICallback = Callable[[str, str], None]  # (run_id, change_type)
 

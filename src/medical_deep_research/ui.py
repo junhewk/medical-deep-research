@@ -595,7 +595,7 @@ def build_ui(service: ResearchService) -> None:
                     ui.html(f'<div class="mdr-section-desc" style="margin-bottom:0.75rem">{t("new_research_desc")}</div>')
 
                     with ui.row().classes("w-full gap-3"):
-                        query_type_select = ui.select(
+                        ui.select(
                             {"free": t("free_form"), "pico": "PICO", "pcc": "PCC"},
                             label=t("query_type"),
                             value=form_state["query_type"],
@@ -861,8 +861,10 @@ def build_ui(service: ResearchService) -> None:
                     def on_tab_change(e: Any) -> None:
                         selected["active_tab"] = e.value
 
+                    _active_tab_name: str = selected.get("active_tab") or "trace"  # type: ignore[assignment]
+
                     with ui.tabs(
-                        value=selected.get("active_tab", "trace"),
+                        value=_active_tab_name,  # type: ignore[arg-type]
                         on_change=on_tab_change,
                     ).classes("mdr-tabs w-full") as tabs:
                         trace_tab = ui.tab("trace")
@@ -871,7 +873,7 @@ def build_ui(service: ResearchService) -> None:
                         diag_tab = ui.tab("diagnostics")
 
                     _tab_map = {"trace": trace_tab, "artifacts": artifacts_tab, "report": report_tab, "diagnostics": diag_tab}
-                    _active = _tab_map.get(selected.get("active_tab", "trace"), trace_tab)
+                    _active = _tab_map.get(_active_tab_name, trace_tab)
 
                     with ui.tab_panels(tabs, value=_active).classes("w-full").style("background: transparent !important"):
 

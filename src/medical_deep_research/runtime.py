@@ -1330,28 +1330,42 @@ async def _maybe_translate_report(
     request: RunRequest,
     bridge: AgenticEventBridge,
     report: str,
-) -> tuple[str, RuntimeEventPayload | None]:
-    """Translate the report if language is not English. Returns (report, event_or_none)."""
+) -> tuple[str, list[RuntimeEventPayload]]:
+    """Translate the report if language is not English. Returns (report, events)."""
     if request.language in ("en", "english", "") or not report.strip():
-        return report, None
+        return report, []
 
     _log.info("Translating report to %s", request.language)
-    event = RuntimeEventPayload(
+    events: list[RuntimeEventPayload] = []
+
+    # Save the English original as an artifact before translating
+    events.append(RuntimeEventPayload(
+        event_type=EventType.ARTIFACT_CREATED,
+        phase="translating",
+        progress=96,
+        message="Saved original English report",
+        artifact_type=ArtifactType.FINAL_REPORT,
+        artifact_name="Report (English)",
+        artifact_text=report,
+    ))
+    events.append(RuntimeEventPayload(
         event_type=EventType.AGENT_STARTED,
         phase="translating",
         progress=97,
         message=f"Translating report to {request.language}",
         agent_name="Report Translator",
-    )
+    ))
     try:
         result = await tool_translate_report(request, bridge, report, request.language)
-        if result.get("status") == "ok":
-            translated = bridge._result or report
-            return translated, event
-        _log.warning("Translation returned error: %s", result.get("error"))
+        if result.get("status") == "ok" and result.get("length", 0) > 200:
+            translated = bridge._intermediate.get("submitted_report", "") or bridge._result or ""
+            if translated.strip():
+                _log.info("Translation completed: %d chars", len(translated))
+                return translated, events
+        _log.warning("Translation returned error or empty: %s", result)
     except Exception as exc:
-        _log.warning("Translation failed: %s", exc)
-    return report, event
+        _log.warning("Translation failed: %s", exc, exc_info=True)
+    return report, events
 
 
 def _agentic_final_events(
@@ -1583,9 +1597,9 @@ class OpenAIRuntime(NativeSDKRuntime):
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
         final_report = agent_text if agent_text.strip() else recovered
 
-        final_report, translate_event = await _maybe_translate_report(request, bridge, final_report)
-        if translate_event:
-            yield translate_event
+        final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
+        for evt in translate_events:
+            yield evt
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
@@ -1834,9 +1848,9 @@ class AnthropicRuntime(NativeSDKRuntime):
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
         final_report = agent_text if agent_text.strip() else recovered
 
-        final_report, translate_event = await _maybe_translate_report(request, bridge, final_report)
-        if translate_event:
-            yield translate_event
+        final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
+        for evt in translate_events:
+            yield evt
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
@@ -2075,9 +2089,9 @@ class GoogleRuntime(NativeSDKRuntime):
         final_report = agent_text if agent_text.strip() else recovered
 
         # Translate if non-English
-        final_report, translate_event = await _maybe_translate_report(request, bridge, final_report)
-        if translate_event:
-            yield translate_event
+        final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
+        for evt in translate_events:
+            yield evt
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
@@ -2377,9 +2391,9 @@ class LangChainLocalRuntime(NativeSDKRuntime):
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
         final_report = agent_text if agent_text.strip() else recovered
 
-        final_report, translate_event = await _maybe_translate_report(request, bridge, final_report)
-        if translate_event:
-            yield translate_event
+        final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
+        for evt in translate_events:
+            yield evt
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event

@@ -387,6 +387,98 @@ PROVIDER_MODELS: dict[str, dict[str, str]] = {
 }
 
 
+_I18N: dict[str, dict[str, str]] = {
+    "en": {
+        "app_title": "Medical Deep Research",
+        "app_subtitle": "Agentic Evidence Synthesis Engine",
+        "new_research": "New Research",
+        "new_research_desc": "Enter a clinical or healthcare question",
+        "query_type": "Query type",
+        "free_form": "Free-form",
+        "provider": "Provider",
+        "language": "Language",
+        "model": "Model",
+        "start_run": "Start Research Run",
+        "set_api_key": "Set API key below to enable",
+        "provider_status": "Provider Status",
+        "api_keys": "API Keys",
+        "api_keys_desc": "Keys are stored locally in the database",
+        "save_keys": "Save Keys",
+        "research_runs": "Research Runs",
+        "no_runs": "No runs yet.",
+        "select_run": "Select a run to inspect",
+        "select_run_desc": "Create a new research run or select an existing one from the sidebar to view its execution trace, artifacts, and final report.",
+        "execution_trace": "Execution Trace",
+        "events": "events",
+        "waiting_events": "Waiting for events...",
+        "no_artifacts": "No artifacts yet.",
+        "report_title": "Report",
+        "report_not_started": "_Report not started yet._",
+        "run_diagnostics": "Run Diagnostics",
+        "no_diagnostics": "No diagnostics available.",
+        "population": "Population",
+        "intervention": "Intervention",
+        "comparison": "Comparison",
+        "outcome": "Outcome",
+        "concept": "Concept",
+        "context": "Context",
+        "research_question": "Research question",
+        "query_required": "Query is required",
+        "pico_required": "Population and Intervention are required for PICO",
+        "pcc_required": "Population and Concept are required for PCC",
+        "keys_saved": "API keys saved",
+        "interrupt": "Interrupt",
+        "cancel": "Cancel",
+    },
+    "ko": {
+        "app_title": "Medical Deep Research",
+        "app_subtitle": "에이전트 기반 근거 합성 엔진",
+        "new_research": "새 연구",
+        "new_research_desc": "임상 또는 보건의료 질문을 입력하세요",
+        "query_type": "질문 유형",
+        "free_form": "자유 형식",
+        "provider": "제공자",
+        "language": "언어",
+        "model": "모델",
+        "start_run": "연구 실행 시작",
+        "set_api_key": "아래에서 API 키를 설정하세요",
+        "provider_status": "제공자 상태",
+        "api_keys": "API 키",
+        "api_keys_desc": "키는 로컬 데이터베이스에 저장됩니다",
+        "save_keys": "키 저장",
+        "research_runs": "연구 기록",
+        "no_runs": "연구 기록이 없습니다.",
+        "select_run": "연구를 선택하세요",
+        "select_run_desc": "새 연구를 시작하거나 사이드바에서 기존 연구를 선택하여 실행 추적, 산출물, 최종 보고서를 확인하세요.",
+        "execution_trace": "실행 추적",
+        "events": "이벤트",
+        "waiting_events": "이벤트 대기 중...",
+        "no_artifacts": "산출물이 없습니다.",
+        "report_title": "보고서",
+        "report_not_started": "_보고서가 아직 시작되지 않았습니다._",
+        "run_diagnostics": "실행 진단",
+        "no_diagnostics": "진단 정보가 없습니다.",
+        "population": "대상 집단 (Population)",
+        "intervention": "중재 (Intervention)",
+        "comparison": "비교군 (Comparison)",
+        "outcome": "결과 (Outcome)",
+        "concept": "개념 (Concept)",
+        "context": "맥락 (Context)",
+        "research_question": "연구 질문",
+        "query_required": "질문을 입력해야 합니다",
+        "pico_required": "PICO 형식에는 대상 집단과 중재가 필요합니다",
+        "pcc_required": "PCC 형식에는 대상 집단과 개념이 필요합니다",
+        "keys_saved": "API 키가 저장되었습니다",
+        "interrupt": "중단",
+        "cancel": "취소",
+    },
+}
+
+
+def _t(lang: str, key: str) -> str:
+    return _I18N.get(lang, _I18N["en"]).get(key, _I18N["en"].get(key, key))
+
+
 def _bool_badge(label: str, value: Any) -> None:
     if value is True:
         ui.html(f'<span class="mdr-badge mdr-badge-success">{label}: yes</span>')
@@ -402,6 +494,10 @@ def build_ui(service: ResearchService) -> None:
     def index() -> None:
         selected: dict[str, str | None] = {"run_id": None, "active_tab": "trace"}
         page_state: dict[str, int] = {"page": 0, "per_page": 15}
+
+        def t(key: str) -> str:
+            return _t(form_state.get("language", "en"), key)
+
         form_state: dict[str, Any] = {
             "query": "",
             "query_type": "free",
@@ -440,7 +536,7 @@ def build_ui(service: ResearchService) -> None:
                 p, i, c, o = (form_state["pico_p"].strip(), form_state["pico_i"].strip(),
                               form_state["pico_c"].strip(), form_state["pico_o"].strip())
                 if not p and not i:
-                    ui.notify("Population and Intervention are required for PICO", type="negative")
+                    ui.notify(t("pico_required"), type="negative")
                     return
                 query_payload = {"population": p, "intervention": i, "comparison": c, "outcome": o}
                 query = f"Population: {p}; Intervention: {i}; Comparison: {c}; Outcome: {o}"
@@ -448,14 +544,14 @@ def build_ui(service: ResearchService) -> None:
                 p, concept, context = (form_state["pcc_p"].strip(), form_state["pcc_concept"].strip(),
                                        form_state["pcc_context"].strip())
                 if not p and not concept:
-                    ui.notify("Population and Concept are required for PCC", type="negative")
+                    ui.notify(t("pcc_required"), type="negative")
                     return
                 query_payload = {"population": p, "concept": concept, "context": context}
                 query = f"Population: {p}; Concept: {concept}; Context: {context}"
             else:
                 query = form_state["query"].strip()
                 if not query:
-                    ui.notify("Query is required", type="negative")
+                    ui.notify(t("query_required"), type="negative")
                     return
             run = service.create_run(
                 query=query,
@@ -484,8 +580,8 @@ def build_ui(service: ResearchService) -> None:
         # -- Header --
         with ui.header().classes("mdr-header items-center justify-between"):
             with ui.row().classes("items-center gap-3"):
-                ui.html('<span class="mdr-title">Medical Deep Research</span>')
-            ui.html('<span class="mdr-subtitle">Agentic Evidence Synthesis Engine</span>')
+                ui.html(f'<span class="mdr-title">{t("app_title")}</span>')
+            ui.html(f'<span class="mdr-subtitle">{t("app_subtitle")}</span>')
 
         # -- Main layout --
         with ui.row().classes("w-full items-start gap-5 p-5"):
@@ -495,20 +591,20 @@ def build_ui(service: ResearchService) -> None:
 
                 # New Research form
                 with ui.card().classes("mdr-card w-full p-5"):
-                    ui.html('<div class="mdr-section-title">New Research</div>')
-                    ui.html('<div class="mdr-section-desc" style="margin-bottom:0.75rem">Enter a clinical or healthcare question</div>')
+                    ui.html(f'<div class="mdr-section-title">{t("new_research")}</div>')
+                    ui.html(f'<div class="mdr-section-desc" style="margin-bottom:0.75rem">{t("new_research_desc")}</div>')
 
                     with ui.row().classes("w-full gap-3"):
                         query_type_select = ui.select(
-                            {"free": "Free-form", "pico": "PICO", "pcc": "PCC"},
-                            label="Query type",
+                            {"free": t("free_form"), "pico": "PICO", "pcc": "PCC"},
+                            label=t("query_type"),
                             value=form_state["query_type"],
                             on_change=lambda _: structured_input.refresh(),
                         ).props("outlined dark dense").bind_value(form_state, "query_type").classes("flex-1")
 
                         provider_select = ui.select(
                             {"openai": "OpenAI", "anthropic": "Anthropic", "google": "Google", "local": "Local (Ollama)"},
-                            label="Provider",
+                            label=t("provider"),
                             value=form_state["provider"],
                             on_change=lambda e: on_provider_change(e.value),
                         ).props("outlined dark dense").classes("flex-1")
@@ -520,7 +616,7 @@ def build_ui(service: ResearchService) -> None:
 
                         ui.select(
                             {"en": "English", "ko": "한국어"},
-                            label="Language",
+                            label=t("language"),
                             value=form_state["language"],
                             on_change=on_language_change,
                         ).props("outlined dark dense").classes("w-24")
@@ -529,31 +625,31 @@ def build_ui(service: ResearchService) -> None:
                     def structured_input() -> None:
                         qt = form_state["query_type"]
                         if qt == "pico":
-                            ui.input(label="Population", placeholder="e.g. Adults with HFpEF").props(
+                            ui.input(label=t("population"), placeholder="e.g. Adults with HFpEF").props(
                                 "outlined dark dense"
                             ).classes("w-full").bind_value(form_state, "pico_p")
-                            ui.input(label="Intervention", placeholder="e.g. SGLT2 inhibitors").props(
+                            ui.input(label=t("intervention"), placeholder="e.g. SGLT2 inhibitors").props(
                                 "outlined dark dense"
                             ).classes("w-full").bind_value(form_state, "pico_i")
-                            ui.input(label="Comparison", placeholder="e.g. Placebo or standard care").props(
+                            ui.input(label=t("comparison"), placeholder="e.g. Placebo or standard care").props(
                                 "outlined dark dense"
                             ).classes("w-full").bind_value(form_state, "pico_c")
-                            ui.input(label="Outcome", placeholder="e.g. Hospitalisation, mortality").props(
+                            ui.input(label=t("outcome"), placeholder="e.g. Hospitalisation, mortality").props(
                                 "outlined dark dense"
                             ).classes("w-full").bind_value(form_state, "pico_o")
                         elif qt == "pcc":
-                            ui.input(label="Population", placeholder="e.g. Elderly patients with diabetes").props(
+                            ui.input(label=t("population"), placeholder="e.g. Elderly patients with diabetes").props(
                                 "outlined dark dense"
                             ).classes("w-full").bind_value(form_state, "pcc_p")
-                            ui.input(label="Concept", placeholder="e.g. Self-management strategies").props(
+                            ui.input(label=t("concept"), placeholder="e.g. Self-management strategies").props(
                                 "outlined dark dense"
                             ).classes("w-full").bind_value(form_state, "pcc_concept")
-                            ui.input(label="Context", placeholder="e.g. Primary care settings").props(
+                            ui.input(label=t("context"), placeholder="e.g. Primary care settings").props(
                                 "outlined dark dense"
                             ).classes("w-full").bind_value(form_state, "pcc_context")
                         else:
                             query_input = ui.textarea(
-                                label="Research question",
+                                label=t("research_question"),
                                 placeholder="e.g. What is the evidence for SGLT2 inhibitors in heart failure with preserved ejection fraction?",
                                 value=form_state["query"],
                             ).props("autogrow outlined dark").classes("w-full")
@@ -577,8 +673,8 @@ def build_ui(service: ResearchService) -> None:
                             if not has_key and provider != "local":
                                 sel.props("disable")
                                 ui.html(
-                                    '<span style="font-size:0.7rem; color: var(--error)">'
-                                    'Set API key below to enable</span>'
+                                    f'<span style="font-size:0.7rem; color: var(--error)">'
+                                    f'{t("set_api_key")}</span>'
                                 )
                         else:
                             # Local / unknown provider: free-form input
@@ -589,13 +685,13 @@ def build_ui(service: ResearchService) -> None:
 
                     model_selector()
 
-                    ui.button("Start Research Run", on_click=start_run).classes("mdr-btn-primary w-full")
+                    ui.button(t("start_run"), on_click=start_run).classes("mdr-btn-primary w-full")
 
                 # Provider diagnostics (collapsible)
                 @ui.refreshable
                 def provider_diagnostics() -> None:
                     diagnostics = service.get_provider_diagnostics()
-                    with ui.expansion("Provider Status", icon="dns").classes("mdr-card w-full").props("dense"):
+                    with ui.expansion(t("provider_status"), icon="dns").classes("mdr-card w-full").props("dense"):
                         for entry in diagnostics:
                             is_selected = entry["provider"] == form_state["provider"]
                             card_cls = "mdr-diag-card mdr-diag-card-selected" if is_selected else "mdr-diag-card"
@@ -623,8 +719,8 @@ def build_ui(service: ResearchService) -> None:
                 provider_diagnostics()
 
                 # API Keys (collapsible)
-                with ui.expansion("API Keys", icon="key").classes("mdr-card w-full").props("dense"):
-                    ui.html('<div class="mdr-section-desc" style="margin-bottom:0.5rem">Keys are stored locally in the database</div>')
+                with ui.expansion(t("api_keys"), icon="key").classes("mdr-card w-full").props("dense"):
+                    ui.html(f'<div class="mdr-section-desc" style="margin-bottom:0.5rem">{t("api_keys_desc")}</div>')
                     stored_keys = service.get_api_keys()
                     key_fields: dict[str, Any] = {}
                     for svc, label in [
@@ -647,11 +743,11 @@ def build_ui(service: ResearchService) -> None:
                             val = field.value.strip()
                             if val:
                                 service.save_api_key(svc, val)
-                        ui.notify("API keys saved", type="positive")
+                        ui.notify(t("keys_saved"), type="positive")
                         provider_diagnostics.refresh()
                         model_selector.refresh()
 
-                    ui.button("Save Keys", on_click=save_keys).props("outline size=sm").style(
+                    ui.button(t("save_keys"), on_click=save_keys).props("outline size=sm").style(
                         "color: var(--accent); border-color: var(--accent); margin-top: 0.5rem"
                     )
 
@@ -673,14 +769,14 @@ def build_ui(service: ResearchService) -> None:
                     runs = service.list_runs(limit=pp, offset=offset)
                     with ui.card().classes("mdr-card w-full p-4"):
                         with ui.row().classes("w-full items-center justify-between"):
-                            ui.html('<div class="mdr-section-title">Research Runs</div>')
+                            ui.html(f'<div class="mdr-section-title">{t("research_runs")}</div>')
                             if total > 0:
                                 ui.html(
                                     f'<span class="mdr-section-desc">'
                                     f'{offset + 1}–{min(offset + pp, total)} of {total}</span>'
                                 )
                         if not runs:
-                            ui.label("No runs yet.").style("color: var(--text-muted); font-size: 0.82rem; margin-top: 0.5rem")
+                            ui.label(t("no_runs")).style("color: var(--text-muted); font-size: 0.82rem; margin-top: 0.5rem")
                             return
                         with ui.column().classes("w-full gap-1 mt-2"):
                             for run in runs:
@@ -723,12 +819,12 @@ def build_ui(service: ResearchService) -> None:
                             with ui.column().classes("items-center gap-3"):
                                 ui.html(
                                     '<div style="font-family: Playfair Display, serif; font-size: 1.3rem; '
-                                    'color: var(--text-muted); font-weight: 500">Select a run to inspect</div>'
+                                    f'color: var(--text-muted); font-weight: 500">{t("select_run")}</div>'
                                 )
                                 ui.html(
                                     '<div style="font-size: 0.8rem; color: var(--text-muted); max-width: 30rem; text-align: center">'
                                     'Create a new research run or select an existing one from the sidebar to view '
-                                    'its execution trace, artifacts, and final report.</div>'
+                                    f'{t("select_run_desc")}</div>'
                                 )
                         return
 
@@ -751,10 +847,10 @@ def build_ui(service: ResearchService) -> None:
                                 "font-size: 0.75rem; color: var(--warn); margin-top: 0.5rem"
                             )
                         with ui.row().classes("gap-2 mt-3"):
-                            ui.button("Interrupt", on_click=interrupt_selected).props(
+                            ui.button(t("interrupt"), on_click=interrupt_selected).props(
                                 "outline size=sm"
                             ).style("color: var(--text-secondary); border-color: var(--border-dim)")
-                            ui.button("Cancel", on_click=cancel_selected).props(
+                            ui.button(t("cancel"), on_click=cancel_selected).props(
                                 "outline size=sm"
                             ).style("color: var(--error); border-color: var(--error)")
 
@@ -781,10 +877,10 @@ def build_ui(service: ResearchService) -> None:
 
                         with ui.tab_panel(trace_tab).style("background: transparent !important; padding: 0 !important"):
                             with ui.card().classes("mdr-card w-full p-4"):
-                                ui.html('<div class="mdr-section-title">Execution Trace</div>')
+                                ui.html(f'<div class="mdr-section-title">{t("execution_trace")}</div>')
                                 ui.html(f'<div class="mdr-section-desc">{len(events)} events</div>')
                                 if not events:
-                                    ui.label("Waiting for events...").style("color: var(--text-muted); font-size: 0.82rem; margin-top: 0.5rem")
+                                    ui.label(t("waiting_events")).style("color: var(--text-muted); font-size: 0.82rem; margin-top: 0.5rem")
                                 with ui.column().classes("w-full gap-0 mt-3"):
                                     for event in events[-50:]:
                                         with ui.row().classes("mdr-trace-item w-full items-start gap-3"):
@@ -803,7 +899,7 @@ def build_ui(service: ResearchService) -> None:
                                 ui.html('<div class="mdr-section-title">Artifacts</div>')
                                 ui.html(f'<div class="mdr-section-desc">{len(artifacts)} artifacts</div>')
                                 if not artifacts:
-                                    ui.label("No artifacts yet.").style("color: var(--text-muted); font-size: 0.82rem; margin-top: 0.5rem")
+                                    ui.label(t("no_artifacts")).style("color: var(--text-muted); font-size: 0.82rem; margin-top: 0.5rem")
                                 for artifact in artifacts:
                                     with ui.expansion(
                                         f"{artifact.artifact_type}: {artifact.name}",
@@ -818,14 +914,14 @@ def build_ui(service: ResearchService) -> None:
                             with ui.card().classes("mdr-card w-full p-5"):
                                 ui.html('<div class="mdr-section-title" style="margin-bottom:1rem">Report</div>')
                                 ui.markdown(
-                                    run.result_markdown or "_Report not started yet._"
+                                    run.result_markdown or t("report_not_started")
                                 ).classes("mdr-report w-full")
 
                         with ui.tab_panel(diag_tab).style("background: transparent !important; padding: 0 !important"):
                             with ui.card().classes("mdr-card w-full p-4"):
-                                ui.html('<div class="mdr-section-title">Run Diagnostics</div>')
+                                ui.html(f'<div class="mdr-section-title">{t("run_diagnostics")}</div>')
                                 if not run_diag:
-                                    ui.label("No diagnostics available.").style("color: var(--text-muted)")
+                                    ui.label(t("no_diagnostics")).style("color: var(--text-muted)")
                                 else:
                                     with ui.row().classes("flex-wrap gap-1 mt-2"):
                                         exec_mode = run_diag.get("execution_mode")

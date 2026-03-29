@@ -47,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --all-extras
-          uv pip install pyinstaller pywebview Pillow
+          uv pip install pyinstaller pywebview
 
       - name: Read version
         id: version
@@ -64,18 +64,7 @@ jobs:
       - name: Build macOS app
         if: matrix.platform == 'macos'
         run: |
-          # Generate icns from PNG
-          mkdir -p assets
-          sips -p 1536 1536 medical-deep-research.png --out /tmp/mdr-square.png
-          mkdir -p /tmp/mdr-icon.iconset
-          for size in 16 32 128 256 512; do
-            sips -z $size $size /tmp/mdr-square.png --out /tmp/mdr-icon.iconset/icon_${size}x${size}.png
-          done
-          for size in 32 64 256 512 1024; do
-            sips -z $size $size /tmp/mdr-square.png --out /tmp/mdr-icon.iconset/icon_$((size/2))x$((size/2))@2x.png
-          done
-          iconutil -c icns /tmp/mdr-icon.iconset -o assets/icon.icns
-
+          # Icons are pre-built in assets/icon.icns (committed)
           # Run PyInstaller
           uv run python -m PyInstaller --noconfirm --clean "Medical Deep Research.spec"
 
@@ -109,22 +98,8 @@ jobs:
         if: matrix.platform == 'windows'
         shell: bash
         run: |
-          # Generate ICO from PNG
-          mkdir -p assets
-          uv run python -c "
-          from PIL import Image
-          img = Image.open('medical-deep-research.png').convert('RGBA')
-          # Pad to square
-          size = max(img.size)
-          square = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-          offset = ((size - img.width) // 2, (size - img.height) // 2)
-          square.paste(img, offset)
-          img_256 = square.resize((256, 256), Image.LANCZOS)
-          img_256.save('assets/icon.ico', format='ICO',
-                       sizes=[(16,16), (32,32), (48,48), (256,256)])
-          "
-
-          # Run PyInstaller (spec uses icns but Windows will use ico)
+          # Icon is pre-built in assets/icon.ico (committed)
+          # Run PyInstaller
           uv run python -m PyInstaller \
             --noconfirm --clean \
             --name "Medical Deep Research" \

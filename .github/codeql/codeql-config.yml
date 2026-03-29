@@ -1,9 +1,6 @@
 name: "CodeQL Config"
 
-# Paths to ignore - exclude test files and node_modules
 paths-ignore:
-  - '**/node_modules/**'
-  - '**/*.test.ts'
-  - '**/*.test.tsx'
-  - '**/*.spec.ts'
-  - '**/*.spec.tsx'
+  - '**/__pycache__/**'
+  - '**/test_*.py'
+  - '**/*_test.py'

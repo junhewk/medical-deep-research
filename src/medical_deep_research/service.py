@@ -99,6 +99,15 @@ class ResearchService:
             language = session.get(Setting, "language")
             return language.value if language else "en"
 
+    def set_language(self, language: str) -> None:
+        with self.database.session() as session:
+            existing = session.get(Setting, "language")
+            if existing:
+                existing.value = language
+            else:
+                session.add(Setting(key="language", value=language, category="general"))
+            session.commit()
+
     def get_api_keys(self) -> dict[str, str]:
         with self.database.session() as session:
             statement = select(ApiKey)

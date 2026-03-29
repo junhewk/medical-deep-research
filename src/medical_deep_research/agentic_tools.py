@@ -396,6 +396,133 @@ async def tool_submit_report(request: RunRequest, bridge: AgenticEventBridge, re
     return {"status": "ok", "length": len(report_markdown)}
 
 
+async def tool_translate_report(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    report_markdown: str,
+    target_language: str = "ko",
+) -> dict[str, Any]:
+    """Translate a report using the same LLM provider/model that ran the research."""
+    import logging
+    _log = logging.getLogger(__name__)
+
+    report_markdown = str(report_markdown).strip()
+    if not report_markdown:
+        return {"error": "No report to translate."}
+
+    translation_prompt = _build_translation_prompt(target_language)
+
+    api_keys = request.api_keys
+    provider = request.provider
+    model = request.model
+
+    try:
+        translated = await _call_llm_for_translation(
+            provider, model, api_keys, translation_prompt, report_markdown,
+        )
+        bridge._intermediate["submitted_report"] = translated
+        bridge.set_result(translated)
+        return {"status": "ok", "length": len(translated)}
+    except Exception as exc:
+        _log.warning("Translation failed: %s", exc)
+        return {"error": f"Translation failed: {exc}"}
+
+
+def _build_translation_prompt(target_language: str) -> str:
+    lang_name = {"ko": "Korean (한국어)", "ja": "Japanese (日本語)", "zh": "Chinese (中文)"}.get(
+        target_language, target_language,
+    )
+
+    return f"""\
+You are a medical research translator specializing in accurate, professional translation.
+Translate the research report to {lang_name}.
+
+## CRITICAL: Preserve in English
+The following MUST remain in English without translation:
+- Medical acronyms: PICO, PCC, MeSH, PMID, DOI, LVEF, HR, CI, RCT, OR, RR, NNT, NNH, eGFR, HbA1c, BMI
+- Evidence levels: Level I, Level II, Level III, Level IV, Level V
+- Author names (e.g., "Smith AB, Jones CD")
+- Journal names (e.g., "New England Journal of Medicine", "JAMA", "Lancet")
+- Database names: PubMed, Scopus, Cochrane, MEDLINE, OpenAlex, Semantic Scholar
+- Statistical values and confidence intervals (e.g., "HR 0.87, 95% CI 0.73-1.04")
+- P-values (e.g., "p < 0.001")
+- Citation numbers: [1], [2], [3], etc.
+- DOI and PMID identifiers
+- Study names/acronyms (e.g., "EMPEROR-Preserved trial", "DAPA-HF")
+- Drug/compound names when commonly used in English form
+
+## Formatting Rules
+- Maintain all markdown formatting exactly (headers, lists, bold, italics)
+- Keep the same paragraph structure
+- Preserve all line breaks and spacing
+- Keep reference formatting intact in the References section
+
+## Translation Style
+- Use formal academic style
+- Use appropriate medical terminology in the target language where standard terms exist
+- Maintain scientific precision and objectivity
+- Keep sentences clear and concise"""
+
+
+async def _call_llm_for_translation(
+    provider: str,
+    model: str,
+    api_keys: dict[str, str],
+    system_prompt: str,
+    report: str,
+) -> str:
+    """Call the LLM to translate the report."""
+    import os
+
+    if provider == "google":
+        api_key = api_keys.get("google") or api_keys.get("gemini") or os.getenv("GOOGLE_API_KEY", "")
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model,
+            contents=f"{system_prompt}\n\nTranslate the following research report:\n\n{report}",
+        )
+        return response.text or ""
+
+    if provider == "anthropic":
+        api_key = api_keys.get("anthropic") or os.getenv("ANTHROPIC_API_KEY", "")
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        response = await client.messages.create(
+            model=model,
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": f"Translate the following research report:\n\n{report}"}],
+        )
+        return response.content[0].text if response.content else ""
+
+    if provider == "openai":
+        api_key = api_keys.get("openai") or os.getenv("OPENAI_API_KEY", "")
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=api_key)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Translate the following research report:\n\n{report}"},
+            ],
+        )
+        return response.choices[0].message.content or ""
+
+    # Local / fallback — use OpenAI-compatible endpoint
+    base_url = os.getenv("MDR_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1")
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(api_key="local", base_url=base_url)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Translate the following research report:\n\n{report}"},
+        ],
+    )
+    return response.choices[0].message.content or ""
+
+
 async def tool_write_todos(request: RunRequest, bridge: AgenticEventBridge, items: list[str]) -> dict[str, Any]:
     items = [str(item) for item in items]
     await bridge.emit_todos(items)
@@ -871,6 +998,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "verify_studies": "Verify PMIDs of the ranked studies against PubMed.",
     "synthesize_report": "Returns structured evidence data for writing the final report.",
     "submit_report": "Submit your written research report (full markdown). MUST be called as the last step.",
+    "translate_report": "Translate the submitted report to the target language.",
     "write_todos": "Create a research TODO list to plan the workflow.",
     "update_progress": "Signal a phase transition or progress update to the user.",
     "fetch_fulltext": "Look up free full-text PDFs via Unpaywall + PMC for Level I & II ranked studies.",

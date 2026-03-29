@@ -41,6 +41,7 @@ from .agentic_tools import (
     tool_suggest_databases,
     tool_submit_report,
     tool_synthesize_report,
+    tool_translate_report,
     tool_update_progress,
     tool_verify_studies,
     tool_write_todos,
@@ -1325,6 +1326,34 @@ def _agentic_agent_started(agent_name: str) -> RuntimeEventPayload:
     )
 
 
+async def _maybe_translate_report(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    report: str,
+) -> tuple[str, RuntimeEventPayload | None]:
+    """Translate the report if language is not English. Returns (report, event_or_none)."""
+    if request.language in ("en", "english", "") or not report.strip():
+        return report, None
+
+    _log.info("Translating report to %s", request.language)
+    event = RuntimeEventPayload(
+        event_type=EventType.AGENT_STARTED,
+        phase="translating",
+        progress=97,
+        message=f"Translating report to {request.language}",
+        agent_name="Report Translator",
+    )
+    try:
+        result = await tool_translate_report(request, bridge, report, request.language)
+        if result.get("status") == "ok":
+            translated = bridge._result or report
+            return translated, event
+        _log.warning("Translation returned error: %s", result.get("error"))
+    except Exception as exc:
+        _log.warning("Translation failed: %s", exc)
+    return report, event
+
+
 def _agentic_final_events(
     runtime: ResearchRuntime,
     request: RunRequest,
@@ -1553,6 +1582,10 @@ class OpenAIRuntime(NativeSDKRuntime):
         agent_text = bridge._result or ""
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
         final_report = agent_text if agent_text.strip() else recovered
+
+        final_report, translate_event = await _maybe_translate_report(request, bridge, final_report)
+        if translate_event:
+            yield translate_event
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
@@ -1801,6 +1834,10 @@ class AnthropicRuntime(NativeSDKRuntime):
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
         final_report = agent_text if agent_text.strip() else recovered
 
+        final_report, translate_event = await _maybe_translate_report(request, bridge, final_report)
+        if translate_event:
+            yield translate_event
+
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
 
@@ -2036,6 +2073,11 @@ class GoogleRuntime(NativeSDKRuntime):
         agent_text = bridge._result or ""
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
         final_report = agent_text if agent_text.strip() else recovered
+
+        # Translate if non-English
+        final_report, translate_event = await _maybe_translate_report(request, bridge, final_report)
+        if translate_event:
+            yield translate_event
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
@@ -2334,6 +2376,10 @@ class LangChainLocalRuntime(NativeSDKRuntime):
         agent_text = bridge._result or ""
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
         final_report = agent_text if agent_text.strip() else recovered
+
+        final_report, translate_event = await _maybe_translate_report(request, bridge, final_report)
+        if translate_event:
+            yield translate_event
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event

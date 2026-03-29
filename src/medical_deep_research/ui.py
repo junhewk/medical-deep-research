@@ -405,6 +405,7 @@ def build_ui(service: ResearchService) -> None:
         form_state: dict[str, Any] = {
             "query": "",
             "query_type": "free",
+            "language": service.get_language(),
             "provider": "anthropic",
             "model": DEFAULT_MODELS["anthropic"],
             # PICO structured fields
@@ -512,6 +513,17 @@ def build_ui(service: ResearchService) -> None:
                             on_change=lambda e: on_provider_change(e.value),
                         ).props("outlined dark dense").classes("flex-1")
                         provider_select.bind_value(form_state, "provider")
+
+                        def on_language_change(e: Any) -> None:
+                            form_state["language"] = e.value
+                            service.set_language(e.value)
+
+                        ui.select(
+                            {"en": "English", "ko": "한국어"},
+                            label="Language",
+                            value=form_state["language"],
+                            on_change=on_language_change,
+                        ).props("outlined dark dense").classes("w-24")
 
                     @ui.refreshable
                     def structured_input() -> None:
@@ -621,6 +633,7 @@ def build_ui(service: ResearchService) -> None:
                         ("google", "Google"),
                         ("ncbi", "NCBI (E-utilities)"),
                         ("scopus", "Scopus / Elsevier"),
+                        ("semantic_scholar", "Semantic Scholar"),
                     ]:
                         key_fields[svc] = ui.input(
                             label=f"{label} API Key",

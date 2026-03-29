@@ -35,7 +35,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Service and API key are required" }, { status: 400 });
     }
 
-    const validServices = ["openai", "anthropic", "scopus", "ncbi", "cochrane"];
+    const validServices = ["openai", "anthropic", "google", "scopus", "ncbi", "cochrane"];
     if (!validServices.includes(service)) {
       return NextResponse.json(
         { error: `Invalid service. Must be one of: ${validServices.join(", ")}` },

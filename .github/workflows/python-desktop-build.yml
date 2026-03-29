@@ -1,0 +1,196 @@
+name: Python Desktop Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a GitHub Release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos
+            artifact_name: Medical-Deep-Research-macOS
+          - os: windows-latest
+            platform: windows
+            artifact_name: Medical-Deep-Research-Windows
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+          uv pip install pyinstaller pywebview Pillow
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(uv run python -c "
+          import tomllib, pathlib
+          p = tomllib.loads(pathlib.Path('pyproject.toml').read_text())
+          print(p['project']['version'])
+          ")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # --- macOS Build ---
+      - name: Build macOS app
+        if: matrix.platform == 'macos'
+        run: |
+          # Generate icns from PNG
+          mkdir -p assets
+          sips -p 1536 1536 medical-deep-research.png --out /tmp/mdr-square.png
+          mkdir -p /tmp/mdr-icon.iconset
+          for size in 16 32 128 256 512; do
+            sips -z $size $size /tmp/mdr-square.png --out /tmp/mdr-icon.iconset/icon_${size}x${size}.png
+          done
+          for size in 32 64 256 512 1024; do
+            sips -z $size $size /tmp/mdr-square.png --out /tmp/mdr-icon.iconset/icon_$((size/2))x$((size/2))@2x.png
+          done
+          iconutil -c icns /tmp/mdr-icon.iconset -o assets/icon.icns
+
+          # Run PyInstaller
+          uv run python -m PyInstaller --noconfirm --clean "Medical Deep Research.spec"
+
+          # Strip unused NiceGUI element JS bundles
+          for elem in plotly echart mermaid codemirror json_editor aggrid scene leaflet xterm joystick; do
+            rm -rf "dist/Medical Deep Research.app/Contents/Resources/nicegui/elements/${elem}/dist"
+            rm -rf "dist/Medical Deep Research.app/Contents/Resources/nicegui/elements/${elem}/src"
+          done
+
+          echo "App bundle size: $(du -sh 'dist/Medical Deep Research.app' | cut -f1)"
+
+      - name: Create macOS DMG
+        if: matrix.platform == 'macos'
+        run: |
+          DMG_NAME="Medical-Deep-Research-${{ steps.version.outputs.version }}-macOS.dmg"
+          hdiutil create -volname "Medical Deep Research" \
+            -srcfolder "dist/Medical Deep Research.app" \
+            -ov -format UDZO \
+            "dist/${DMG_NAME}"
+
+      - name: Upload macOS artifact
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+      # --- Windows Build ---
+      - name: Build Windows app
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          # Generate ICO from PNG
+          mkdir -p assets
+          uv run python -c "
+          from PIL import Image
+          img = Image.open('medical-deep-research.png').convert('RGBA')
+          # Pad to square
+          size = max(img.size)
+          square = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+          offset = ((size - img.width) // 2, (size - img.height) // 2)
+          square.paste(img, offset)
+          img_256 = square.resize((256, 256), Image.LANCZOS)
+          img_256.save('assets/icon.ico', format='ICO',
+                       sizes=[(16,16), (32,32), (48,48), (256,256)])
+          "
+
+          # Run PyInstaller (spec uses icns but Windows will use ico)
+          uv run python -m PyInstaller \
+            --noconfirm --clean \
+            --name "Medical Deep Research" \
+            --windowed \
+            --onedir \
+            --icon assets/icon.ico \
+            --add-data "src/medical_deep_research:medical_deep_research" \
+            --collect-all nicegui \
+            --collect-submodules medical_deep_research \
+            --hidden-import medical_deep_research \
+            --hidden-import medical_deep_research.main \
+            --hidden-import medical_deep_research.ui \
+            --hidden-import medical_deep_research.config \
+            --hidden-import medical_deep_research.models \
+            --hidden-import medical_deep_research.persistence \
+            --hidden-import medical_deep_research.service \
+            --hidden-import medical_deep_research.runtime \
+            --hidden-import medical_deep_research.agentic_tools \
+            --hidden-import medical_deep_research.tools \
+            --hidden-import pydantic_settings \
+            --hidden-import sqlmodel \
+            --hidden-import nicegui \
+            --hidden-import httpx \
+            --hidden-import anyio \
+            scripts/desktop_entry.py
+
+          # Strip unused NiceGUI element JS bundles
+          for elem in plotly echart mermaid codemirror json_editor aggrid scene leaflet xterm joystick; do
+            rm -rf "dist/Medical Deep Research/nicegui/elements/${elem}/dist"
+            rm -rf "dist/Medical Deep Research/nicegui/elements/${elem}/src"
+          done
+
+      - name: Package Windows build
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          cd dist
+          7z a -tzip "Medical-Deep-Research-${{ steps.version.outputs.version }}-Windows.zip" "Medical Deep Research"
+
+      - name: Upload Windows artifact
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f | head -20
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || format('manual-{0}', github.run_number) }}
+          name: "${{ github.ref_name || format('Build No.{0}', github.run_number) }}"
+          draft: true
+          files: artifacts/**/*
+          generate_release_notes: true

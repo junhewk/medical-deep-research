@@ -125,7 +125,8 @@ Return your analysis as valid JSON matching this exact structure:
 
 IMPORTANT:
 - Return ONLY valid JSON, no markdown code blocks
-- Be comprehensive in suggested terms - better to over-include than miss relevant literature
+- Suggested terms MUST be directly derived from the stated query components — do NOT add topics, conditions, or concepts the user did not mention
+- If the query is narrow, keep suggestions narrow — precision over recall
 - Consider the clinical context when suggesting terms`;
 
 // LLM creation is handled by shared llm-factory.ts

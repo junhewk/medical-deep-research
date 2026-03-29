@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlanningSteps } from "./PlanningSteps";
 import { AgentStatus } from "./AgentStatus";
 import { ToolLog } from "./ToolLog";
+import { SearchStrategyBox } from "./SearchStrategyBox";
 import { QueryDisplayInline } from "./QueryDisplay";
 import type { ResearchProgress as ResearchProgressType } from "@/lib/research";
 import {
@@ -418,6 +419,9 @@ export function ResearchProgressView({ data }: ResearchProgressProps) {
       {/* PICO/PCC Query Display */}
       {data.picoQuery && <PicoDisplay picoQuery={data.picoQuery} />}
       {data.pccQuery && <PccDisplay pccQuery={data.pccQuery} />}
+
+      {/* Search Strategy */}
+      <SearchStrategyBox executions={data.tool_executions || []} />
 
       {/* Progress Panels */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

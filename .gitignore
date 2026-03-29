@@ -10,7 +10,9 @@ dist/
 
 # Database
 *.db
+*.sqlite
 data/*.db
+python_data/
 
 # Environment
 .env
@@ -34,6 +36,11 @@ npm-debug.log*
 # Cache
 .cache/
 .turbo/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+unpaywall_cache
 
 # TypeScript
 *.tsbuildinfo
@@ -55,3 +62,11 @@ CLAUDE.md
 
 # Local research data
 data/research/
+
+# Tauri
+src-tauri/target/
+src-tauri/resources/standalone/
+src-tauri/binaries/bun-*
+
+# PyInstaller build artifacts (spec file is intentionally tracked)
+build/Medical Deep Research/

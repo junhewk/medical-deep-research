@@ -177,7 +177,10 @@
     "generatingPlan": "연구 계획 생성 중...",
     "analyzingQuery": "검색어 구조 분석 중",
     "active": "진행 중",
-    "complete": "완료"
+    "complete": "완료",
+    "searchStrategy": "검색 전략",
+    "databases": "개 데이터베이스",
+    "articlesFound": "건"
   },
   "agent": {
     "title": "에이전트 상태",

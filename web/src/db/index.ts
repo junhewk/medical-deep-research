@@ -1,8 +1,10 @@
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema";
+import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import path from "path";
 import fs from "fs";
+
+// Runtime detection: Bun has built-in SQLite, Node.js uses better-sqlite3
+const isBun = typeof (globalThis as unknown as { Bun?: unknown }).Bun !== "undefined";
 
 // Determine data directory path
 // Priority: DATA_DIR env var > relative to package root > relative to cwd
@@ -54,38 +56,55 @@ function getDbPath(): string {
   return path.join(dataDir, "medical-deep-research.db");
 }
 
-// Create database connection
-// Note: In Next.js dev mode, this may be called multiple times due to hot reloading
-// Using a global variable to cache the connection across hot reloads
+// Cache connection across hot reloads in Next.js dev mode
 const globalForDb = globalThis as unknown as {
-  sqlite: Database.Database | undefined;
-  db: ReturnType<typeof drizzle<typeof schema>> | undefined;
+  sqlite: unknown;
+  db: unknown;
 };
 
+/* eslint-disable @typescript-eslint/no-require-imports */
 function createDb() {
   const dbPath = getDbPath();
 
-  let sqlite: Database.Database;
-  try {
-    sqlite = new Database(dbPath);
-    // Enable WAL mode for better concurrent access
-    sqlite.pragma("journal_mode = WAL");
-  } catch (error) {
-    console.error(`Failed to open database at ${dbPath}:`, error);
-    throw new Error(`Cannot open database: ${dbPath}`);
+  if (isBun) {
+    // Dynamic require prevents webpack from resolving bun:sqlite at build time
+    const { Database } = require("bun:sqlite");
+    const { drizzle } = require("drizzle-orm/bun-sqlite");
+    const sqlite = new Database(dbPath, { create: true });
+    sqlite.exec("PRAGMA journal_mode = WAL");
+    sqlite.exec("PRAGMA foreign_keys = ON");
+    sqlite.exec("PRAGMA busy_timeout = 5000");
+    return { sqlite, db: drizzle(sqlite, { schema }) };
   }
 
+  const Database = require("better-sqlite3");
+  const { drizzle } = require("drizzle-orm/better-sqlite3");
+  const sqlite = new Database(dbPath);
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("foreign_keys = ON");
+  sqlite.pragma("busy_timeout = 5000");
   return { sqlite, db: drizzle(sqlite, { schema }) };
 }
+/* eslint-enable @typescript-eslint/no-require-imports */
 
-// Use cached connection in development to prevent connection leaks during hot reload
-if (!globalForDb.db) {
-  const { sqlite, db } = createDb();
-  globalForDb.sqlite = sqlite;
-  globalForDb.db = db;
+// Lazy initialization — avoid opening the database at module load time,
+// which causes SQLITE_BUSY errors when Next.js build spawns multiple workers.
+function getDb(): BetterSQLite3Database<typeof schema> {
+  if (!globalForDb.db) {
+    const { sqlite, db } = createDb();
+    globalForDb.sqlite = sqlite;
+    globalForDb.db = db;
+  }
+  return globalForDb.db as BetterSQLite3Database<typeof schema>;
 }
 
-export const db = globalForDb.db!;
+export const db = new Proxy({} as BetterSQLite3Database<typeof schema>, {
+  get(_target, prop, receiver) {
+    const real = getDb();
+    const value = Reflect.get(real, prop, receiver);
+    return typeof value === "function" ? value.bind(real) : value;
+  },
+});
 
 // Export schema for convenience
 export * from "./schema";

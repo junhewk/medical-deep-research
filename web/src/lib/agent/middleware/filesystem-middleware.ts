@@ -21,8 +21,12 @@ import * as fs from "fs/promises";
 import * as path from "path";
 
 // Base directory for research files
-const getResearchDir = (researchId: string) =>
-  path.join(process.cwd(), "data", "research", researchId);
+const getResearchDir = (researchId: string) => {
+  const base = process.env.DATA_DIR
+    ? path.join(process.env.DATA_DIR, "research")
+    : path.join(process.cwd(), "data", "research");
+  return path.join(base, researchId);
+};
 
 /**
  * Create ls tool for listing files in research directory

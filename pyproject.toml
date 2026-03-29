@@ -26,6 +26,7 @@ desktop = ["pywebview"]
 openai = ["openai-agents"]
 anthropic = ["claude-agent-sdk"]
 pdf = ["opendataloader-pdf", "unpywall"]
+langchain = ["langchain-core", "langchain-community", "langchain-openai", "langgraph"]
 google = ["google-adk"]
 
 [project.scripts]

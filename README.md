@@ -7,275 +7,193 @@ Evidence-Based Medical Research Assistant
 
 ## Overview
 
-Medical Deep Research is an **evidence-based medicine (EBM)** research assistant for healthcare professionals and medical researchers. It uses autonomous AI agents to search medical literature, classify evidence levels, and synthesize findings into comprehensive reports. It also supports **broader healthcare research** topics such as ethics, policy, informatics, and social care with adapted thematic analysis pipelines.
+Medical Deep Research is an **evidence-based medicine (EBM)** research assistant for healthcare professionals and medical researchers. It uses **autonomous AI agents** to search medical literature across multiple databases, classify evidence levels, retrieve and parse open-access full-text PDFs, and synthesize findings into comprehensive reports.
 
-Available as a **web application** and a **desktop application** (Windows, macOS) powered by [Tauri](https://v2.tauri.app/).
+The Python rewrite (`feature/python-nicegui-rewrite`) replaces the original TypeScript/LangGraph stack with a **multi-provider agentic architecture** where the LLM autonomously drives the entire research workflow by calling MCP tools.
 
 ### Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **Architecture** | **LangGraph StateGraph** with autonomous planning |
-| **Query Framework** | **PICO** (clinical) + **PCC** (scoping reviews) + **Free-form** (auto-classified) |
-| **Terminology** | **Dynamic MeSH** via NLM API + SQLite caching |
-| **Context Analysis** | **LLM-based** intent detection (clinical, economic, safety, policy, ethics) |
-| **Evidence** | **Evidence level tagging** (Level I-V) |
-| **Search** | PubMed, Scopus (BYOK), Cochrane, OpenAlex, Semantic Scholar |
-| **Translation** | Korean report translation with terminology preservation |
-| **Stack** | Next.js + Drizzle ORM + SQLite |
-| **Desktop** | Tauri 2 (Windows NSIS installer, macOS DMG) |
-| **API Keys** | BYOK - OpenAI, Anthropic, Google, Scopus, NCBI |
+| **Architecture** | Agentic loop — LLM calls 15 tools autonomously via shared-state bridge |
+| **Providers** | Anthropic (Claude), OpenAI, Google (Gemini), **Local LLMs** (Ollama, LM Studio, llama-server) |
+| **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
+| **Search** | PubMed (EBM-boosted), Cochrane, OpenAlex, Semantic Scholar, Scopus (BYOK) |
+| **Ranking** | Agent-driven: LLM reviews abstracts and ranks by relevance, evidence quality, recency |
+| **Full-text** | Unpaywall + PubMed Central OA lookup, PDF download and parsing via opendataloader-pdf |
+| **Evidence** | Level I-V classification, PMID verification against PubMed |
+| **Stack** | Python, NiceGUI, SQLModel, claude-agent-sdk / openai-agents / google-adk / LangChain |
+| **UI** | Dark "Clinical Observatory" theme with real-time event trace |
 
-## Installation
-
-### Desktop App (Recommended)
-
-Download the latest installer from [GitHub Releases](https://github.com/junhewk/medical-deep-research/releases/latest):
-
-| Platform | File | Notes |
-|----------|------|-------|
-| **Windows** (x64) | [`Medical.Deep.Research_2.7.1_x64-setup.exe`](https://github.com/junhewk/medical-deep-research/releases/latest) | NSIS installer |
-| **macOS** (Apple Silicon) | [`Medical.Deep.Research_2.7.1_aarch64.dmg`](https://github.com/junhewk/medical-deep-research/releases/latest) | M1/M2/M3/M4 |
-| **macOS** (Intel) | [`Medical.Deep.Research_2.7.1_x64.dmg`](https://github.com/junhewk/medical-deep-research/releases/latest) | Intel Macs |
-
-The desktop app bundles everything — no Node.js or other dependencies required.
-
-### Web App
-
-#### Prerequisites
-
-- Node.js 18+
-- npm
-
-#### One-Click Start
-
-**macOS / Linux:**
-```bash
-./start-web.sh
-```
-
-**Windows:**
-```cmd
-start-web.bat
-```
-
-#### Manual Installation
+## Quick Start
 
 ```bash
-cd web
+# Install with all provider extras
+uv sync --all-extras
 
-# Install dependencies
-npm install
+# Or pick your provider
+uv sync --extra anthropic   # Claude Agent SDK
+uv sync --extra openai      # OpenAI Agents SDK
+uv sync --extra google      # Google ADK
+uv sync --extra langchain   # Local LLMs (Ollama, LM Studio, llama-server)
+uv sync --extra pdf         # Full-text PDF parsing
 
-# Initialize database
-npm run db:init
-
-# Start development server
-npm run dev
+# Run the app
+uv run medical-deep-research
 ```
 
-Open http://localhost:3000
+Open http://127.0.0.1:8080
 
-### Build Desktop from Source
+### Environment Variables
 
-**macOS / Linux:**
 ```bash
-./scripts/build-desktop.sh
+# LLM provider keys (at least one required for cloud providers)
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=...
+
+# Local LLM endpoint (for Ollama, LM Studio, llama-server, vLLM)
+MDR_LOCAL_BASE_URL=http://127.0.0.1:8090/v1
+
+# Optional search API keys
+MDR_NCBI_API_KEY=...        # Higher PubMed rate limits
+MDR_SCOPUS_API_KEY=...      # Scopus/Elsevier access
+MDR_SEMANTIC_SCHOLAR_API_KEY=...
 ```
 
-**Windows:**
-```cmd
-scripts\build-desktop.bat
+## How It Works
+
+The agent autonomously executes an 8-step research workflow:
+
+```
+1. plan_search        → Build search strategy (keywords, databases, queries)
+2. search_*           → Search 3-5 databases (PubMed, Cochrane, OpenAlex, etc.)
+3. get_studies        → Deduplicate and pre-score all collected studies
+4. finalize_ranking   → Agent reviews abstracts and ranks by EBM quality
+5. fetch_fulltext     → Unpaywall + PMC lookup for open-access PDFs
+6. parse_pdf          → Download and parse full-text PDFs to markdown
+7. verify_studies     → Validate PMIDs against PubMed
+8. synthesize_report  → Generate final evidence report
 ```
 
-Requires Rust toolchain and Node.js. The build script automatically downloads the Bun sidecar binary, builds the Next.js standalone server, and produces the Tauri installer.
+The LLM drives the workflow — it decides what to search, reviews evidence quality, ranks studies using medical knowledge, and writes the synthesis. Tools use a **shared-state bridge** so the agent never passes large JSON blobs as arguments.
 
-## Getting Started
+### Provider Support
 
-### Configure API Keys
+| Provider | SDK | Model (tested) | Agentic | Full-text |
+|----------|-----|----------------|---------|-----------|
+| Anthropic | `claude-agent-sdk` | claude-haiku-4-5 | Yes | Yes |
+| OpenAI | `openai-agents` | gpt-5-mini | Yes | Yes |
+| Google | `google-adk` | gemini-2.5-flash | Yes | Yes |
+| Local | `langchain` + `langgraph` | Qwen3.5-122B (llama-server) | Yes | Yes |
 
-1. Go to **Settings > API Keys**
-2. Add your API keys:
-   - **OpenAI**, **Anthropic**, or **Google** (one LLM provider required)
-   - **NCBI** (optional - higher PubMed rate limits)
-   - **Scopus** (optional - for Scopus searches)
+All providers fall back to a deterministic pipeline if SDK/credentials are unavailable.
 
-### Start Your First Research
+### Search Hardening
 
-1. Click **New Research**
-2. Choose framework:
-   - **PICO** - For clinical intervention questions
-   - **PCC** - For scoping reviews / qualitative research
-   - **Free-form** - Natural language query
-3. Fill in the components and click **Start Research**
+Searches are optimized for the small result window (~10-50 articles per database):
 
-> **Note:** Free-form queries are automatically classified as **clinical** or **healthcare research**. Clinical queries use PICO/PCC frameworks with evidence-level reporting. Healthcare research queries (ethics, policy, informatics, social care, etc.) use keyword-based search strategies with thematic report structure.
+- **PubMed**: EBM publication type boost (systematic reviews, meta-analyses, RCTs, guidelines), relevance sort, 2019+ date filter
+- **OpenAlex**: 2015+ filter, relevance sort
+- **Semantic Scholar**: Medicine field filter, 2015+ year, retry on 429
+- **Cochrane**: Filtered to Cochrane Database of Systematic Reviews
+- **Scopus**: Relevance sort, 2015-2026 date range
 
-## Query Frameworks
+### Full-text Pipeline
 
-### PICO (Clinical Questions)
+After ranking, the agent retrieves open-access full-text for Level I & II studies:
 
-Best for questions about interventions, therapies, or treatments.
-
-| Component | Description | Example |
-|-----------|-------------|---------|
-| **P** - Population | Who are the patients? | Adults with type 2 diabetes |
-| **I** - Intervention | What treatment/exposure? | SGLT2 inhibitors |
-| **C** - Comparison | What is the alternative? | Metformin monotherapy |
-| **O** - Outcome | What results matter? | Cardiovascular events |
-
-### PCC (Scoping Reviews)
-
-Best for exploratory questions and qualitative research.
-
-| Component | Description | Example |
-|-----------|-------------|---------|
-| **P** - Population | Who is being studied? | Healthcare workers |
-| **C** - Concept | What phenomenon? | Burnout experiences |
-| **C** - Context | In what setting? | During COVID-19 pandemic |
+1. **Unpaywall** — parallel lookup (10 concurrent) for all ranked Level I/II studies with DOIs
+2. **PubMed Central** — batch PMID→PMCID conversion, then OA service for tgz package URLs
+3. **PDF parsing** — download via direct URL (not unpywall handle, which corrupts binary data), parse to markdown via opendataloader-pdf
 
 ## Architecture
 
 ```
-medical-deep-research/
-├── web/                          # Next.js web application
-│   └── src/
-│       ├── app/                  # App Router (pages + API routes)
-│       ├── components/           # React components (shadcn/ui)
-│       ├── db/                   # Drizzle ORM schema + SQLite
-│       ├── i18n/                 # Internationalization
-│       ├── lib/
-│       │   ├── agent/            # LangGraph research agent
-│       │   │   ├── deep-agent.ts
-│       │   │   ├── research-keywords.ts
-│       │   │   └── tools/        # PubMed, Scopus, Cochrane,
-│       │   │                     # OpenAlex, Semantic Scholar,
-│       │   │                     # MeSH, evidence, translation
-│       │   ├── research.ts       # React Query hooks
-│       │   └── state-export.ts   # Markdown export
-│       └── types/
-├── src-tauri/                    # Tauri desktop shell
-│   ├── src/                      # Rust backend (server management)
-│   ├── binaries/                 # Bun sidecar (per-platform)
-│   ├── resources/                # Bundled Next.js standalone
-│   ├── icons/                    # App icons
-│   └── tauri.conf.json
-└── scripts/
-    ├── build-desktop.sh          # macOS/Linux build script
-    └── build-desktop.bat         # Windows build script
+src/medical_deep_research/
+├── main.py                 # NiceGUI app entry point
+├── ui.py                   # Dark-theme web UI
+├── config.py               # Settings (pydantic-settings)
+├── models.py               # SQLModel data models + RunRequest
+├── persistence.py          # SQLite database layer
+├── service.py              # Run orchestration + event persistence
+├── runtime.py              # Provider runtimes (Anthropic, OpenAI, Google, Local)
+├── agentic_tools.py        # Shared tool logic + AgenticEventBridge + system prompt
+├── tools.py                # Legacy tool helpers
+├── research/
+│   ├── planning.py         # Query planning, keyword extraction, EBM classification
+│   ├── search.py           # PubMed, OpenAlex, Cochrane, Semantic Scholar, Scopus
+│   ├── scoring.py          # Evidence level scoring, composite ranking
+│   ├── verification.py     # PMID verification via NCBI
+│   ├── reporting.py        # Markdown report rendering
+│   └── models.py           # Research data models (EvidenceStudy, ScoredStudy, etc.)
+└── mcp/
+    └── servers.py          # FastMCP servers (literature, evidence, workspace)
 ```
 
-### Desktop Architecture
+### Runtime Class Hierarchy
 
-The desktop app uses Tauri 2 to wrap the Next.js web application:
+```
+ResearchRuntime (ABC)
+  └─ DeterministicRuntime          ← pure Python fallback
+       └─ NativeSDKRuntime         ← legacy 3-checkpoint base
+            ├─ OpenAIRuntime       ← agentic (FunctionTool + Runner)
+            ├─ AnthropicRuntime    ← agentic (MCP servers + hooks)
+            ├─ GoogleRuntime       ← agentic (ADK Agent + callbacks)
+            └─ LangChainLocalRuntime ← agentic (StructuredTool + langgraph)
+```
 
-1. **Tauri shell** spawns a bundled **Bun** runtime as a sidecar process
-2. Bun runs the **Next.js standalone server** on a random local port
-3. A session auth token secures communication between the webview and server
-4. SQLite database is stored in the platform's app data directory
+### Shared Infrastructure
 
-## Medical Research Tools
+All 4 agentic runtimes share:
 
-| Tool | Description |
-|------|-------------|
-| `pico_query_builder` | Builds PubMed query from PICO with context analysis |
-| `pcc_query_builder` | Builds query from PCC with context analysis |
-| `mesh_resolver` | Dynamic MeSH lookup via NLM RDF API |
-| `query_context_analyzer` | LLM-based query intent detection |
-| `evidence_level` | Classifies study evidence (I-V) |
-| `pubmed_search` | Searches PubMed via NCBI E-utilities |
-| `scopus_search` | Searches Scopus (requires API key) |
-| `cochrane_search` | Searches Cochrane Library |
-| `openalex_search` | Searches OpenAlex (free, no API key) |
-| `semantic_scholar_search` | Searches Semantic Scholar (free) |
-| `population_validator` | AI-based population matching |
-| `claim_verifier` | Post-synthesis citation verification |
-| `report_translator` | Korean translation with terminology preservation |
+- **`AgenticEventBridge`** — shared state (search results, ranked studies, verification, PDFs) + async event queue for UI streaming
+- **15 tool functions** — `tool_plan_search`, `tool_search`, `tool_get_studies`, `tool_finalize_ranking`, `tool_fetch_fulltext`, `tool_parse_pdf`, etc.
+- **`agentic_system_prompt()`** — common workflow instructions
+- **`recover_report_from_bridge()`** — partial recovery if agent times out
+
+Each provider wraps the shared tools in its SDK format:
+- Anthropic: `claude_agent_sdk.tool` + `create_sdk_mcp_server`
+- OpenAI: `agents.FunctionTool`
+- Google: plain async callables (ADK inspects signatures)
+- LangChain: `@tool` decorator
+
+## MCP Servers
+
+Run standalone MCP servers for external tool access:
+
+```bash
+uv run medical-deep-research-mcp literature   # Search tools
+uv run medical-deep-research-mcp evidence     # Ranking, verification, reporting
+uv run medical-deep-research-mcp workspace    # Run/artifact management
+```
 
 ## Evidence Level Classification
 
 | Level | Study Type |
 |-------|------------|
-| Level I | Systematic reviews, Meta-analyses |
+| Level I | Systematic reviews, Meta-analyses, Clinical guidelines |
 | Level II | Randomized Controlled Trials (RCTs) |
 | Level III | Cohort studies, Case-control studies |
 | Level IV | Case series, Cross-sectional studies |
 | Level V | Case reports, Expert opinion |
 
-## Research Workflow
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    USER INPUT                                │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │  PICO: Population + Intervention + Comparison + Outcome │
-│  │  PCC:  Population + Concept + Context                   │
-│  │  Free: Natural language query                           │
-│  └─────────────────────────────────────────────────────┘    │
-│                          ↓                                   │
-├─────────────────────────────────────────────────────────────┤
-│                  LANGGRAPH AGENT                             │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │  Domain Classification → Planning → Tools → Synthesis  │  │
-│  └─────────────────────────────────────────────────────┘    │
-│                          ↓                                   │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│  │  MeSH    │  │  PubMed  │  │  Scopus  │  │ Cochrane │    │
-│  │ Resolver │  │  Search  │  │  Search  │  │  Search  │    │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
-│  ┌──────────┐  ┌───────────────┐                            │
-│  │ OpenAlex │  │   Semantic    │                            │
-│  │  Search  │  │   Scholar     │                            │
-│  └──────────┘  └───────────────┘                            │
-│                          ↓                                   │
-├─────────────────────────────────────────────────────────────┤
-│                 EVIDENCE PROCESSING                          │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │  • Evidence Level Classification (I-V)              │    │
-│  │  • Cross-database Deduplication (PMID/DOI)          │    │
-│  │  • Population Validation                            │    │
-│  │  • Claim Verification                               │    │
-│  └─────────────────────────────────────────────────────┘    │
-│                          ↓                                   │
-│              ┌───────────────────────┐                       │
-│              │   Markdown Report     │                       │
-│              │   with Citations      │                       │
-│              └───────────────────────┘                       │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## API Key Configuration (BYOK)
-
-All API keys are stored locally in SQLite. Configure in Settings > API Keys:
-
-| Service | Required | Description |
-|---------|----------|-------------|
-| OpenAI | Yes* | GPT-4o for research |
-| Anthropic | Yes* | Claude for research |
-| Google | Yes* | Gemini for research |
-| NCBI | No | Higher PubMed rate limits (free) |
-| Scopus | No | Scopus/Elsevier database access |
-| Cochrane | No | Direct Cochrane API (falls back to PubMed) |
-
-*One LLM provider required
-
 ## Development
 
 ```bash
-cd web
-
-# Development
-npm run dev
-
-# Build
-npm run build
-
-# Database commands
-npm run db:init   # Initialize database
-npm run db:push   # Push schema changes
+# Install dev dependencies
+uv sync --all-extras
 
 # Lint
-npm run lint
+uv run ruff check src/
+uv run mypy src/ --ignore-missing-imports
+
+# Test a specific provider
+ANTHROPIC_API_KEY=... uv run python -c "
+import asyncio
+from medical_deep_research.runtime import AnthropicRuntime, RunRequest
+# ... see test examples in the codebase
+"
 ```
 
 ## License
@@ -286,9 +204,10 @@ MIT License - see [LICENSE](LICENSE)
 
 - Inspired by [Local Deep Research](https://github.com/LearningCircuit/local-deep-research) by LearningCircuit
 - PubMed/MeSH: [NCBI/NLM](https://www.ncbi.nlm.nih.gov/)
-- UI components: [shadcn/ui](https://ui.shadcn.com/)
-- Agent framework: [LangGraph](https://langchain-ai.github.io/langgraph/)
-- Desktop framework: [Tauri](https://v2.tauri.app/)
+- Open access: [Unpaywall](https://unpaywall.org/), [PubMed Central](https://pmc.ncbi.nlm.nih.gov/)
+- PDF parsing: [opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf)
+- Agent SDKs: [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code/sdk), [OpenAI Agents](https://openai.github.io/openai-agents-python/), [Google ADK](https://google.github.io/adk-docs/), [LangChain](https://python.langchain.com/)
+- UI framework: [NiceGUI](https://nicegui.io/)
 
 ## Citation
 

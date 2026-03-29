@@ -25,8 +25,9 @@ from .runtime import RunRequest, build_runtime, describe_provider_runtime
 
 DEFAULT_MODELS = {
     "openai": "gpt-5.2",
-    "anthropic": "claude-opus-4-5-20251101",
+    "anthropic": "claude-haiku-4-5-20251001",
     "google": "gemini-3-pro-preview",
+    "local": "llama3.3:70b",
 }
 
 

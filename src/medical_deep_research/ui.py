@@ -432,7 +432,7 @@ def build_ui(service: ResearchService) -> None:
                         ).props("outlined dark dense").bind_value(form_state, "query_type").classes("flex-1")
 
                         provider_select = ui.select(
-                            {"openai": "OpenAI", "anthropic": "Anthropic", "google": "Google"},
+                            {"openai": "OpenAI", "anthropic": "Anthropic", "google": "Google", "local": "Local (Ollama)"},
                             label="Provider",
                             value=form_state["provider"],
                             on_change=lambda e: on_provider_change(e.value),

@@ -296,10 +296,17 @@ async def search_semantic_scholar(
         headers["x-api-key"] = api_key
 
     try:
+        import asyncio as _aio
+        response = None
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers=headers) as client:
-            response = await client.get(SEMANTIC_SCHOLAR_BASE_URL, params=params)
-            response.raise_for_status()
-        papers = response.json().get("data", [])
+            for attempt in range(3):
+                response = await client.get(SEMANTIC_SCHOLAR_BASE_URL, params=params)
+                if response.status_code != 429:
+                    break
+                await _aio.sleep(1.5 * (attempt + 1))
+            if response is not None:
+                response.raise_for_status()
+        papers = (response.json() if response else {}).get("data", [])
         studies: list[EvidenceStudy] = []
         for paper in papers:
             title = paper.get("title") or "Untitled"

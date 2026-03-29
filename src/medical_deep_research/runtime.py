@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Iterator, TypeVar
 
 from pydantic import BaseModel
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field
 
-from .models import ArtifactType, EventType, RuntimeEventPayload
+from .models import ArtifactType, EventType, RunRequest, RuntimeEventPayload
 from .research import (
     build_query_plan,
     empty_verification_summary,
@@ -27,10 +27,23 @@ from .research import (
     verify_studies,
 )
 from .research.models import QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
-import httpx
-
-from .research.search import POLITE_EMAIL
-from .research.planning import suggest_databases as _suggest_databases
+from .agentic_tools import (
+    AgenticEventBridge,
+    TOOL_DESCRIPTIONS,
+    agentic_system_prompt,
+    recover_report_from_bridge,
+    tool_fetch_fulltext,
+    tool_finalize_ranking,
+    tool_get_studies,
+    tool_parse_pdf,
+    tool_plan_search,
+    tool_search,
+    tool_suggest_databases,
+    tool_synthesize_report,
+    tool_update_progress,
+    tool_verify_studies,
+    tool_write_todos,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -45,20 +58,9 @@ REWIND_DECISION_TIMEOUT_SECONDS = 15.0
 FINAL_SYNTHESIS_TIMEOUT_SECONDS = 25.0
 ANTHROPIC_AGENTIC_TIMEOUT_SECONDS = 300.0
 ANTHROPIC_AGENTIC_MAX_TURNS = 25
+LOCAL_AGENTIC_TIMEOUT_SECONDS = 600.0
 TModel = TypeVar("TModel", bound=BaseModel)
 _log = logging.getLogger(__name__)
-
-
-class RunRequest(SQLModel):
-    run_id: str
-    query: str
-    query_type: str
-    mode: str
-    provider: str
-    model: str
-    language: str = "en"
-    api_keys: dict[str, str] = Field(default_factory=dict)
-    offline_mode: bool = False
 
 
 class AgentResearchOutput(BaseModel):
@@ -1277,6 +1279,217 @@ class NativeSDKRuntime(DeterministicRuntime):
         )
 
 
+
+
+# ---------------------------------------------------------------------------
+# Shared agentic user prompt
+# ---------------------------------------------------------------------------
+
+def _agentic_user_prompt(request: RunRequest) -> str:
+    return (
+        f"Conduct a thorough literature review for the following query:\n\n"
+        f"{request.query}\n\n"
+        f"Query type: {request.query_type}\n"
+        f"Follow your recommended workflow: plan \u2192 search \u2192 rank \u2192 verify \u2192 synthesize.\n"
+        f"Provide the complete markdown report in your final response."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agentic event helpers (shared across provider runtimes)
+# ---------------------------------------------------------------------------
+
+def _agentic_run_started(runtime: ResearchRuntime, request: RunRequest) -> RuntimeEventPayload:
+    return RuntimeEventPayload(
+        event_type=EventType.RUN_STARTED,
+        phase="planning",
+        progress=5,
+        message=f"Starting agentic {runtime.runtime_name} research run",
+        extra={
+            "sdk_available": runtime.sdk_available,
+            "offline_mode": request.offline_mode,
+            "execution_mode": "native_sdk_agentic",
+            "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
+        },
+    )
+
+
+def _agentic_agent_started(agent_name: str) -> RuntimeEventPayload:
+    return RuntimeEventPayload(
+        event_type=EventType.AGENT_STARTED,
+        phase="planning",
+        progress=7,
+        message=f"{agent_name} is autonomously driving the research workflow",
+        agent_name=agent_name,
+    )
+
+
+def _agentic_final_events(
+    runtime: ResearchRuntime,
+    request: RunRequest,
+    final_report: str,
+    bridge: AgenticEventBridge,
+) -> list[RuntimeEventPayload]:
+    return [
+        RuntimeEventPayload(
+            event_type=EventType.REPORT_DELTA,
+            phase="synthesizing",
+            progress=97,
+            message="Report assembled from agentic research workflow",
+            report_markdown=final_report,
+        ),
+        RuntimeEventPayload(
+            event_type=EventType.ARTIFACT_CREATED,
+            phase="complete",
+            progress=100,
+            message="Saved final report artifact",
+            artifact_type=ArtifactType.FINAL_REPORT,
+            artifact_name="Final Report",
+            artifact_text=final_report,
+        ),
+        RuntimeEventPayload(
+            event_type=EventType.RUN_COMPLETED,
+            phase="complete",
+            progress=100,
+            message=f"{runtime.runtime_name} agentic run completed",
+            report_markdown=final_report,
+            extra={
+                "sdk_available": runtime.sdk_available,
+                "offline_mode": request.offline_mode,
+                "execution_mode": "native_sdk_agentic",
+                "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
+                "tool_calls": bridge._tool_call_count,
+                "had_error": bridge._error is not None,
+            },
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Agents SDK — agentic runtime
+# ---------------------------------------------------------------------------
+
+_SEARCH_SOURCES = {
+    "search_pubmed": "PubMed",
+    "search_openalex": "OpenAlex",
+    "search_cochrane": "Cochrane",
+    "search_semantic_scholar": "Semantic Scholar",
+    "search_scopus": "Scopus",
+}
+
+
+def _build_openai_tools(request: RunRequest, bridge: AgenticEventBridge) -> list[Any]:
+    """Build OpenAI ``FunctionTool`` instances wrapping shared tool functions."""
+    from agents import FunctionTool
+
+    tools: list[Any] = []
+
+    def _wrap(name: str, schema: dict[str, Any], coro_factory: Any) -> Any:  # noqa: ANN401
+        """Create a FunctionTool that emits bridge events around the call."""
+
+        async def _invoke(_ctx: Any, args_json: str) -> str:
+            args = json.loads(args_json) if args_json else {}
+            await bridge.on_tool_start(name, args)
+            try:
+                result = await coro_factory(args)
+            except Exception as exc:
+                await bridge.on_tool_end(name, {"error": str(exc)})
+                return json.dumps({"error": str(exc)})
+            await bridge.on_tool_end(name, result)
+            return json.dumps(result, default=str)
+
+        return FunctionTool(
+            name=name,
+            description=TOOL_DESCRIPTIONS.get(name, name),
+            params_json_schema=schema,
+            on_invoke_tool=_invoke,
+            strict_json_schema=False,
+        )
+
+    # Planning tools
+    tools.append(_wrap("plan_search", {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "query_type": {"type": "string", "default": "free"},
+        },
+        "required": ["query"],
+    }, lambda a: tool_plan_search(request, bridge, a["query"], a.get("query_type", "free"))))
+
+    tools.append(_wrap("suggest_databases", {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }, lambda a: tool_suggest_databases(request, bridge, a["query"])))
+
+    tools.append(_wrap("write_todos", {
+        "type": "object",
+        "properties": {"items": {"type": "array", "items": {"type": "string"}}},
+        "required": ["items"],
+    }, lambda a: tool_write_todos(request, bridge, a.get("items", []))))
+
+    tools.append(_wrap("update_progress", {
+        "type": "object",
+        "properties": {
+            "phase": {"type": "string"},
+            "message": {"type": "string"},
+        },
+        "required": ["phase", "message"],
+    }, lambda a: tool_update_progress(request, bridge, a["phase"], a["message"])))
+
+    # Search tools (one per database)
+    for tool_name, source in _SEARCH_SOURCES.items():
+        _src = source  # capture for closure
+
+        tools.append(_wrap(tool_name, {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "max_results": {"type": "integer", "default": 8},
+            },
+            "required": ["query"],
+        }, lambda a, s=_src: tool_search(request, bridge, s, a["query"], a.get("max_results", 8))))
+
+    # Evidence tools
+    tools.append(_wrap("get_studies", {
+        "type": "object",
+        "properties": {"context": {"type": "string", "default": "general"}},
+    }, lambda a: tool_get_studies(request, bridge, a.get("context", "general"))))
+
+    tools.append(_wrap("finalize_ranking", {
+        "type": "object",
+        "properties": {
+            "ranked_indices": {"type": "array", "items": {"type": "integer"}},
+            "rationale": {"type": "string", "default": ""},
+        },
+        "required": ["ranked_indices"],
+    }, lambda a: tool_finalize_ranking(request, bridge, a.get("ranked_indices", []), a.get("rationale", ""))))
+
+    tools.append(_wrap("verify_studies", {
+        "type": "object",
+        "properties": {},
+    }, lambda _a: tool_verify_studies(request, bridge)))
+
+    tools.append(_wrap("synthesize_report", {
+        "type": "object",
+        "properties": {},
+    }, lambda _a: tool_synthesize_report(request, bridge)))
+
+    # Fulltext tools
+    tools.append(_wrap("fetch_fulltext", {
+        "type": "object",
+        "properties": {},
+    }, lambda _a: tool_fetch_fulltext(request, bridge)))
+
+    tools.append(_wrap("parse_pdf", {
+        "type": "object",
+        "properties": {"rank": {"type": "integer"}},
+        "required": ["rank"],
+    }, lambda a: tool_parse_pdf(request, bridge, a.get("rank", 1))))
+
+    return tools
+
+
 class OpenAIRuntime(NativeSDKRuntime):
     provider = "openai"
     runtime_name = "OpenAI Agents SDK"
@@ -1285,8 +1498,81 @@ class OpenAIRuntime(NativeSDKRuntime):
     search_agent_name = "OpenAI Search Agent"
     synthesis_agent_name = "OpenAI Synthesis Agent"
     verifier_name = "OpenAI Verification Agent"
-    native_agent_name = "OpenAI MCP Research Agent"
+    native_agent_name = "OpenAI Agentic Research Agent"
 
+    async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
+        if self._should_fallback(request):
+            async for event in DeterministicRuntime.stream_run(self, request):
+                yield event
+            return
+
+        from agents import Agent, Runner
+
+        bridge = AgenticEventBridge()
+        tools = _build_openai_tools(request, bridge)
+
+        yield _agentic_run_started(self, request)
+        yield _agentic_agent_started(self.native_agent_name)
+
+        env_updates = _provider_api_env(self.provider, request.api_keys)
+        with _temporary_env(env_updates):
+            agent = Agent(
+                name="openai_research_agent",
+                instructions=agentic_system_prompt(request, self.runtime_name),
+                model=request.model,
+                tools=tools,
+            )
+            agent_task = asyncio.create_task(
+                self._run_openai_agent(Runner, agent, request, bridge)
+            )
+
+        # Yield events from bridge queue as the agent works
+        while True:
+            queued: RuntimeEventPayload | None = await bridge.queue.get()
+            if queued is None:
+                break
+            yield queued
+
+        try:
+            await agent_task
+        except Exception as exc:
+            _log.warning("OpenAI agentic task error: %s", exc)
+            bridge.set_error(exc)
+
+        agent_text = bridge._result or ""
+        recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
+        final_report = agent_text if len(agent_text) > len(recovered) else recovered
+
+        for event in _agentic_final_events(self, request, final_report, bridge):
+            yield event
+
+    async def _run_openai_agent(
+        self,
+        Runner: Any,
+        agent: Any,
+        request: RunRequest,
+        bridge: AgenticEventBridge,
+    ) -> None:
+        try:
+            result = await asyncio.wait_for(
+                Runner.run(
+                    agent,
+                    _agentic_user_prompt(request),
+                    max_turns=ANTHROPIC_AGENTIC_MAX_TURNS,
+                ),
+                timeout=ANTHROPIC_AGENTIC_TIMEOUT_SECONDS,
+            )
+            bridge.set_result(str(result.final_output) if result.final_output else None)
+        except asyncio.TimeoutError:
+            _log.warning("OpenAI agentic run timed out after %ss", ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
+            bridge.set_error(TimeoutError(f"Agent timed out after {ANTHROPIC_AGENTIC_TIMEOUT_SECONDS}s"))
+        except Exception as exc:
+            _log.warning("OpenAI agentic run failed: %s", exc)
+            bridge.set_error(exc)
+        finally:
+            await bridge.queue.put(None)
+
+    # Legacy structured checkpoint for NativeSDKRuntime fallback path
     async def _run_structured_checkpoint(
         self,
         request: RunRequest,
@@ -1306,355 +1592,71 @@ class OpenAIRuntime(NativeSDKRuntime):
                 model=request.model,
                 output_type=AgentOutputSchema(output_model, strict_json_schema=False),
             )
-            result = await Runner.run(
-                agent,
-                prompt,
-                max_turns=4,
-            )
+            result = await Runner.run(agent, prompt, max_turns=4)
         return _coerce_model_output(result.final_output, output_model)
 
 
 # ---------------------------------------------------------------------------
-# Anthropic agentic infrastructure
+# Anthropic Agent SDK — agentic runtime (using shared tools)
 # ---------------------------------------------------------------------------
-
-class _AgenticEventBridge:
-    """Bridges claude_agent_sdk hook callbacks to RuntimeEventPayload events.
-
-    Tool-lifecycle hooks push events onto an asyncio.Queue; the main
-    ``stream_run`` coroutine yields from the queue to feed the service layer.
-    """
-
-    _PHASE_MAP: dict[str, tuple[str, int]] = {
-        "mcp__literature__plan_search": ("planning", 12),
-        "mcp__literature__suggest_databases": ("planning", 14),
-        "mcp__literature__search_pubmed": ("searching", 20),
-        "mcp__literature__search_openalex": ("searching", 30),
-        "mcp__literature__search_cochrane": ("searching", 40),
-        "mcp__literature__search_semantic_scholar": ("searching", 50),
-        "mcp__literature__search_scopus": ("searching", 58),
-        "mcp__evidence__get_studies": ("ranking", 68),
-        "mcp__evidence__finalize_ranking": ("ranking", 75),
-        "mcp__evidence__verify_studies": ("verifying", 82),
-        "mcp__evidence__synthesize_report": ("synthesizing", 92),
-        "mcp__workspace__write_todos": ("planning", 8),
-        "mcp__workspace__update_progress": ("planning", 10),
-        "mcp__fulltext__fetch_fulltext": ("fulltext", 78),
-        "mcp__fulltext__parse_pdf": ("fulltext", 80),
-    }
-
-    def __init__(self) -> None:
-        self.queue: asyncio.Queue[RuntimeEventPayload | None] = asyncio.Queue()
-        self._intermediate: dict[str, Any] = {}
-        self._todos: list[str] = []
-        self._tool_call_count = 0
-        self._result: str | None = None
-        # Shared state: search tools write here, evidence tools read from here
-        self.search_results: list[SearchProviderResult] = []
-        self.ranked_studies: list[ScoredStudy] = []
-        self.verification: VerificationSummary | None = None
-        self.plan: QueryPlan | None = None
-        self._pre_scored: list[ScoredStudy] = []
-        self._pdf_urls: dict[int, str] = {}
-        self._error: Exception | None = None
-
-    def _phase_for(self, tool_name: str) -> tuple[str, int]:
-        if tool_name in self._PHASE_MAP:
-            return self._PHASE_MAP[tool_name]
-        if tool_name.startswith("search_"):
-            return ("searching", 35)
-        return ("searching", 50)
-
-    # -- Hook callbacks (conform to HookCallback signature) ------------------
-
-    async def pre_tool_use(  # type: ignore[return]
-        self,
-        hook_input: Any,
-        tool_use_id: str | None,
-        context: Any,
-    ) -> Any:
-        tool_name = hook_input.get("tool_name", "unknown")
-        tool_input = hook_input.get("tool_input", {})
-        phase, progress = self._phase_for(tool_name)
-        self._tool_call_count += 1
-        # Verbose logging for debugging
-        input_summary = {k: (str(v)[:120] + "..." if len(str(v)) > 120 else v) for k, v in tool_input.items()}
-        _log.info(
-            "[AGENT CALL #%d] %s  input=%s",
-            self._tool_call_count, tool_name, json.dumps(input_summary, default=str),
-        )
-        await self.queue.put(
-            RuntimeEventPayload(
-                event_type=EventType.TOOL_CALLED,
-                phase=phase,
-                progress=min(progress + self._tool_call_count, 97),
-                message=f"Agent calling {tool_name}",
-                tool_name=tool_name,
-                extra={"tool_input": input_summary},
-            )
-        )
-        return {"hookEventName": "PreToolUse"}
-
-    async def post_tool_use(  # type: ignore[return]
-        self,
-        hook_input: Any,
-        tool_use_id: str | None,
-        context: Any,
-    ) -> dict[str, Any]:
-        tool_name = hook_input.get("tool_name", "unknown")
-        response = hook_input.get("tool_response")
-        phase, progress = self._phase_for(tool_name)
-        # Verbose logging for debugging
-        resp_str = str(response) if response else "<empty>"
-        resp_preview = resp_str[:300] + "..." if len(resp_str) > 300 else resp_str
-        _log.info(
-            "[AGENT RESULT #%d] %s  response_len=%d  preview=%s",
-            self._tool_call_count, tool_name, len(resp_str), resp_preview,
-        )
-        # Stash intermediate results for partial recovery (use namespaced keys)
-        short_name = tool_name.split("__")[-1] if "__" in tool_name else tool_name
-        if short_name in ("get_studies", "finalize_ranking", "verify_studies", "synthesize_report", "plan_search", "fetch_fulltext"):
-            self._intermediate[short_name] = response
-        await self.queue.put(
-            RuntimeEventPayload(
-                event_type=EventType.TOOL_RESULT,
-                phase=phase,
-                progress=min(progress + self._tool_call_count + 1, 97),
-                message=f"Agent received result from {tool_name}",
-                tool_name=tool_name,
-                extra={"response_length": len(resp_str)},
-            )
-        )
-        return {"hookEventName": "PostToolUse"}
-
-    # -- Direct calls from workspace tools -----------------------------------
-
-    async def emit_todos(self, items: list[str]) -> None:
-        self._todos = list(items)
-        await self.queue.put(
-            RuntimeEventPayload(
-                event_type=EventType.ARTIFACT_CREATED,
-                phase="planning",
-                progress=8,
-                message="Agent created research TODO list",
-                artifact_type=ArtifactType.TODO_LIST,
-                artifact_name="Research TODOs",
-                artifact_text="\n".join(f"- {item}" for item in items),
-            )
-        )
-
-    async def emit_progress(self, phase: str, message: str) -> None:
-        await self.queue.put(
-            RuntimeEventPayload(
-                event_type=EventType.AGENT_STARTED,
-                phase=phase,
-                progress=min(10 + self._tool_call_count * 3, 97),
-                message=message,
-                agent_name="Claude Research Agent",
-            )
-        )
-
-    # -- Completion ----------------------------------------------------------
-
-    def set_result(self, text: str | None) -> None:
-        self._result = text
-
-    def set_error(self, exc: Exception | Any) -> None:
-        if isinstance(exc, Exception):
-            self._error = exc
-        else:
-            self._error = RuntimeError(str(exc))
-
 
 def _build_anthropic_mcp_servers(
     request: RunRequest,
-    bridge: _AgenticEventBridge,
+    bridge: AgenticEventBridge,
 ) -> dict[str, Any]:
-    """Build in-process MCP servers for the Anthropic agentic runtime.
+    """Build in-process MCP servers wrapping shared tool functions.
 
     Returns a dict suitable for ``ClaudeAgentOptions.mcp_servers``.
-    Tools use *bridge* as shared state: search tools write results there,
-    evidence tools read from there — the agent never passes large JSON blobs.
     """
-    from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server, tool
+    from claude_agent_sdk import create_sdk_mcp_server, tool
 
     # -- Literature tools ----------------------------------------------------
 
-    @tool("plan_search", "Build a search plan. Returns keywords, databases, and source queries.", {
-        "query": str, "query_type": str,
-    })
+    @tool("plan_search", TOOL_DESCRIPTIONS["plan_search"], {"query": str, "query_type": str})
     async def plan_search_tool(args: dict[str, Any]) -> dict[str, Any]:
-        plan = build_query_plan(
-            args["query"],
-            args.get("query_type", request.query_type),
-            request.provider,
-        )
-        bridge.plan = plan
-        return {"content": [{"type": "text", "text": json.dumps(plan.model_dump())}]}
+        result = await tool_plan_search(request, bridge, args["query"], args.get("query_type", request.query_type))
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
-    @tool("suggest_databases", "Suggest database coverage for a research query", {
-        "query": str,
-    })
+    @tool("suggest_databases", TOOL_DESCRIPTIONS["suggest_databases"], {"query": str})
     async def suggest_databases_tool(args: dict[str, Any]) -> dict[str, Any]:
-        dbs = _suggest_databases(args["query"], request.provider)
-        return {"content": [{"type": "text", "text": json.dumps(dbs)}]}
+        result = await tool_suggest_databases(request, bridge, args["query"])
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
-    def _make_search_tool(source: str, name: str, description: str, default_max: int = 8) -> SdkMcpTool[Any]:
-        @tool(name, description, {"query": str, "max_results": int})
+    def _make_search_tool(source: str, name: str) -> Any:
+        @tool(name, TOOL_DESCRIPTIONS[name], {"query": str, "max_results": int})
         async def _search(args: dict[str, Any]) -> dict[str, Any]:
-            result = await search_source(
-                source,
-                args["query"],
-                api_keys=request.api_keys,
-                max_results=args.get("max_results", default_max),
-                offline_mode=request.offline_mode,
-                domain="clinical",
-            )
-            # Store full data in shared state for evidence tools
-            bridge.search_results.append(result)
-            # Return rich per-study summaries so agent can reason about evidence
-            studies_summary = []
-            for s in result.studies:
-                abstract = (s.abstract or "").replace("\n", " ").strip()
-                studies_summary.append({
-                    "title": s.title,
-                    "journal": s.journal,
-                    "year": s.publication_year,
-                    "pmid": s.pmid,
-                    "doi": s.doi,
-                    "evidence_level": s.evidence_level,
-                    "citation_count": s.citation_count,
-                    "abstract": abstract[:300] + "..." if len(abstract) > 300 else abstract,
-                })
-            summary = {
-                "source": result.source,
-                "count": len(result.studies),
-                "error": result.error,
-                "studies": studies_summary,
-            }
-            return {"content": [{"type": "text", "text": json.dumps(summary)}]}
+            result = await tool_search(request, bridge, source, args["query"], args.get("max_results", 8))
+            return {"content": [{"type": "text", "text": json.dumps(result)}]}
         return _search
-
-    search_pubmed = _make_search_tool("PubMed", "search_pubmed", "Search PubMed for medical literature")
-    search_openalex = _make_search_tool("OpenAlex", "search_openalex", "Search OpenAlex for open-access academic papers")
-    search_cochrane = _make_search_tool("Cochrane", "search_cochrane", "Search Cochrane for systematic reviews", 6)
-    search_semantic_scholar = _make_search_tool(
-        "Semantic Scholar", "search_semantic_scholar", "Search Semantic Scholar for academic papers",
-    )
-    search_scopus = _make_search_tool("Scopus", "search_scopus", "Search Scopus for academic citations")
 
     literature_server = create_sdk_mcp_server("literature", tools=[
         plan_search_tool,
         suggest_databases_tool,
-        search_pubmed,
-        search_openalex,
-        search_cochrane,
-        search_semantic_scholar,
-        search_scopus,
+        *[_make_search_tool(src, name) for name, src in _SEARCH_SOURCES.items()],
     ])
 
-    # -- Evidence tools (read from shared state, no JSON args needed) ---------
+    # -- Evidence tools ------------------------------------------------------
 
-    @tool("get_studies", "Deduplicate and pre-score ALL collected studies. Returns full details (abstracts, metadata, scores) for your review.", {
-        "context": str,
-    })
+    @tool("get_studies", TOOL_DESCRIPTIONS["get_studies"], {"context": str})
     async def get_studies_tool(args: dict[str, Any]) -> dict[str, Any]:
-        all_studies = flatten_studies(bridge.search_results)
-        if not all_studies:
-            return {"content": [{"type": "text", "text": json.dumps({"error": "No studies collected yet. Run search tools first.", "studies": []})}]}
-        context = args.get("context", "general")
-        pre_scored = score_and_rank_results(all_studies, context=context)
-        # Store pre-scored list; agent will reorder via finalize_ranking
-        bridge._pre_scored = pre_scored
-        studies_out = []
-        for s in pre_scored:
-            abstract = (s.abstract or "").replace("\n", " ").strip()
-            studies_out.append({
-                "idx": s.reference_number,
-                "title": s.title,
-                "abstract": abstract[:500] + "..." if len(abstract) > 500 else abstract,
-                "journal": s.journal,
-                "year": s.publication_year,
-                "pmid": s.pmid,
-                "doi": s.doi,
-                "authors": s.authors[:3],
-                "evidence_level": s.evidence_level,
-                "citation_count": s.citation_count,
-                "sources": s.sources,
-                "pre_score": s.composite_score,
-                "score_breakdown": {
-                    "evidence": s.evidence_level_score,
-                    "citations": s.citation_score,
-                    "recency": s.recency_score,
-                },
-            })
-        return {"content": [{"type": "text", "text": json.dumps({
-            "total": len(studies_out),
-            "context": context,
-            "studies": studies_out,
-        })}]}
+        result = await tool_get_studies(request, bridge, args.get("context", "general"))
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
-    @tool("finalize_ranking", "Submit your ranking after reviewing the studies from get_studies. Pass ordered indices (best first).", {
-        "ranked_indices": list, "rationale": str,
-    })
+    @tool("finalize_ranking", TOOL_DESCRIPTIONS["finalize_ranking"], {"ranked_indices": list, "rationale": str})
     async def finalize_ranking_tool(args: dict[str, Any]) -> dict[str, Any]:
-        pre_scored = getattr(bridge, "_pre_scored", None)
-        if not pre_scored:
-            return {"content": [{"type": "text", "text": json.dumps({"error": "Call get_studies first."})}]}
-        idx_map = {s.reference_number: s for s in pre_scored}
-        indices = args.get("ranked_indices", [])
-        # Build final ranked list in the order the agent chose
-        ranked: list[ScoredStudy] = []
-        seen: set[int] = set()
-        for i, idx in enumerate(indices, start=1):
-            idx = int(idx)
-            if idx in idx_map and idx not in seen:
-                study = idx_map[idx].model_copy(deep=True)
-                study.reference_number = i
-                ranked.append(study)
-                seen.add(idx)
-        # Append any the agent didn't mention (lower priority)
-        for s in pre_scored:
-            if s.reference_number not in seen:
-                study = s.model_copy(deep=True)
-                study.reference_number = len(ranked) + 1
-                ranked.append(study)
-        bridge.ranked_studies = ranked
-        return {"content": [{"type": "text", "text": json.dumps({
-            "status": "ok",
-            "total_ranked": len(ranked),
-            "top_5": [{"rank": s.reference_number, "title": s.title} for s in ranked[:5]],
-            "rationale": args.get("rationale", ""),
-        })}]}
+        result = await tool_finalize_ranking(request, bridge, args.get("ranked_indices", []), args.get("rationale", ""))
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
-    @tool("verify_studies", "Verify PMIDs of the ranked studies against PubMed. Reads from shared state.", {})
+    @tool("verify_studies", TOOL_DESCRIPTIONS["verify_studies"], {})
     async def verify_studies_tool(args: dict[str, Any]) -> dict[str, Any]:
-        if not bridge.ranked_studies:
-            return {"content": [{"type": "text", "text": json.dumps({"error": "No ranked studies. Call finalize_ranking first."})}]}
-        summary = await verify_studies(
-            bridge.ranked_studies,
-            api_keys=request.api_keys,
-            offline_mode=request.offline_mode,
-            limit=8,
-        )
-        bridge.verification = summary
-        return {"content": [{"type": "text", "text": json.dumps({"verified": summary.verified_pmids, "missing": summary.missing_pmids, "markdown": render_verification_report(summary)})}]}
+        result = await tool_verify_studies(request, bridge)
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
-    @tool("synthesize_report", "Generate the final markdown report from ALL collected data. Reads from shared state.", {})
+    @tool("synthesize_report", TOOL_DESCRIPTIONS["synthesize_report"], {})
     async def synthesize_report_tool(args: dict[str, Any]) -> dict[str, Any]:
-        plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)
-        verification = bridge.verification or empty_verification_summary("Verification was not run.")
-        report = render_report(
-            query=request.query,
-            plan=plan,
-            search_results=bridge.search_results,
-            ranked_studies=bridge.ranked_studies,
-            verification=verification,
-            provider=request.provider,
-            runtime_name="Anthropic Agent SDK",
-        )
-        bridge._intermediate["synthesize_report"] = report
-        return {"content": [{"type": "text", "text": report}]}
+        result = await tool_synthesize_report(request, bridge)
+        report_text = result.get("report", "")
+        return {"content": [{"type": "text", "text": report_text}]}
 
     evidence_server = create_sdk_mcp_server("evidence", tools=[
         get_studies_tool,
@@ -1665,259 +1667,32 @@ def _build_anthropic_mcp_servers(
 
     # -- Workspace tools -----------------------------------------------------
 
-    @tool("write_todos", "Create a research TODO list to plan the workflow", {
-        "items": list,
-    })
+    @tool("write_todos", TOOL_DESCRIPTIONS["write_todos"], {"items": list})
     async def write_todos_tool(args: dict[str, Any]) -> dict[str, Any]:
-        items = [str(item) for item in args.get("items", [])]
-        await bridge.emit_todos(items)
-        return {"content": [{"type": "text", "text": json.dumps({"status": "ok", "count": len(items)})}]}
+        result = await tool_write_todos(request, bridge, [str(i) for i in args.get("items", [])])
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
-    @tool("update_progress", "Signal a phase transition or progress update to the user", {
-        "phase": str, "message": str,
-    })
+    @tool("update_progress", TOOL_DESCRIPTIONS["update_progress"], {"phase": str, "message": str})
     async def update_progress_tool(args: dict[str, Any]) -> dict[str, Any]:
-        await bridge.emit_progress(args["phase"], args["message"])
-        return {"content": [{"type": "text", "text": json.dumps({"status": "ok"})}]}
+        result = await tool_update_progress(request, bridge, args["phase"], args["message"])
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     workspace_server = create_sdk_mcp_server("workspace", tools=[
         write_todos_tool,
         update_progress_tool,
     ])
 
-    # -- Fulltext tools (unpywall + opendataloader-pdf) -----------------------
+    # -- Fulltext tools ------------------------------------------------------
 
-    _EBM_HIGH_EVIDENCE = {"Level I", "Level II"}
-
-    @tool("fetch_fulltext", "Look up free full-text PDFs via Unpaywall + PMC for Level I & II ranked studies (parallel). Call AFTER finalize_ranking.", {})
+    @tool("fetch_fulltext", TOOL_DESCRIPTIONS["fetch_fulltext"], {})
     async def fetch_fulltext_tool(args: dict[str, Any]) -> dict[str, Any]:
-        import asyncio as _aio
-        candidates = [
-            s for s in bridge.ranked_studies
-            if s.evidence_level in _EBM_HIGH_EVIDENCE and s.doi and s.reference_number is not None
-        ]
-        if not candidates:
-            return {"content": [{"type": "text", "text": json.dumps({"error": "No Level I/II studies with DOIs found."})}]}
+        result = await tool_fetch_fulltext(request, bridge)
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
-        try:
-            from unpywall.utils import UnpywallCredentials
-            from unpywall import Unpywall
-            UnpywallCredentials(POLITE_EMAIL)
-            has_unpywall = True
-        except ImportError:
-            has_unpywall = False
-
-        found_ranks: dict[int, dict[str, Any]] = {}
-        unpywall_hits = 0
-        pmc_hits = 0
-
-        # Pass 1: Parallel Unpaywall lookup (10 concurrent)
-        if has_unpywall:
-            sem = _aio.Semaphore(10)
-
-            async def _lookup(s: ScoredStudy) -> None:
-                nonlocal unpywall_hits
-                rank = s.reference_number
-                if rank is None:
-                    return
-                async with sem:
-                    try:
-                        pdf_link = await _aio.to_thread(Unpywall.get_pdf_link, s.doi)
-                        if pdf_link:
-                            found_ranks[rank] = {
-                                "rank": rank, "title": s.title,
-                                "doi": s.doi, "pmid": s.pmid,
-                                "evidence_level": s.evidence_level,
-                                "pdf_url": pdf_link, "source": "unpaywall",
-                            }
-                            unpywall_hits += 1
-                    except Exception:
-                        pass
-
-            await _aio.gather(*[_lookup(s) for s in candidates])
-
-        # Pass 2: PMC for remaining Level I/II studies with PMIDs
-        remaining = [s for s in candidates if s.pmid and s.reference_number not in found_ranks]
-        if remaining:
-            ids_param = ",".join(s.pmid for s in remaining if s.pmid)
-            pmid_to_pmcid: dict[str, str] = {}
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
-                    resp = await client.get(
-                        "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
-                        params={"ids": ids_param, "format": "json", "tool": "medical-deep-research", "email": POLITE_EMAIL},
-                    )
-                    resp.raise_for_status()
-                for r in resp.json().get("records", []):
-                    if r.get("pmcid") and r.get("pmid"):
-                        pmid_to_pmcid[r["pmid"]] = r["pmcid"]
-            except Exception as exc:
-                _log.info("[FULLTEXT] PMC ID converter failed: %s", exc)
-
-            # OA service lookup (parallel, 5 concurrent)
-            sem_pmc = _aio.Semaphore(5)
-
-            async def _pmc_lookup(s: ScoredStudy) -> None:
-                nonlocal pmc_hits
-                rank = s.reference_number
-                if rank is None or not s.pmid:
-                    return
-                pmcid = pmid_to_pmcid.get(s.pmid)
-                if not pmcid or rank in found_ranks:
-                    return
-                async with sem_pmc:
-                    try:
-                        import xml.etree.ElementTree as _ET
-                        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
-                            resp = await client.get(
-                                "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
-                                params={"id": pmcid},
-                            )
-                            resp.raise_for_status()
-                        root = _ET.fromstring(resp.text)
-                        tgz_href = None
-                        for link in root.findall(".//link"):
-                            if link.attrib.get("format") == "tgz":
-                                tgz_href = link.attrib.get("href")
-                                break
-                        if tgz_href:
-                            if tgz_href.startswith("ftp://"):
-                                tgz_href = tgz_href.replace("ftp://ftp.ncbi.nlm.nih.gov/", "https://ftp.ncbi.nlm.nih.gov/")
-                            found_ranks[rank] = {
-                                "rank": rank, "title": s.title,
-                                "doi": s.doi, "pmid": s.pmid, "pmcid": pmcid,
-                                "evidence_level": s.evidence_level,
-                                "pdf_url": tgz_href, "source": "pmc",
-                            }
-                            pmc_hits += 1
-                    except Exception as exc:
-                        _log.info("[FULLTEXT] PMC OA failed for %s: %s", pmcid, exc)
-
-            await _aio.gather(*[_pmc_lookup(s) for s in remaining])
-
-        bridge._pdf_urls = {r["rank"]: r["pdf_url"] for r in found_ranks.values()}
-        available = sorted(found_ranks.values(), key=lambda r: r["rank"])
-        total_I_II = len(candidates)
-        _log.info("[FULLTEXT] %d PDFs found (unpaywall=%d, pmc=%d) from %d Level I/II studies",
-                  len(available), unpywall_hits, pmc_hits, total_I_II)
-        return {"content": [{"type": "text", "text": json.dumps({
-            "level_I_II_studies": total_I_II,
-            "pdfs_found": len(available),
-            "unpaywall_hits": unpywall_hits,
-            "pmc_hits": pmc_hits,
-            "available": available,
-        })}]}
-
-    @tool("parse_pdf", "Download and parse a full-text PDF to markdown. Call AFTER fetch_fulltext.", {
-        "rank": int,
-    })
+    @tool("parse_pdf", TOOL_DESCRIPTIONS["parse_pdf"], {"rank": int})
     async def parse_pdf_tool(args: dict[str, Any]) -> dict[str, Any]:
-        import asyncio as _aio
-        import io
-        import tarfile
-        import tempfile
-        rank = args.get("rank", 1)
-        pdf_urls = getattr(bridge, "_pdf_urls", {})
-        study = next((s for s in bridge.ranked_studies if s.reference_number == rank), None)
-        title = study.title if study else f"Study #{rank}"
-        doi = study.doi if study else None
-
-        pdf_bytes: bytes | None = None
-        source = "none"
-
-        # Strategy 1: PMC tgz package (most reliable for OA papers)
-        url = pdf_urls.get(rank, "")
-        if url.endswith(".tar.gz"):
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True) as client:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
-                    for member in tar.getmembers():
-                        if member.name.endswith(".pdf"):
-                            f = tar.extractfile(member)
-                            if f:
-                                pdf_bytes = f.read()
-                                source = "pmc_tgz"
-                                _log.info("[PARSE_PDF] Extracted %d bytes from PMC tgz for rank %d", len(pdf_bytes), rank)
-                            break
-            except Exception as exc:
-                _log.info("[PARSE_PDF] PMC tgz extraction failed for rank %d: %s", rank, exc)
-
-        # Strategy 2: unpywall download_pdf_handle
-        if not pdf_bytes and doi:
-            try:
-                from unpywall.utils import UnpywallCredentials
-                from unpywall import Unpywall
-                UnpywallCredentials(POLITE_EMAIL)
-                handle = await _aio.to_thread(Unpywall.download_pdf_handle, doi)
-                if handle:
-                    raw = handle.read()
-                    if raw[:5] == b"%PDF-":
-                        pdf_bytes = raw
-                        source = "unpywall"
-                        _log.info("[PARSE_PDF] Downloaded %d bytes via unpywall for rank %d", len(pdf_bytes), rank)
-            except Exception as exc:
-                _log.info("[PARSE_PDF] unpywall download failed for rank %d: %s", rank, exc)
-
-        # Strategy 3: direct URL (for non-tgz Unpaywall links)
-        if not pdf_bytes and url and not url.endswith(".tar.gz"):
-            try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(20.0, connect=5.0), follow_redirects=True,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/1.0)"},
-                ) as client:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                    if resp.content[:5] == b"%PDF-":
-                        pdf_bytes = resp.content
-                        source = "direct_url"
-                        _log.info("[PARSE_PDF] Downloaded %d bytes via direct URL for rank %d", len(pdf_bytes), rank)
-            except Exception as exc:
-                _log.info("[PARSE_PDF] Direct URL failed for rank %d: %s", rank, exc)
-
-        if not pdf_bytes:
-            return {"content": [{"type": "text", "text": json.dumps({"error": f"Could not download PDF for rank {rank}", "title": title})}]}
-
-        # Write to temp file and parse with opendataloader-pdf
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-            f.write(pdf_bytes)
-            pdf_path = f.name
-
-        text = ""
-        try:
-            import opendataloader_pdf
-            import glob as _glob
-            output_dir = tempfile.mkdtemp()
-            await _aio.to_thread(
-                opendataloader_pdf.convert,
-                input_path=[pdf_path],
-                output_dir=output_dir,
-                format="markdown",
-            )
-            md_files = _glob.glob(f"{output_dir}/**/*.md", recursive=True)
-            if md_files:
-                with open(md_files[0]) as mf:
-                    text = mf.read()
-            _log.info("[PARSE_PDF] Parsed %d chars markdown for rank %d via opendataloader-pdf (source=%s)", len(text), rank, source)
-        except ImportError:
-            text = f"[opendataloader-pdf not installed. PDF: {len(pdf_bytes)} bytes from {source}.]"
-        except Exception as exc:
-            text = f"[PDF parse error: {exc}. PDF: {len(pdf_bytes)} bytes from {source}.]"
-        finally:
-            import os as _os
-            try:
-                _os.unlink(pdf_path)
-            except OSError:
-                pass
-
-        if len(text) > 8000:
-            text = text[:8000] + f"\n\n[... truncated, {len(text)} chars total]"
-
-        return {"content": [{"type": "text", "text": json.dumps({
-            "rank": rank, "title": title, "source": source,
-            "text_length": len(text), "fulltext": text,
-        })}]}
+        result = await tool_parse_pdf(request, bridge, args.get("rank", 1))
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     fulltext_server = create_sdk_mcp_server("fulltext", tools=[
         fetch_fulltext_tool,
@@ -1932,58 +1707,6 @@ def _build_anthropic_mcp_servers(
     }
 
 
-def _anthropic_agentic_system_prompt(request: RunRequest) -> str:
-    """Build the system prompt for the Claude agentic research session."""
-    offline_note = (
-        "\n\nOFFLINE MODE IS ENABLED. All search tools will return empty/mock results. "
-        "Acknowledge this limitation in your report."
-        if request.offline_mode
-        else ""
-    )
-    return f"""\
-You are an autonomous medical literature research agent. Conduct a literature \
-review and produce a markdown report.
-
-## Tools
-
-**Planning**: plan_search, suggest_databases, write_todos, update_progress
-**Search** (one call each): search_pubmed, search_openalex, search_cochrane, search_semantic_scholar, search_scopus
-**Evidence** (reads from shared state — NO large JSON arguments needed):
-- get_studies(context) — deduplicates and pre-scores all collected studies, returns full details for YOUR review
-- finalize_ranking(ranked_indices, rationale) — submit your ranking. Pass indices best-first.
-- verify_studies() — verifies PMIDs of ranked studies
-- synthesize_report() — renders final report from all collected data
-**Fulltext** (call AFTER finalize_ranking):
-- fetch_fulltext() — queries Unpaywall + PubMed Central for free PDFs across ALL ranked studies
-- parse_pdf(rank) — downloads and parses a specific study's PDF to extract full text
-
-## Workflow (follow exactly)
-
-1. Call `plan_search` with the query.
-2. Call search tools (one per database, use queries from the plan). Search 3-4 databases.
-3. Call `get_studies` with context="clinical" or "general". Review abstracts, assess relevance and evidence quality.
-4. Call `finalize_ranking` with your ordered list of study indices (best first) and rationale.
-5. Call `fetch_fulltext` to find free PDFs across all ranked studies (Unpaywall + PMC).
-6. Call `parse_pdf` for 1-3 studies that have PDFs available — read the full text to deepen your understanding.
-7. Call `verify_studies` to validate PMIDs.
-8. Call `synthesize_report` to render the final report. Include its output in your final message.
-
-Do NOT pass study data as arguments — tools read from shared state.
-Do NOT repeat searches. One call per database, then move forward.
-
-## Rules
-
-- ONLY cite studies returned by search tools. NEVER invent PMIDs, DOIs, or findings.
-- Your final message must contain the complete report from synthesize_report.
-
-## Query
-
-- **Query**: {request.query}
-- **Type**: {request.query_type}
-- **Language**: {request.language}{offline_note}
-"""
-
-
 class AnthropicRuntime(NativeSDKRuntime):
     provider = "anthropic"
     runtime_name = "Anthropic Agent SDK"
@@ -1994,10 +1717,7 @@ class AnthropicRuntime(NativeSDKRuntime):
     verifier_name = "Claude Verification Agent"
     native_agent_name = "Claude MCP Research Agent"
 
-    # -- Agentic stream_run (replaces 3-checkpoint pattern) ------------------
-
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
-        # Fallback to deterministic if SDK / credentials unavailable
         if self._should_fallback(request):
             async for event in DeterministicRuntime.stream_run(self, request):
                 yield event
@@ -2006,127 +1726,73 @@ class AnthropicRuntime(NativeSDKRuntime):
         from claude_agent_sdk import ClaudeAgentOptions, query
         from claude_agent_sdk.types import HookMatcher
 
-        bridge = _AgenticEventBridge()
+        bridge = AgenticEventBridge()
         mcp_servers = _build_anthropic_mcp_servers(request, bridge)
 
-        yield RuntimeEventPayload(
-            event_type=EventType.RUN_STARTED,
-            phase="planning",
-            progress=5,
-            message=f"Starting agentic {self.runtime_name} research run",
-            extra={
-                "sdk_available": self.sdk_available,
-                "offline_mode": request.offline_mode,
-                "execution_mode": "native_sdk_agentic",
-                "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
-            },
-        )
-        yield RuntimeEventPayload(
-            event_type=EventType.AGENT_STARTED,
-            phase="planning",
-            progress=7,
-            message=f"{self.native_agent_name} is autonomously driving the research workflow",
-            agent_name=self.native_agent_name,
-        )
+        # Register MCP namespaced tool names so bridge can resolve phases
+        mcp_alias: dict[str, str] = {}
+        for server_name in ("literature", "evidence", "workspace", "fulltext"):
+            for bare in TOOL_DESCRIPTIONS:
+                mcp_alias[f"mcp__{server_name}__{bare}"] = bare
+        bridge.set_tool_name_map(mcp_alias)
+
+        yield _agentic_run_started(self, request)
+        yield _agentic_agent_started(self.native_agent_name)
 
         options = ClaudeAgentOptions(
-            tools=[],  # Disable built-in Claude Code tools; only MCP tools
+            tools=[],
             model=request.model,
             mcp_servers=mcp_servers,
             allowed_tools=[
-                # MCP tools are namespaced as mcp__{server}__{tool}
                 "mcp__literature__plan_search", "mcp__literature__suggest_databases",
                 "mcp__literature__search_pubmed", "mcp__literature__search_openalex",
                 "mcp__literature__search_cochrane", "mcp__literature__search_semantic_scholar",
                 "mcp__literature__search_scopus",
                 "mcp__evidence__get_studies", "mcp__evidence__finalize_ranking",
-                "mcp__evidence__verify_studies",
-                "mcp__evidence__synthesize_report",
+                "mcp__evidence__verify_studies", "mcp__evidence__synthesize_report",
                 "mcp__fulltext__fetch_fulltext", "mcp__fulltext__parse_pdf",
                 "mcp__workspace__write_todos", "mcp__workspace__update_progress",
             ],
             hooks={
-                "PreToolUse": [HookMatcher(hooks=[bridge.pre_tool_use])],  # type: ignore[list-item]
+                "PreToolUse": [HookMatcher(hooks=[bridge.pre_tool_use])],   # type: ignore[list-item]
                 "PostToolUse": [HookMatcher(hooks=[bridge.post_tool_use])],  # type: ignore[list-item]
             },
-            system_prompt=_anthropic_agentic_system_prompt(request),
+            system_prompt=agentic_system_prompt(request, self.runtime_name),
             max_turns=ANTHROPIC_AGENTIC_MAX_TURNS,
             permission_mode="dontAsk",
             cwd=str(REPO_ROOT),
             env=_provider_api_env(self.provider, request.api_keys),
         )
 
-        user_prompt = (
-            f"Conduct a thorough literature review for the following query:\n\n"
-            f"{request.query}\n\n"
-            f"Query type: {request.query_type}\n"
-            f"Follow your recommended workflow: plan → search → rank → verify → synthesize.\n"
-            f"Provide the complete markdown report in your final response."
-        )
-
-        # Run agent in a background task; yield events from bridge queue
         agent_task = asyncio.create_task(
-            self._run_agent_task(query, user_prompt, options, bridge)
+            self._run_agent_task(query, _agentic_user_prompt(request), options, bridge)
         )
 
-        # Yield events as the agent calls tools
         while True:
             queued: RuntimeEventPayload | None = await bridge.queue.get()
             if queued is None:
                 break
             yield queued
 
-        # Await the task to surface exceptions
         try:
             await agent_task
         except Exception as exc:
             _log.warning("Anthropic agentic task error: %s", exc)
             bridge.set_error(exc)
 
-        # Extract final report
-        final_report = bridge._result
-        if not final_report or not final_report.strip():
-            # Partial recovery from intermediate tool results
-            final_report = self._recover_report_from_bridge(request, bridge)
+        agent_text = bridge._result or ""
+        recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
+        final_report = agent_text if len(agent_text) > len(recovered) else recovered
 
-        yield RuntimeEventPayload(
-            event_type=EventType.REPORT_DELTA,
-            phase="synthesizing",
-            progress=97,
-            message="Report assembled from agentic research workflow",
-            report_markdown=final_report,
-        )
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="complete",
-            progress=100,
-            message="Saved final report artifact",
-            artifact_type=ArtifactType.FINAL_REPORT,
-            artifact_name="Final Report",
-            artifact_text=final_report,
-        )
-        yield RuntimeEventPayload(
-            event_type=EventType.RUN_COMPLETED,
-            phase="complete",
-            progress=100,
-            message=f"{self.runtime_name} agentic run completed",
-            report_markdown=final_report,
-            extra={
-                "sdk_available": self.sdk_available,
-                "offline_mode": request.offline_mode,
-                "execution_mode": "native_sdk_agentic",
-                "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
-                "tool_calls": bridge._tool_call_count,
-                "had_error": bridge._error is not None,
-            },
-        )
+        for event in _agentic_final_events(self, request, final_report, bridge):
+            yield event
 
     async def _run_agent_task(
         self,
         query_fn: Any,
         prompt: str,
         options: Any,
-        bridge: _AgenticEventBridge,
+        bridge: AgenticEventBridge,
     ) -> None:
         """Execute the Claude agent query with a timeout; push sentinel when done."""
         try:
@@ -2161,32 +1827,116 @@ class AnthropicRuntime(NativeSDKRuntime):
         finally:
             await bridge.queue.put(None)
 
-    def _recover_report_from_bridge(
+    # Legacy structured checkpoint for NativeSDKRuntime fallback path
+    async def _run_structured_checkpoint(
         self,
         request: RunRequest,
-        bridge: _AgenticEventBridge,
-    ) -> str:
-        """Build a report from whatever the agent produced via shared state."""
-        # If synthesize_report was called, use its output directly
-        synth_data = bridge._intermediate.get("synthesize_report")
-        if synth_data and isinstance(synth_data, str) and synth_data.strip():
-            return synth_data
+        *,
+        task_name: str,
+        instructions: str,
+        prompt: str,
+        output_model: type[TModel],
+    ) -> TModel:
+        from claude_agent_sdk import ClaudeAgentOptions, query as claude_query
+        from claude_agent_sdk.types import ResultMessage
 
-        # Otherwise build deterministic report from bridge shared state
-        plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)
-        verification = bridge.verification or empty_verification_summary(
-            "Verification was incomplete due to agent timeout or error."
-        )
+        with _temporary_env(_provider_api_env(self.provider, request.api_keys)):
+            options = ClaudeAgentOptions(
+                tools=[],
+                model=request.model,
+                system_prompt=instructions,
+                max_turns=4,
+                permission_mode="dontAsk",
+                cwd=str(REPO_ROOT),
+                env=_provider_api_env(self.provider, request.api_keys),
+            )
+            final_text: str | None = None
+            async for message in claude_query(prompt=prompt, options=options):
+                if isinstance(message, ResultMessage) and message.result:
+                    final_text = message.result
+        if final_text is None:
+            raise RuntimeError(f"Anthropic Agent SDK did not return a {task_name} result.")
+        return _coerce_model_output(final_text, output_model)
 
-        return render_report(
-            query=request.query,
-            plan=plan,
-            search_results=bridge.search_results,
-            ranked_studies=bridge.ranked_studies,
-            verification=verification,
-            provider=request.provider,
-            runtime_name=f"{self.runtime_name} (partial recovery)",
-        )
+
+# ---------------------------------------------------------------------------
+# Google ADK — agentic runtime (using shared tools)
+# ---------------------------------------------------------------------------
+
+def _build_google_tools(request: RunRequest, bridge: AgenticEventBridge) -> list[Any]:
+    """Build plain async callables with type annotations for Google ADK."""
+
+    async def plan_search(query: str, query_type: str = "free") -> dict:
+        """Build a search plan. Returns keywords, databases, and source queries."""
+        return await tool_plan_search(request, bridge, query, query_type)
+
+    async def suggest_databases(query: str) -> dict:
+        """Suggest database coverage for a research query."""
+        return await tool_suggest_databases(request, bridge, query)
+
+    async def write_todos(items: list[str]) -> dict:
+        """Create a research TODO list to plan the workflow."""
+        return await tool_write_todos(request, bridge, items)
+
+    async def update_progress(phase: str, message: str) -> dict:
+        """Signal a phase transition or progress update to the user."""
+        return await tool_update_progress(request, bridge, phase, message)
+
+    async def search_pubmed(query: str, max_results: int = 8) -> dict:
+        """Search PubMed for medical literature."""
+        return await tool_search(request, bridge, "PubMed", query, max_results)
+
+    async def search_openalex(query: str, max_results: int = 8) -> dict:
+        """Search OpenAlex for open-access academic papers."""
+        return await tool_search(request, bridge, "OpenAlex", query, max_results)
+
+    async def search_cochrane(query: str, max_results: int = 8) -> dict:
+        """Search Cochrane for systematic reviews."""
+        return await tool_search(request, bridge, "Cochrane", query, max_results)
+
+    async def search_semantic_scholar(query: str, max_results: int = 8) -> dict:
+        """Search Semantic Scholar for academic papers."""
+        return await tool_search(request, bridge, "Semantic Scholar", query, max_results)
+
+    async def search_scopus(query: str, max_results: int = 8) -> dict:
+        """Search Scopus for academic citations."""
+        return await tool_search(request, bridge, "Scopus", query, max_results)
+
+    async def get_studies(context: str = "general") -> dict:
+        """Deduplicate and pre-score ALL collected studies. Returns full details for your review."""
+        return await tool_get_studies(request, bridge, context)
+
+    async def finalize_ranking(ranked_indices: list[int], rationale: str = "") -> dict:
+        """Submit your ranking after reviewing studies. Pass ordered indices (best first)."""
+        return await tool_finalize_ranking(request, bridge, ranked_indices, rationale)
+
+    async def verify_studies_fn() -> dict:
+        """Verify PMIDs of the ranked studies against PubMed."""
+        return await tool_verify_studies(request, bridge)
+
+    async def synthesize_report() -> dict:
+        """Generate the final markdown report from ALL collected data."""
+        return await tool_synthesize_report(request, bridge)
+
+    async def fetch_fulltext() -> dict:
+        """Look up free full-text PDFs via Unpaywall + PMC for Level I and II ranked studies."""
+        return await tool_fetch_fulltext(request, bridge)
+
+    async def parse_pdf(rank: int) -> dict:
+        """Download and parse a full-text PDF to markdown."""
+        return await tool_parse_pdf(request, bridge, rank)
+
+    # Google ADK requires the function name attribute; rename verify wrapper
+    verify_studies_fn.__name__ = "verify_studies"
+    verify_studies_fn.__qualname__ = "verify_studies"
+
+    return [
+        plan_search, suggest_databases, write_todos, update_progress,
+        search_pubmed, search_openalex, search_cochrane,
+        search_semantic_scholar, search_scopus,
+        get_studies, finalize_ranking, verify_studies_fn,
+        synthesize_report, fetch_fulltext, parse_pdf,
+    ]
 
 
 class GoogleRuntime(NativeSDKRuntime):
@@ -2197,8 +1947,109 @@ class GoogleRuntime(NativeSDKRuntime):
     search_agent_name = "ADK Search Workflow"
     synthesis_agent_name = "ADK Synthesis Workflow"
     verifier_name = "ADK Verification Workflow"
-    native_agent_name = "AdkMcpResearchAgent"
+    native_agent_name = "Google ADK Research Agent"
 
+    async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
+        if self._should_fallback(request):
+            async for event in DeterministicRuntime.stream_run(self, request):
+                yield event
+            return
+
+        from google.adk import Agent, Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.genai import types as genai_types
+
+        bridge = AgenticEventBridge()
+        tools = _build_google_tools(request, bridge)
+
+        yield _agentic_run_started(self, request)
+        yield _agentic_agent_started(self.native_agent_name)
+
+        async def _before_tool(tool: Any, args: dict[str, Any], **kwargs: Any) -> None:
+            name = str(getattr(tool, "name", None) or getattr(tool, "__name__", "tool"))
+            await bridge.on_tool_start(name, args)
+
+        async def _after_tool(tool: Any, args: dict[str, Any], result: Any = None, **kwargs: Any) -> None:
+            name = str(getattr(tool, "name", None) or getattr(tool, "__name__", "tool"))
+            await bridge.on_tool_end(name, result)
+
+        with _temporary_env(_provider_api_env(self.provider, request.api_keys)):
+            agent = Agent(
+                name="google_research_agent",
+                description=f"{self.runtime_name} medical literature research agent",
+                model=request.model,
+                instruction=agentic_system_prompt(request, self.runtime_name),
+                tools=tools,
+                before_tool_callback=_before_tool,  # type: ignore[arg-type]
+                after_tool_callback=_after_tool,  # type: ignore[arg-type]
+            )
+            session_service = InMemorySessionService()
+            runner = Runner(
+                agent=agent,
+                app_name="MedicalDeepResearch",
+                session_service=session_service,
+                auto_create_session=True,
+            )
+
+            agent_task = asyncio.create_task(
+                self._run_google_agent(runner, request, bridge, genai_types)
+            )
+
+        while True:
+            queued: RuntimeEventPayload | None = await bridge.queue.get()
+            if queued is None:
+                break
+            yield queued
+
+        try:
+            await agent_task
+        except Exception as exc:
+            _log.warning("Google ADK agentic task error: %s", exc)
+            bridge.set_error(exc)
+
+        agent_text = bridge._result or ""
+        recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
+        final_report = agent_text if len(agent_text) > len(recovered) else recovered
+
+        for event in _agentic_final_events(self, request, final_report, bridge):
+            yield event
+
+    async def _run_google_agent(
+        self,
+        runner: Any,
+        request: RunRequest,
+        bridge: AgenticEventBridge,
+        genai_types: Any,
+    ) -> None:
+        try:
+            final_text: str | None = None
+
+            async def _inner() -> None:
+                nonlocal final_text
+                async for event in runner.run_async(
+                    user_id=request.run_id,
+                    session_id=f"{request.run_id}-agentic",
+                    new_message=genai_types.UserContent(
+                        parts=[genai_types.Part(text=_agentic_user_prompt(request))]
+                    ),
+                ):
+                    if event.is_final_response():
+                        text = _google_text_from_event(event)
+                        if text:
+                            final_text = text
+
+            await asyncio.wait_for(_inner(), timeout=ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
+            bridge.set_result(final_text)
+        except asyncio.TimeoutError:
+            _log.warning("Google ADK agentic run timed out after %ss", ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
+            bridge.set_error(TimeoutError(f"Agent timed out after {ANTHROPIC_AGENTIC_TIMEOUT_SECONDS}s"))
+        except Exception as exc:
+            _log.warning("Google ADK agentic run failed: %s", exc)
+            bridge.set_error(exc)
+        finally:
+            await bridge.queue.put(None)
+
+    # Legacy structured checkpoint for NativeSDKRuntime fallback path
     async def _run_structured_checkpoint(
         self,
         request: RunRequest,
@@ -2231,7 +2082,6 @@ class GoogleRuntime(NativeSDKRuntime):
                 session_service=session_service,
                 auto_create_session=True,
             )
-
             async for event in runner.run_async(
                 user_id=request.run_id,
                 session_id=f"{request.run_id}-{task_name}",
@@ -2252,11 +2102,281 @@ class GoogleRuntime(NativeSDKRuntime):
         return output
 
 
+# ---------------------------------------------------------------------------
+# LangChain Local LLM — agentic runtime (Ollama / LM Studio)
+# ---------------------------------------------------------------------------
+
+def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> list[Any]:
+    """Build LangChain ``StructuredTool`` instances wrapping shared tool functions.
+
+    Each tool has a properly typed async function so LangChain infers correct
+    parameter schemas — no **kwargs ambiguity.
+    """
+    from langchain_core.tools import tool as lc_tool
+
+    @lc_tool
+    async def plan_search(query: str, query_type: str = "free") -> str:
+        """Build a search plan. Returns keywords, databases, and source queries."""
+        await bridge.on_tool_start("plan_search", {"query": query})
+        result = await tool_plan_search(request, bridge, query, query_type)
+        await bridge.on_tool_end("plan_search", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def suggest_databases(query: str) -> str:
+        """Suggest database coverage for a research query."""
+        await bridge.on_tool_start("suggest_databases", {"query": query})
+        result = await tool_suggest_databases(request, bridge, query)
+        await bridge.on_tool_end("suggest_databases", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def write_todos(items: list[str]) -> str:
+        """Create a research TODO list to plan the workflow."""
+        await bridge.on_tool_start("write_todos", {})
+        result = await tool_write_todos(request, bridge, items)
+        await bridge.on_tool_end("write_todos", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def update_progress(phase: str, message: str) -> str:
+        """Signal a phase transition or progress update to the user."""
+        await bridge.on_tool_start("update_progress", {"phase": phase})
+        result = await tool_update_progress(request, bridge, phase, message)
+        await bridge.on_tool_end("update_progress", result)
+        return json.dumps(result, default=str)
+
+    def _make_search(tool_name: str, source: str) -> Any:
+        @lc_tool(tool_name)
+        async def _search(query: str, max_results: int = 8) -> str:
+            """Search a medical literature database."""
+            await bridge.on_tool_start(tool_name, {"query": query})
+            result = await tool_search(request, bridge, source, query, max_results)
+            await bridge.on_tool_end(tool_name, result)
+            return json.dumps(result, default=str)
+        _search.description = TOOL_DESCRIPTIONS[tool_name]
+        return _search
+
+    search_tools = [_make_search(name, src) for name, src in _SEARCH_SOURCES.items()]
+
+    @lc_tool
+    async def get_studies(context: str = "general") -> str:
+        """Deduplicate and pre-score ALL collected studies. Returns full details for your review."""
+        await bridge.on_tool_start("get_studies", {"context": context})
+        result = await tool_get_studies(request, bridge, context)
+        await bridge.on_tool_end("get_studies", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def finalize_ranking(ranked_indices: list[int], rationale: str = "") -> str:
+        """Submit your ranking after reviewing studies. Pass ordered indices (best first)."""
+        await bridge.on_tool_start("finalize_ranking", {"count": len(ranked_indices)})
+        result = await tool_finalize_ranking(request, bridge, ranked_indices, rationale)
+        await bridge.on_tool_end("finalize_ranking", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def verify_studies() -> str:
+        """Verify PMIDs of the ranked studies against PubMed."""
+        await bridge.on_tool_start("verify_studies", {})
+        result = await tool_verify_studies(request, bridge)
+        await bridge.on_tool_end("verify_studies", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def synthesize_report() -> str:
+        """Generate the final markdown report from ALL collected data."""
+        await bridge.on_tool_start("synthesize_report", {})
+        result = await tool_synthesize_report(request, bridge)
+        await bridge.on_tool_end("synthesize_report", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def fetch_fulltext() -> str:
+        """Look up free full-text PDFs via Unpaywall + PMC for Level I & II ranked studies."""
+        await bridge.on_tool_start("fetch_fulltext", {})
+        result = await tool_fetch_fulltext(request, bridge)
+        await bridge.on_tool_end("fetch_fulltext", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def parse_pdf(rank: int) -> str:
+        """Download and parse a full-text PDF to markdown."""
+        await bridge.on_tool_start("parse_pdf", {"rank": rank})
+        result = await tool_parse_pdf(request, bridge, rank)
+        await bridge.on_tool_end("parse_pdf", result)
+        return json.dumps(result, default=str)
+
+    return [
+        plan_search, suggest_databases, write_todos, update_progress,
+        *search_tools,
+        get_studies, finalize_ranking, verify_studies, synthesize_report,
+        fetch_fulltext, parse_pdf,
+    ]
+
+
+class LangChainLocalRuntime(NativeSDKRuntime):
+    provider = "local"
+    runtime_name = "LangChain Local LLM"
+    sdk_module = "langchain_core"
+    planner_name = "Local Planner"
+    search_agent_name = "Local Search Agent"
+    synthesis_agent_name = "Local Synthesis Agent"
+    verifier_name = "Local Verification Agent"
+    native_agent_name = "Local LLM Research Agent"
+
+    @property
+    def sdk_available(self) -> bool:
+        return importlib.util.find_spec("langchain_core") is not None
+
+    def _should_fallback(self, request: RunRequest) -> bool:
+        if request.offline_mode:
+            return True
+        if not self.sdk_available:
+            return True
+        # Local LLMs don't need provider API keys — just check model config
+        return False
+
+    def _resolve_chat_model(self, request: RunRequest) -> Any:
+        """Instantiate the appropriate LangChain chat model for local inference."""
+        model = request.model or "llama3.1"
+        base_url = (
+            request.api_keys.get("local_base_url")
+            or os.environ.get("MDR_LOCAL_BASE_URL")
+        )
+
+        # If base_url is explicitly set, use OpenAI-compatible endpoint (LM Studio, vLLM, etc.)
+        if base_url:
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=model,
+                base_url=base_url,
+                api_key=request.api_keys.get("local") or "not-needed",  # type: ignore[arg-type]
+                temperature=0.1,
+            )
+
+        # Default: Ollama
+        from langchain_ollama import ChatOllama
+        ollama_base = (
+            request.api_keys.get("ollama_base_url")
+            or os.environ.get("MDR_OLLAMA_BASE_URL")
+            or "http://localhost:11434"
+        )
+        return ChatOllama(
+            model=model,
+            base_url=ollama_base,
+            temperature=0.1,
+        )
+
+    async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
+        if self._should_fallback(request):
+            async for event in DeterministicRuntime.stream_run(self, request):
+                yield event
+            return
+
+
+        bridge = AgenticEventBridge()
+        tools = _build_langchain_tools(request, bridge)
+
+        yield _agentic_run_started(self, request)
+        yield _agentic_agent_started(self.native_agent_name)
+
+        agent_task = asyncio.create_task(
+            self._run_langchain_agent(request, bridge, tools)
+        )
+
+        while True:
+            queued: RuntimeEventPayload | None = await bridge.queue.get()
+            if queued is None:
+                break
+            yield queued
+
+        try:
+            await agent_task
+        except Exception as exc:
+            _log.warning("LangChain local agent task error: %s", exc)
+            bridge.set_error(exc)
+
+        agent_text = bridge._result or ""
+        recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
+        final_report = agent_text if len(agent_text) > len(recovered) else recovered
+
+        for event in _agentic_final_events(self, request, final_report, bridge):
+            yield event
+
+    async def _run_langchain_agent(
+        self,
+        request: RunRequest,
+        bridge: AgenticEventBridge,
+        tools: list[Any],
+    ) -> None:
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+            from langgraph.prebuilt import create_react_agent
+
+            llm = self._resolve_chat_model(request)
+            agent = create_react_agent(
+                llm,
+                tools,
+                prompt=SystemMessage(content=agentic_system_prompt(request, self.runtime_name)),
+            )
+
+            final_text: str | None = None
+
+            async def _inner() -> None:
+                nonlocal final_text
+                result = await agent.ainvoke(
+                    {"messages": [HumanMessage(content=_agentic_user_prompt(request))]},
+                )
+                # Extract final AI message
+                messages = result.get("messages", [])
+                for msg in reversed(messages):
+                    if hasattr(msg, "content") and isinstance(msg.content, str) and msg.content.strip():
+                        final_text = msg.content
+                        break
+
+            await asyncio.wait_for(_inner(), timeout=LOCAL_AGENTIC_TIMEOUT_SECONDS)
+            bridge.set_result(final_text)
+        except asyncio.TimeoutError:
+            _log.warning("LangChain local agent timed out after %ss", LOCAL_AGENTIC_TIMEOUT_SECONDS)
+            bridge.set_error(TimeoutError(f"Agent timed out after {LOCAL_AGENTIC_TIMEOUT_SECONDS}s"))
+        except Exception as exc:
+            _log.warning("LangChain local agent failed: %s", exc)
+            bridge.set_error(exc)
+        finally:
+            await bridge.queue.put(None)
+
+    # Legacy structured checkpoint (not used for local, but satisfies ABC)
+    async def _run_structured_checkpoint(
+        self,
+        request: RunRequest,
+        *,
+        task_name: str,
+        instructions: str,
+        prompt: str,
+        output_model: type[TModel],
+    ) -> TModel:
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        llm = self._resolve_chat_model(request)
+        result = await llm.ainvoke([
+            SystemMessage(content=instructions),
+            HumanMessage(content=prompt),
+        ])
+        return _coerce_model_output(result.content, output_model)
+
+
+# ---------------------------------------------------------------------------
+# Runtime factory
+# ---------------------------------------------------------------------------
+
 def build_runtime(provider: str) -> ResearchRuntime:
     if provider == "anthropic":
         return AnthropicRuntime()
     if provider == "google":
         return GoogleRuntime()
+    if provider == "local":
+        return LangChainLocalRuntime()
     return OpenAIRuntime()
 
 

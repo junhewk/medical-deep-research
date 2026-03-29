@@ -1,0 +1,659 @@
+"""Shared tool logic and event bridge for all agentic runtimes.
+
+Provider-specific builders (Anthropic, OpenAI, Google, LangChain) wrap these
+functions in their SDK's tool format.  The functions operate on a shared
+``AgenticEventBridge`` that holds per-run state.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import Any
+
+import httpx
+
+from .models import ArtifactType, EventType, RuntimeEventPayload
+from .research import (
+    build_query_plan,
+    empty_verification_summary,
+    flatten_studies,
+    render_report,
+    render_verification_report,
+    score_and_rank_results,
+    search_source,
+    verify_studies,
+)
+from .research.models import QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
+from .research.planning import suggest_databases as _suggest_databases
+from .research.search import POLITE_EMAIL
+from .models import RunRequest
+
+_log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Event bridge — provider-agnostic shared state + event queue
+# ---------------------------------------------------------------------------
+
+# Canonical (bare) tool names used in the phase map.
+# Provider-specific builders may namespace them (e.g. ``mcp__literature__plan_search``)
+# and should call ``bridge.set_tool_name_map`` if the runtime tool names differ.
+
+_BARE_PHASE_MAP: dict[str, tuple[str, int]] = {
+    "plan_search": ("planning", 12),
+    "suggest_databases": ("planning", 14),
+    "search_pubmed": ("searching", 20),
+    "search_openalex": ("searching", 30),
+    "search_cochrane": ("searching", 40),
+    "search_semantic_scholar": ("searching", 50),
+    "search_scopus": ("searching", 58),
+    "get_studies": ("ranking", 68),
+    "finalize_ranking": ("ranking", 75),
+    "verify_studies": ("verifying", 82),
+    "synthesize_report": ("synthesizing", 92),
+    "write_todos": ("planning", 8),
+    "update_progress": ("planning", 10),
+    "fetch_fulltext": ("fulltext", 78),
+    "parse_pdf": ("fulltext", 80),
+}
+
+
+class AgenticEventBridge:
+    """Shared state + async event queue for agentic runtimes.
+
+    Tool functions mutate this object (append search results, store rankings,
+    etc.).  Hook / callback adapters push ``RuntimeEventPayload`` events onto
+    ``self.queue`` so the ``stream_run`` coroutine can yield them to the
+    service layer.
+    """
+
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[RuntimeEventPayload | None] = asyncio.Queue()
+        self._intermediate: dict[str, Any] = {}
+        self._todos: list[str] = []
+        self._tool_call_count = 0
+        self._result: str | None = None
+        self._error: Exception | None = None
+
+        # Shared state written by tools, read by evidence tools
+        self.search_results: list[SearchProviderResult] = []
+        self.ranked_studies: list[ScoredStudy] = []
+        self.verification: VerificationSummary | None = None
+        self.plan: QueryPlan | None = None
+        self._pre_scored: list[ScoredStudy] = []
+        self._pdf_urls: dict[int, str] = {}
+        self._pdf_url_alternatives: dict[int, list[str]] = {}
+
+        # Tool name mapping: runtime-specific name → bare name.
+        # Populated by provider builder if it uses namespaced names.
+        self._tool_alias: dict[str, str] = {}
+
+    def set_tool_name_map(self, mapping: dict[str, str]) -> None:
+        """Register a mapping from runtime tool names to bare tool names."""
+        self._tool_alias = mapping
+
+    def _bare_name(self, tool_name: str) -> str:
+        """Resolve a runtime-specific tool name to the canonical bare name."""
+        if tool_name in self._tool_alias:
+            return self._tool_alias[tool_name]
+        # Strip common prefixes (e.g. mcp__literature__plan_search → plan_search)
+        if "__" in tool_name:
+            return tool_name.rsplit("__", 1)[-1]
+        return tool_name
+
+    def _phase_for(self, tool_name: str) -> tuple[str, int]:
+        bare = self._bare_name(tool_name)
+        if bare in _BARE_PHASE_MAP:
+            return _BARE_PHASE_MAP[bare]
+        if bare.startswith("search_"):
+            return ("searching", 35)
+        return ("searching", 50)
+
+    # -- Generic event helpers (called by provider-specific hooks/callbacks) --
+
+    async def on_tool_start(self, tool_name: str, tool_input: dict[str, Any] | None = None) -> None:
+        phase, progress = self._phase_for(tool_name)
+        self._tool_call_count += 1
+        input_summary = {}
+        if tool_input:
+            input_summary = {k: (str(v)[:120] + "..." if len(str(v)) > 120 else v) for k, v in tool_input.items()}
+        _log.info("[AGENT CALL #%d] %s  input=%s", self._tool_call_count, tool_name, json.dumps(input_summary, default=str))
+        await self.queue.put(
+            RuntimeEventPayload(
+                event_type=EventType.TOOL_CALLED,
+                phase=phase,
+                progress=min(progress + self._tool_call_count, 97),
+                message=f"Agent calling {tool_name}",
+                tool_name=tool_name,
+                extra={"tool_input": input_summary},
+            )
+        )
+
+    async def on_tool_end(self, tool_name: str, response: Any = None) -> None:
+        phase, progress = self._phase_for(tool_name)
+        resp_str = str(response) if response else "<empty>"
+        resp_preview = resp_str[:300] + "..." if len(resp_str) > 300 else resp_str
+        _log.info("[AGENT RESULT #%d] %s  response_len=%d  preview=%s", self._tool_call_count, tool_name, len(resp_str), resp_preview)
+        bare = self._bare_name(tool_name)
+        if bare in ("get_studies", "finalize_ranking", "verify_studies", "synthesize_report", "plan_search", "fetch_fulltext"):
+            self._intermediate[bare] = response
+        await self.queue.put(
+            RuntimeEventPayload(
+                event_type=EventType.TOOL_RESULT,
+                phase=phase,
+                progress=min(progress + self._tool_call_count + 1, 97),
+                message=f"Agent received result from {tool_name}",
+                tool_name=tool_name,
+                extra={"response_length": len(resp_str)},
+            )
+        )
+
+    # -- Direct calls from workspace tools -----------------------------------
+
+    async def emit_todos(self, items: list[str]) -> None:
+        self._todos = list(items)
+        await self.queue.put(
+            RuntimeEventPayload(
+                event_type=EventType.ARTIFACT_CREATED,
+                phase="planning",
+                progress=8,
+                message="Agent created research TODO list",
+                artifact_type=ArtifactType.TODO_LIST,
+                artifact_name="Research TODOs",
+                artifact_text="\n".join(f"- {item}" for item in items),
+            )
+        )
+
+    async def emit_progress(self, phase: str, message: str) -> None:
+        await self.queue.put(
+            RuntimeEventPayload(
+                event_type=EventType.AGENT_STARTED,
+                phase=phase,
+                progress=min(10 + self._tool_call_count * 3, 97),
+                message=message,
+                agent_name="Research Agent",
+            )
+        )
+
+    # -- Claude Agent SDK hook callbacks (HookCallback signature) -------------
+
+    async def pre_tool_use(  # type: ignore[return]
+        self,
+        hook_input: Any,
+        tool_use_id: str | None,
+        context: Any,
+    ) -> Any:
+        tool_name = hook_input.get("tool_name", "unknown")
+        tool_input = hook_input.get("tool_input", {})
+        await self.on_tool_start(tool_name, tool_input)
+        return {"hookEventName": "PreToolUse"}
+
+    async def post_tool_use(  # type: ignore[return]
+        self,
+        hook_input: Any,
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        tool_name = hook_input.get("tool_name", "unknown")
+        response = hook_input.get("tool_response")
+        await self.on_tool_end(tool_name, response)
+        return {"hookEventName": "PostToolUse"}
+
+    # -- Completion ----------------------------------------------------------
+
+    def set_result(self, text: str | None) -> None:
+        self._result = text
+
+    def set_error(self, exc: Exception | Any) -> None:
+        if isinstance(exc, Exception):
+            self._error = exc
+        else:
+            self._error = RuntimeError(str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Shared tool logic — plain async functions returning dict
+# ---------------------------------------------------------------------------
+
+async def tool_plan_search(request: RunRequest, bridge: AgenticEventBridge, query: str, query_type: str) -> dict[str, Any]:
+    plan = build_query_plan(query, query_type or request.query_type, request.provider)
+    bridge.plan = plan
+    return plan.model_dump()
+
+
+async def tool_suggest_databases(request: RunRequest, bridge: AgenticEventBridge, query: str) -> dict[str, Any]:
+    dbs = _suggest_databases(query, request.provider)
+    return {"databases": dbs}
+
+
+async def tool_search(request: RunRequest, bridge: AgenticEventBridge, source: str, query: str, max_results: int = 8) -> dict[str, Any]:
+    result = await search_source(
+        source, query,
+        api_keys=request.api_keys,
+        max_results=max_results,
+        offline_mode=request.offline_mode,
+        domain="clinical",
+    )
+    bridge.search_results.append(result)
+    studies_summary = []
+    for s in result.studies:
+        abstract = (s.abstract or "").replace("\n", " ").strip()
+        studies_summary.append({
+            "title": s.title,
+            "journal": s.journal,
+            "year": s.publication_year,
+            "pmid": s.pmid,
+            "doi": s.doi,
+            "evidence_level": s.evidence_level,
+            "citation_count": s.citation_count,
+            "abstract": abstract[:300] + "..." if len(abstract) > 300 else abstract,
+        })
+    return {"source": result.source, "count": len(result.studies), "error": result.error, "studies": studies_summary}
+
+
+async def tool_get_studies(request: RunRequest, bridge: AgenticEventBridge, context: str = "general") -> dict[str, Any]:
+    all_studies = flatten_studies(bridge.search_results)
+    if not all_studies:
+        return {"error": "No studies collected yet. Run search tools first.", "studies": []}
+    pre_scored = score_and_rank_results(all_studies, context=context)
+    bridge._pre_scored = pre_scored
+    studies_out = []
+    for s in pre_scored:
+        abstract = (s.abstract or "").replace("\n", " ").strip()
+        studies_out.append({
+            "idx": s.reference_number,
+            "title": s.title,
+            "abstract": abstract[:500] + "..." if len(abstract) > 500 else abstract,
+            "journal": s.journal,
+            "year": s.publication_year,
+            "pmid": s.pmid,
+            "doi": s.doi,
+            "authors": s.authors[:3],
+            "evidence_level": s.evidence_level,
+            "citation_count": s.citation_count,
+            "sources": s.sources,
+            "pre_score": s.composite_score,
+            "score_breakdown": {"evidence": s.evidence_level_score, "citations": s.citation_score, "recency": s.recency_score},
+        })
+    return {"total": len(studies_out), "context": context, "studies": studies_out}
+
+
+async def tool_finalize_ranking(request: RunRequest, bridge: AgenticEventBridge, ranked_indices: list[int], rationale: str = "") -> dict[str, Any]:
+    pre_scored = bridge._pre_scored
+    if not pre_scored:
+        return {"error": "Call get_studies first."}
+    idx_map = {s.reference_number: s for s in pre_scored}
+    ranked: list[ScoredStudy] = []
+    seen: set[int] = set()
+    for i, idx in enumerate(ranked_indices, start=1):
+        idx = int(idx)
+        if idx in idx_map and idx not in seen:
+            study = idx_map[idx].model_copy(deep=True)
+            study.reference_number = i
+            ranked.append(study)
+            seen.add(idx)
+    for s in pre_scored:
+        if s.reference_number not in seen:
+            study = s.model_copy(deep=True)
+            study.reference_number = len(ranked) + 1
+            ranked.append(study)
+    bridge.ranked_studies = ranked
+    return {
+        "status": "ok", "total_ranked": len(ranked),
+        "top_5": [{"rank": s.reference_number, "title": s.title} for s in ranked[:5]],
+        "rationale": rationale,
+    }
+
+
+async def tool_verify_studies(request: RunRequest, bridge: AgenticEventBridge) -> dict[str, Any]:
+    if not bridge.ranked_studies:
+        return {"error": "No ranked studies. Call finalize_ranking first."}
+    summary = await verify_studies(
+        bridge.ranked_studies,
+        api_keys=request.api_keys,
+        offline_mode=request.offline_mode,
+        limit=8,
+    )
+    bridge.verification = summary
+    return {"verified": summary.verified_pmids, "missing": summary.missing_pmids, "markdown": render_verification_report(summary)}
+
+
+async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge) -> dict[str, Any]:
+    plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)
+    verification = bridge.verification or empty_verification_summary("Verification was not run.")
+    report = render_report(
+        query=request.query, plan=plan,
+        search_results=bridge.search_results,
+        ranked_studies=bridge.ranked_studies,
+        verification=verification,
+        provider=request.provider,
+        runtime_name="Agentic Runtime",
+    )
+    bridge._intermediate["synthesize_report"] = report
+    return {"report": report}
+
+
+async def tool_write_todos(request: RunRequest, bridge: AgenticEventBridge, items: list[str]) -> dict[str, Any]:
+    items = [str(item) for item in items]
+    await bridge.emit_todos(items)
+    return {"status": "ok", "count": len(items)}
+
+
+async def tool_update_progress(request: RunRequest, bridge: AgenticEventBridge, phase: str, message: str) -> dict[str, Any]:
+    await bridge.emit_progress(phase, message)
+    return {"status": "ok"}
+
+
+_EBM_HIGH_EVIDENCE = {"Level I", "Level II"}
+
+
+async def tool_fetch_fulltext(request: RunRequest, bridge: AgenticEventBridge) -> dict[str, Any]:
+    candidates = [
+        s for s in bridge.ranked_studies
+        if s.evidence_level in _EBM_HIGH_EVIDENCE and s.doi and s.reference_number is not None
+    ]
+    if not candidates:
+        return {"error": "No Level I/II studies with DOIs found."}
+
+    try:
+        from unpywall.utils import UnpywallCredentials
+        from unpywall import Unpywall
+        UnpywallCredentials(POLITE_EMAIL)
+        has_unpywall = True
+    except ImportError:
+        has_unpywall = False
+
+    found_ranks: dict[int, dict[str, Any]] = {}
+    unpywall_hits = 0
+    pmc_hits = 0
+
+    # Pass 1: Parallel Unpaywall (10 concurrent)
+    if has_unpywall:
+        sem = asyncio.Semaphore(10)
+
+        async def _lookup(s: ScoredStudy) -> None:
+            nonlocal unpywall_hits
+            rank = s.reference_number
+            if rank is None:
+                return
+            async with sem:
+                try:
+                    pdf_link = await asyncio.to_thread(Unpywall.get_pdf_link, s.doi)
+                    if pdf_link:
+                        found_ranks[rank] = {
+                            "rank": rank, "title": s.title, "doi": s.doi, "pmid": s.pmid,
+                            "evidence_level": s.evidence_level, "pdf_url": pdf_link, "source": "unpaywall",
+                        }
+                        unpywall_hits += 1
+                except Exception:
+                    pass
+
+        await asyncio.gather(*[_lookup(s) for s in candidates])
+
+    # Pass 2: PMC for ALL candidates with PMIDs (PMC tgz downloads are more
+    # reliable than Unpaywall URLs which often return 403 from publishers)
+    remaining = [s for s in candidates if s.pmid and s.reference_number is not None]
+    if remaining:
+        ids_param = ",".join(s.pmid for s in remaining if s.pmid)
+        pmid_to_pmcid: dict[str, str] = {}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
+                resp = await client.get(
+                    "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+                    params={"ids": ids_param, "format": "json", "tool": "medical-deep-research", "email": POLITE_EMAIL},
+                )
+                resp.raise_for_status()
+            for r in resp.json().get("records", []):
+                if r.get("pmcid") and r.get("pmid"):
+                    pmid_to_pmcid[r["pmid"]] = r["pmcid"]
+        except Exception as exc:
+            _log.info("[FULLTEXT] PMC ID converter failed: %s", exc)
+
+        sem_pmc = asyncio.Semaphore(5)
+
+        async def _pmc_lookup(s: ScoredStudy) -> None:
+            nonlocal pmc_hits
+            rank = s.reference_number
+            if rank is None or not s.pmid:
+                return
+            pmcid = pmid_to_pmcid.get(s.pmid)
+            if not pmcid or rank in found_ranks:
+                return
+            async with sem_pmc:
+                try:
+                    import xml.etree.ElementTree as _ET
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
+                        resp = await client.get(
+                            "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
+                            params={"id": pmcid},
+                        )
+                        resp.raise_for_status()
+                    root = _ET.fromstring(resp.text)
+                    tgz_href = None
+                    for link in root.findall(".//link"):
+                        if link.attrib.get("format") == "tgz":
+                            tgz_href = link.attrib.get("href")
+                            break
+                    if tgz_href:
+                        if tgz_href.startswith("ftp://"):
+                            tgz_href = tgz_href.replace("ftp://ftp.ncbi.nlm.nih.gov/", "https://ftp.ncbi.nlm.nih.gov/")
+                        found_ranks[rank] = {
+                            "rank": rank, "title": s.title, "doi": s.doi, "pmid": s.pmid,
+                            "pmcid": pmcid, "evidence_level": s.evidence_level,
+                            "pdf_url": tgz_href, "source": "pmc",
+                        }
+                        pmc_hits += 1
+                except Exception as exc:
+                    _log.info("[FULLTEXT] PMC OA failed for %s: %s", pmcid, exc)
+
+        await asyncio.gather(*[_pmc_lookup(s) for s in remaining])
+
+    # Build URL map: prefer PMC tgz over Unpaywall direct links.
+    # Store list of URLs per rank so parse_pdf can try multiple.
+    _url_map: dict[int, list[str]] = {}
+    for r in found_ranks.values():
+        rank_id = r["rank"]
+        url = r["pdf_url"]
+        if rank_id not in _url_map:
+            _url_map[rank_id] = []
+        # PMC tgz goes first (most reliable)
+        if url.endswith(".tar.gz"):
+            _url_map[rank_id].insert(0, url)
+        else:
+            _url_map[rank_id].append(url)
+    bridge._pdf_urls = {k: v[0] for k, v in _url_map.items()}
+    bridge._pdf_url_alternatives = _url_map
+    available = sorted(found_ranks.values(), key=lambda r: r["rank"])
+    _log.info("[FULLTEXT] %d PDFs found (unpaywall=%d, pmc=%d) from %d Level I/II studies",
+              len(available), unpywall_hits, pmc_hits, len(candidates))
+    return {"level_I_II_studies": len(candidates), "pdfs_found": len(available), "unpaywall_hits": unpywall_hits, "pmc_hits": pmc_hits, "available": available}
+
+
+async def tool_parse_pdf(request: RunRequest, bridge: AgenticEventBridge, rank: int) -> dict[str, Any]:
+    import io
+    import tarfile
+    import tempfile
+
+    study = next((s for s in bridge.ranked_studies if s.reference_number == rank), None)
+    title = study.title if study else f"Study #{rank}"
+    urls = getattr(bridge, "_pdf_url_alternatives", {}).get(rank, [])
+    if not urls:
+        primary = bridge._pdf_urls.get(rank, "")
+        if primary:
+            urls = [primary]
+
+    pdf_bytes: bytes | None = None
+    source = "none"
+
+    for url in urls:
+        if pdf_bytes:
+            break
+        # PMC tgz archive
+        if url.endswith(".tar.gz"):
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+                    for member in tar.getmembers():
+                        if member.name.endswith(".pdf"):
+                            f = tar.extractfile(member)
+                            if f:
+                                pdf_bytes = f.read()
+                                source = "pmc_tgz"
+                                _log.info("[PARSE_PDF] Extracted %d bytes from PMC tgz for rank %d", len(pdf_bytes), rank)
+                            break
+            except Exception as exc:
+                _log.info("[PARSE_PDF] PMC tgz failed for rank %d: %s", rank, exc)
+        # Direct URL (Unpaywall or other)
+        else:
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True,
+                                             headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/1.0; academic-research)"}) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    if resp.content[:5] == b"%PDF-":
+                        pdf_bytes = resp.content
+                        source = "direct_url"
+                        _log.info("[PARSE_PDF] Downloaded %d bytes via direct URL for rank %d", len(pdf_bytes), rank)
+            except Exception as exc:
+                _log.info("[PARSE_PDF] Direct URL failed for rank %d: %s", rank, exc)
+
+    if not pdf_bytes:
+        return {"error": f"Could not download PDF for rank {rank}", "title": title}
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        f.write(pdf_bytes)
+        pdf_path = f.name
+
+    text = ""
+    try:
+        import opendataloader_pdf
+        import glob as _glob
+        output_dir = tempfile.mkdtemp()
+        await asyncio.to_thread(opendataloader_pdf.convert, input_path=[pdf_path], output_dir=output_dir, format="markdown")
+        md_files = _glob.glob(f"{output_dir}/**/*.md", recursive=True)
+        if md_files:
+            with open(md_files[0]) as mf:
+                text = mf.read()
+        _log.info("[PARSE_PDF] Parsed %d chars for rank %d (source=%s)", len(text), rank, source)
+    except ImportError:
+        text = f"[opendataloader-pdf not installed. PDF: {len(pdf_bytes)} bytes from {source}.]"
+    except Exception as exc:
+        text = f"[PDF parse error: {exc}. PDF: {len(pdf_bytes)} bytes from {source}.]"
+    finally:
+        import os as _os
+        try:
+            _os.unlink(pdf_path)
+        except OSError:
+            pass
+
+    if len(text) > 8000:
+        text = text[:8000] + f"\n\n[... truncated, {len(text)} chars total]"
+
+    return {"rank": rank, "title": title, "source": source, "text_length": len(text), "fulltext": text}
+
+
+# ---------------------------------------------------------------------------
+# Shared system prompt
+# ---------------------------------------------------------------------------
+
+def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Agent") -> str:
+    offline_note = (
+        "\n\nOFFLINE MODE IS ENABLED. All search tools will return empty/mock results. "
+        "Acknowledge this limitation in your report."
+        if request.offline_mode else ""
+    )
+    return f"""\
+You are an autonomous medical literature research agent ({provider_name}). \
+Conduct a literature review and produce a markdown report.
+
+## Tools
+
+**Planning**: plan_search, suggest_databases, write_todos, update_progress
+**Search** (one call each): search_pubmed, search_openalex, search_cochrane, search_semantic_scholar, search_scopus
+**Evidence** (reads from shared state — NO large JSON arguments needed):
+- get_studies(context) — deduplicates and pre-scores all collected studies, returns full details for YOUR review
+- finalize_ranking(ranked_indices, rationale) — submit your ranking. Pass indices best-first.
+- verify_studies() — verifies PMIDs of ranked studies
+- synthesize_report() — renders final report from all collected data
+**Fulltext** (call AFTER finalize_ranking):
+- fetch_fulltext() — queries Unpaywall + PubMed Central for free PDFs across ALL ranked studies
+- parse_pdf(rank) — downloads and parses a specific study's PDF to extract full text
+
+## Workflow (follow exactly)
+
+1. Call `plan_search` with the query.
+2. Call search tools (one per database, use queries from the plan). Search 3-4 databases.
+3. Call `get_studies` with context="clinical" or "general". Review abstracts, assess relevance and evidence quality.
+4. Call `finalize_ranking` with your ordered list of study indices (best first) and rationale.
+5. Call `fetch_fulltext` to find free PDFs across all ranked studies (Unpaywall + PMC).
+6. Call `parse_pdf` for 1-3 studies that have PDFs available — read the full text to deepen your understanding.
+7. Call `verify_studies` to validate PMIDs.
+8. Call `synthesize_report` to render the final report. Include its output in your final message.
+
+Do NOT pass study data as arguments — tools read from shared state.
+Do NOT repeat searches. One call per database, then move forward.
+
+## Rules
+
+- ONLY cite studies returned by search tools. NEVER invent PMIDs, DOIs, or findings.
+- Your final message must contain the complete report from synthesize_report.
+
+## Query
+
+- **Query**: {request.query}
+- **Type**: {request.query_type}
+- **Language**: {request.language}{offline_note}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Shared recovery
+# ---------------------------------------------------------------------------
+
+def recover_report_from_bridge(request: RunRequest, bridge: AgenticEventBridge, runtime_name: str = "Agentic Runtime") -> str:
+    """Build a report from whatever the agent produced via shared state."""
+    synth_data = bridge._intermediate.get("synthesize_report")
+    if synth_data and isinstance(synth_data, str) and synth_data.strip():
+        return synth_data
+    # If synthesize_report returned a dict with a "report" key
+    if synth_data and isinstance(synth_data, dict) and synth_data.get("report"):
+        return str(synth_data["report"])
+
+    plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)
+    verification = bridge.verification or empty_verification_summary(
+        "Verification was incomplete due to agent timeout or error."
+    )
+    return render_report(
+        query=request.query, plan=plan,
+        search_results=bridge.search_results,
+        ranked_studies=bridge.ranked_studies,
+        verification=verification,
+        provider=request.provider,
+        runtime_name=f"{runtime_name} (partial recovery)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool descriptions (shared across all providers)
+# ---------------------------------------------------------------------------
+
+TOOL_DESCRIPTIONS: dict[str, str] = {
+    "plan_search": "Build a search plan. Returns keywords, databases, and source queries.",
+    "suggest_databases": "Suggest database coverage for a research query.",
+    "search_pubmed": "Search PubMed for medical literature.",
+    "search_openalex": "Search OpenAlex for open-access academic papers.",
+    "search_cochrane": "Search Cochrane for systematic reviews.",
+    "search_semantic_scholar": "Search Semantic Scholar for academic papers.",
+    "search_scopus": "Search Scopus for academic citations.",
+    "get_studies": "Deduplicate and pre-score ALL collected studies. Returns full details for your review.",
+    "finalize_ranking": "Submit your ranking after reviewing studies. Pass ordered indices (best first).",
+    "verify_studies": "Verify PMIDs of the ranked studies against PubMed.",
+    "synthesize_report": "Generate the final markdown report from ALL collected data.",
+    "write_todos": "Create a research TODO list to plan the workflow.",
+    "update_progress": "Signal a phase transition or progress update to the user.",
+    "fetch_fulltext": "Look up free full-text PDFs via Unpaywall + PMC for Level I & II ranked studies.",
+    "parse_pdf": "Download and parse a full-text PDF to markdown.",
+}

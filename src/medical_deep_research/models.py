@@ -130,6 +130,18 @@ class Setting(SQLModel, table=True):
     updated_at: datetime | None = None
 
 
+class RunRequest(SQLModel):
+    run_id: str
+    query: str
+    query_type: str
+    mode: str
+    provider: str
+    model: str
+    language: str = Field(default="en")
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    offline_mode: bool = False
+
+
 class RuntimeEventPayload(SQLModel):
     event_type: EventType
     phase: str

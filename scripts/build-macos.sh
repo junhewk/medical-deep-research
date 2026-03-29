@@ -33,53 +33,23 @@ print(p['project']['version'])
 echo "=== Building ${APP_NAME} v${VERSION} for macOS ==="
 
 # ---------------------------------------------------------------------------
-# 2. Collect paths for --add-data
-# ---------------------------------------------------------------------------
-NICEGUI_DIR=$(uv run python -c "import nicegui, pathlib; print(pathlib.Path(nicegui.__file__).parent)")
-SRC_DIR="src/medical_deep_research"
-SEP=":"  # macOS/Linux path separator for PyInstaller
-
-# ---------------------------------------------------------------------------
-# 3. Run PyInstaller
+# 2. Run PyInstaller (uses .spec file for full config including data filtering)
 # ---------------------------------------------------------------------------
 echo "--- Running PyInstaller ---"
 uv run python -m PyInstaller \
-    --name "${APP_NAME}" \
-    --windowed \
-    --onedir \
     --noconfirm \
     --clean \
-    --osx-bundle-identifier "${BUNDLE_ID}" \
-    --add-data "${NICEGUI_DIR}${SEP}nicegui" \
-    --add-data "${SRC_DIR}${SEP}medical_deep_research" \
-    --hidden-import medical_deep_research \
-    --hidden-import medical_deep_research.main \
-    --hidden-import medical_deep_research.ui \
-    --hidden-import medical_deep_research.config \
-    --hidden-import medical_deep_research.models \
-    --hidden-import medical_deep_research.persistence \
-    --hidden-import medical_deep_research.service \
-    --hidden-import medical_deep_research.runtime \
-    --hidden-import medical_deep_research.agentic_tools \
-    --hidden-import medical_deep_research.tools \
-    --hidden-import medical_deep_research.research \
-    --hidden-import medical_deep_research.research.planning \
-    --hidden-import medical_deep_research.research.search \
-    --hidden-import medical_deep_research.research.scoring \
-    --hidden-import medical_deep_research.research.verification \
-    --hidden-import medical_deep_research.research.reporting \
-    --hidden-import medical_deep_research.research.models \
-    --hidden-import medical_deep_research.mcp \
-    --hidden-import medical_deep_research.mcp.servers \
-    --hidden-import pydantic_settings \
-    --hidden-import sqlmodel \
-    --hidden-import nicegui \
-    --hidden-import httpx \
-    --hidden-import anyio \
-    --collect-all nicegui \
-    --collect-submodules medical_deep_research \
-    scripts/desktop_entry.py
+    "Medical Deep Research.spec"
 
+# ---------------------------------------------------------------------------
+# 3. Strip unused NiceGUI element bundles to reduce size and startup time
+# ---------------------------------------------------------------------------
+echo "--- Stripping unused NiceGUI element JS bundles ---"
+for elem in plotly echart mermaid codemirror json_editor aggrid scene leaflet xterm joystick; do
+    # Remove heavy JS dist bundles only — keep .py and __init__.py so nicegui imports work
+    rm -rf "dist/${APP_NAME}.app/Contents/Resources/nicegui/elements/${elem}/dist"
+    rm -rf "dist/${APP_NAME}.app/Contents/Resources/nicegui/elements/${elem}/src"
+done
 echo "--- Build complete ---"
 echo "App bundle: dist/${APP_NAME}.app"
 ls -lh "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}" 2>/dev/null || true

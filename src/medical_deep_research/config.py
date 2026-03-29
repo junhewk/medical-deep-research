@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     db_filename: str = "medical_deep_research.sqlite"
     legacy_db_path: Path | None = None
     host: str = "127.0.0.1"
-    port: int = 8080
+    port: int = 18515
     native_window: bool = False
     storage_secret: str = "medical-deep-research-local"
     offline_mode: bool = False

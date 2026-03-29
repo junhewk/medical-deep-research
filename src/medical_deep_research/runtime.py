@@ -39,6 +39,7 @@ from .agentic_tools import (
     tool_plan_search,
     tool_search,
     tool_suggest_databases,
+    tool_submit_report,
     tool_synthesize_report,
     tool_update_progress,
     tool_verify_studies,
@@ -1475,6 +1476,12 @@ def _build_openai_tools(request: RunRequest, bridge: AgenticEventBridge) -> list
         "properties": {},
     }, lambda _a: tool_synthesize_report(request, bridge)))
 
+    tools.append(_wrap("submit_report", {
+        "type": "object",
+        "properties": {"report_markdown": {"type": "string", "description": "The complete research report in markdown"}},
+        "required": ["report_markdown"],
+    }, lambda a: tool_submit_report(request, bridge, a.get("report_markdown", ""))))
+
     # Fulltext tools
     tools.append(_wrap("fetch_fulltext", {
         "type": "object",
@@ -1515,16 +1522,18 @@ class OpenAIRuntime(NativeSDKRuntime):
         yield _agentic_agent_started(self.native_agent_name)
 
         env_updates = _provider_api_env(self.provider, request.api_keys)
-        with _temporary_env(env_updates):
-            agent = Agent(
-                name="openai_research_agent",
-                instructions=agentic_system_prompt(request, self.runtime_name),
-                model=request.model,
-                tools=tools,
-            )
-            agent_task = asyncio.create_task(
-                self._run_openai_agent(Runner, agent, request, bridge)
-            )
+        _env_ctx = _temporary_env(env_updates)
+        _env_ctx.__enter__()
+
+        agent = Agent(
+            name="openai_research_agent",
+            instructions=agentic_system_prompt(request, self.runtime_name),
+            model=request.model,
+            tools=tools,
+        )
+        agent_task = asyncio.create_task(
+            self._run_openai_agent(Runner, agent, request, bridge)
+        )
 
         # Yield events from bridge queue as the agent works
         while True:
@@ -1538,10 +1547,12 @@ class OpenAIRuntime(NativeSDKRuntime):
         except Exception as exc:
             _log.warning("OpenAI agentic task error: %s", exc)
             bridge.set_error(exc)
+        finally:
+            _env_ctx.__exit__(None, None, None)
 
         agent_text = bridge._result or ""
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
-        final_report = agent_text if len(agent_text) > len(recovered) else recovered
+        final_report = agent_text if agent_text.strip() else recovered
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
@@ -1655,14 +1666,19 @@ def _build_anthropic_mcp_servers(
     @tool("synthesize_report", TOOL_DESCRIPTIONS["synthesize_report"], {})
     async def synthesize_report_tool(args: dict[str, Any]) -> dict[str, Any]:
         result = await tool_synthesize_report(request, bridge)
-        report_text = result.get("report", "")
-        return {"content": [{"type": "text", "text": report_text}]}
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+    @tool("submit_report", TOOL_DESCRIPTIONS["submit_report"], {"report_markdown": str})
+    async def submit_report_tool(args: dict[str, Any]) -> dict[str, Any]:
+        result = await tool_submit_report(request, bridge, args.get("report_markdown", ""))
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     evidence_server = create_sdk_mcp_server("evidence", tools=[
         get_studies_tool,
         finalize_ranking_tool,
         verify_studies_tool,
         synthesize_report_tool,
+        submit_report_tool,
     ])
 
     # -- Workspace tools -----------------------------------------------------
@@ -1750,6 +1766,7 @@ class AnthropicRuntime(NativeSDKRuntime):
                 "mcp__literature__search_scopus",
                 "mcp__evidence__get_studies", "mcp__evidence__finalize_ranking",
                 "mcp__evidence__verify_studies", "mcp__evidence__synthesize_report",
+                "mcp__evidence__submit_report",
                 "mcp__fulltext__fetch_fulltext", "mcp__fulltext__parse_pdf",
                 "mcp__workspace__write_todos", "mcp__workspace__update_progress",
             ],
@@ -1782,7 +1799,7 @@ class AnthropicRuntime(NativeSDKRuntime):
 
         agent_text = bridge._result or ""
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
-        final_report = agent_text if len(agent_text) > len(recovered) else recovered
+        final_report = agent_text if agent_text.strip() else recovered
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
@@ -1915,8 +1932,12 @@ def _build_google_tools(request: RunRequest, bridge: AgenticEventBridge) -> list
         return await tool_verify_studies(request, bridge)
 
     async def synthesize_report() -> dict:
-        """Generate the final markdown report from ALL collected data."""
+        """Returns structured evidence data for writing the final report."""
         return await tool_synthesize_report(request, bridge)
+
+    async def submit_report(report_markdown: str) -> dict:
+        """Submit your completed research report (full markdown). MUST be called as the last step."""
+        return await tool_submit_report(request, bridge, report_markdown)
 
     async def fetch_fulltext() -> dict:
         """Look up free full-text PDFs via Unpaywall + PMC for Level I and II ranked studies."""
@@ -1935,7 +1956,7 @@ def _build_google_tools(request: RunRequest, bridge: AgenticEventBridge) -> list
         search_pubmed, search_openalex, search_cochrane,
         search_semantic_scholar, search_scopus,
         get_studies, finalize_ranking, verify_studies_fn,
-        synthesize_report, fetch_fulltext, parse_pdf,
+        synthesize_report, submit_report, fetch_fulltext, parse_pdf,
     ]
 
 
@@ -1973,27 +1994,30 @@ class GoogleRuntime(NativeSDKRuntime):
             name = str(getattr(tool, "name", None) or getattr(tool, "__name__", "tool"))
             await bridge.on_tool_end(name, result)
 
-        with _temporary_env(_provider_api_env(self.provider, request.api_keys)):
-            agent = Agent(
-                name="google_research_agent",
-                description=f"{self.runtime_name} medical literature research agent",
-                model=request.model,
-                instruction=agentic_system_prompt(request, self.runtime_name),
-                tools=tools,
-                before_tool_callback=_before_tool,  # type: ignore[arg-type]
-                after_tool_callback=_after_tool,  # type: ignore[arg-type]
-            )
-            session_service = InMemorySessionService()
-            runner = Runner(
-                agent=agent,
-                app_name="MedicalDeepResearch",
-                session_service=session_service,
-                auto_create_session=True,
-            )
+        # Set env vars for the entire agent run — they must persist until the task finishes
+        _env_ctx = _temporary_env(_provider_api_env(self.provider, request.api_keys))
+        _env_ctx.__enter__()
 
-            agent_task = asyncio.create_task(
-                self._run_google_agent(runner, request, bridge, genai_types)
-            )
+        agent = Agent(
+            name="google_research_agent",
+            description=f"{self.runtime_name} medical literature research agent",
+            model=request.model,
+            instruction=agentic_system_prompt(request, self.runtime_name),
+            tools=tools,
+            before_tool_callback=_before_tool,  # type: ignore[arg-type]
+            after_tool_callback=_after_tool,  # type: ignore[arg-type]
+        )
+        session_service = InMemorySessionService()
+        runner = Runner(
+            agent=agent,
+            app_name="MedicalDeepResearch",
+            session_service=session_service,
+            auto_create_session=True,
+        )
+
+        agent_task = asyncio.create_task(
+            self._run_google_agent(runner, request, bridge, genai_types)
+        )
 
         while True:
             queued: RuntimeEventPayload | None = await bridge.queue.get()
@@ -2006,10 +2030,12 @@ class GoogleRuntime(NativeSDKRuntime):
         except Exception as exc:
             _log.warning("Google ADK agentic task error: %s", exc)
             bridge.set_error(exc)
+        finally:
+            _env_ctx.__exit__(None, None, None)
 
         agent_text = bridge._result or ""
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
-        final_report = agent_text if len(agent_text) > len(recovered) else recovered
+        final_report = agent_text if agent_text.strip() else recovered
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
@@ -2185,10 +2211,18 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
 
     @lc_tool
     async def synthesize_report() -> str:
-        """Generate the final markdown report from ALL collected data."""
+        """Returns structured evidence data for writing the final report."""
         await bridge.on_tool_start("synthesize_report", {})
         result = await tool_synthesize_report(request, bridge)
         await bridge.on_tool_end("synthesize_report", result)
+        return json.dumps(result, default=str)
+
+    @lc_tool
+    async def submit_report(report_markdown: str) -> str:
+        """Submit your completed research report (full markdown). MUST be called as the last step."""
+        await bridge.on_tool_start("submit_report", {"length": len(report_markdown)})
+        result = await tool_submit_report(request, bridge, report_markdown)
+        await bridge.on_tool_end("submit_report", result)
         return json.dumps(result, default=str)
 
     @lc_tool
@@ -2210,7 +2244,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
     return [
         plan_search, suggest_databases, write_todos, update_progress,
         *search_tools,
-        get_studies, finalize_ranking, verify_studies, synthesize_report,
+        get_studies, finalize_ranking, verify_studies, synthesize_report, submit_report,
         fetch_fulltext, parse_pdf,
     ]
 
@@ -2299,7 +2333,7 @@ class LangChainLocalRuntime(NativeSDKRuntime):
 
         agent_text = bridge._result or ""
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
-        final_report = agent_text if len(agent_text) > len(recovered) else recovered
+        final_report = agent_text if agent_text.strip() else recovered
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event

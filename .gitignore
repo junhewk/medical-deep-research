@@ -67,3 +67,6 @@ data/research/
 src-tauri/target/
 src-tauri/resources/standalone/
 src-tauri/binaries/bun-*
+
+# PyInstaller build artifacts (spec file is intentionally tracked)
+build/Medical Deep Research/

@@ -311,6 +311,29 @@ body {
     color: var(--text-primary) !important;
     font-size: 0.8rem !important;
 }
+/* Collapsible section panels */
+.mdr-card.q-expansion-item {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-dim) !important;
+    border-radius: 6px !important;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.3) !important;
+}
+.mdr-card.q-expansion-item .q-expansion-item__toggle {
+    padding: 0.5rem 1rem !important;
+}
+.mdr-card.q-expansion-item .q-item__section--avatar {
+    color: var(--text-muted) !important;
+    min-width: 32px !important;
+}
+.mdr-card.q-expansion-item .q-item__label {
+    font-family: 'Playfair Display', serif !important;
+    font-weight: 500 !important;
+    font-size: 1.05rem !important;
+    color: var(--text-primary) !important;
+}
+.mdr-card.q-expansion-item .q-expansion-item__content {
+    padding: 0 1rem 1rem !important;
+}
 """
 
 
@@ -344,6 +367,26 @@ def _exec_label(mode: str | None) -> str:
     return mapping.get(mode or "", (mode or "unknown").replace("_", " ").title())
 
 
+PROVIDER_MODELS: dict[str, dict[str, str]] = {
+    "anthropic": {
+        "claude-sonnet-4-6": "Claude Sonnet 4.6",
+        "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
+    },
+    "openai": {
+        "gpt-4.1-mini": "GPT-4.1 Mini",
+        "gpt-5-mini": "GPT-5 Mini",
+        "gpt-5": "GPT-5",
+        "gpt-5.2": "GPT-5.2",
+    },
+    "google": {
+        "gemini-2.5-flash": "Gemini 2.5 Flash",
+        "gemini-2.5-pro": "Gemini 2.5 Pro",
+        "gemini-3-flash-preview": "Gemini 3.0 Flash Preview",
+        "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview",
+    },
+}
+
+
 def _bool_badge(label: str, value: Any) -> None:
     if value is True:
         ui.html(f'<span class="mdr-badge mdr-badge-success">{label}: yes</span>')
@@ -357,12 +400,22 @@ def build_ui(service: ResearchService) -> None:
     ui.add_css(_CUSTOM_CSS)
 
     def index() -> None:
-        selected: dict[str, str | None] = {"run_id": None}
+        selected: dict[str, str | None] = {"run_id": None, "active_tab": "trace"}
+        page_state: dict[str, int] = {"page": 0, "per_page": 15}
         form_state: dict[str, Any] = {
             "query": "",
             "query_type": "free",
             "provider": "anthropic",
             "model": DEFAULT_MODELS["anthropic"],
+            # PICO structured fields
+            "pico_p": "",
+            "pico_i": "",
+            "pico_c": "",
+            "pico_o": "",
+            # PCC structured fields
+            "pcc_p": "",
+            "pcc_concept": "",
+            "pcc_context": "",
         }
 
         def choose_run(run_id: str) -> None:
@@ -371,18 +424,44 @@ def build_ui(service: ResearchService) -> None:
 
         def on_provider_change(provider: str) -> None:
             form_state["provider"] = provider
-            form_state["model"] = DEFAULT_MODELS.get(provider, DEFAULT_MODELS["openai"])
+            models = PROVIDER_MODELS.get(provider)
+            if models:
+                form_state["model"] = next(iter(models))
+            else:
+                form_state["model"] = DEFAULT_MODELS.get(provider, "")
+            model_selector.refresh()
             provider_diagnostics.refresh()
 
         async def start_run() -> None:
-            if not form_state["query"].strip():
-                ui.notify("Query is required", type="negative")
-                return
+            qt = form_state["query_type"]
+            query_payload: dict[str, Any] = {}
+            if qt == "pico":
+                p, i, c, o = (form_state["pico_p"].strip(), form_state["pico_i"].strip(),
+                              form_state["pico_c"].strip(), form_state["pico_o"].strip())
+                if not p and not i:
+                    ui.notify("Population and Intervention are required for PICO", type="negative")
+                    return
+                query_payload = {"population": p, "intervention": i, "comparison": c, "outcome": o}
+                query = f"Population: {p}; Intervention: {i}; Comparison: {c}; Outcome: {o}"
+            elif qt == "pcc":
+                p, concept, context = (form_state["pcc_p"].strip(), form_state["pcc_concept"].strip(),
+                                       form_state["pcc_context"].strip())
+                if not p and not concept:
+                    ui.notify("Population and Concept are required for PCC", type="negative")
+                    return
+                query_payload = {"population": p, "concept": concept, "context": context}
+                query = f"Population: {p}; Concept: {concept}; Context: {context}"
+            else:
+                query = form_state["query"].strip()
+                if not query:
+                    ui.notify("Query is required", type="negative")
+                    return
             run = service.create_run(
-                query=form_state["query"],
-                query_type=form_state["query_type"],
+                query=query,
+                query_type=qt,
                 provider=form_state["provider"],
                 model=form_state["model"],
+                query_payload=query_payload or None,
             )
             selected["run_id"] = run.id
             run_list.refresh()
@@ -417,18 +496,13 @@ def build_ui(service: ResearchService) -> None:
                 with ui.card().classes("mdr-card w-full p-5"):
                     ui.html('<div class="mdr-section-title">New Research</div>')
                     ui.html('<div class="mdr-section-desc" style="margin-bottom:0.75rem">Enter a clinical or healthcare question</div>')
-                    query_input = ui.textarea(
-                        label="Research question",
-                        placeholder="e.g. What is the evidence for SGLT2 inhibitors in heart failure with preserved ejection fraction?",
-                        value=form_state["query"],
-                    ).props("autogrow outlined dark").classes("w-full")
-                    query_input.bind_value(form_state, "query")
 
                     with ui.row().classes("w-full gap-3"):
-                        ui.select(
+                        query_type_select = ui.select(
                             {"free": "Free-form", "pico": "PICO", "pcc": "PCC"},
                             label="Query type",
                             value=form_state["query_type"],
+                            on_change=lambda _: structured_input.refresh(),
                         ).props("outlined dark dense").bind_value(form_state, "query_type").classes("flex-1")
 
                         provider_select = ui.select(
@@ -439,17 +513,77 @@ def build_ui(service: ResearchService) -> None:
                         ).props("outlined dark dense").classes("flex-1")
                         provider_select.bind_value(form_state, "provider")
 
-                    model_input = ui.input(label="Model", value=form_state["model"]).props("outlined dark dense").classes("w-full")
-                    model_input.bind_value(form_state, "model")
+                    @ui.refreshable
+                    def structured_input() -> None:
+                        qt = form_state["query_type"]
+                        if qt == "pico":
+                            ui.input(label="Population", placeholder="e.g. Adults with HFpEF").props(
+                                "outlined dark dense"
+                            ).classes("w-full").bind_value(form_state, "pico_p")
+                            ui.input(label="Intervention", placeholder="e.g. SGLT2 inhibitors").props(
+                                "outlined dark dense"
+                            ).classes("w-full").bind_value(form_state, "pico_i")
+                            ui.input(label="Comparison", placeholder="e.g. Placebo or standard care").props(
+                                "outlined dark dense"
+                            ).classes("w-full").bind_value(form_state, "pico_c")
+                            ui.input(label="Outcome", placeholder="e.g. Hospitalisation, mortality").props(
+                                "outlined dark dense"
+                            ).classes("w-full").bind_value(form_state, "pico_o")
+                        elif qt == "pcc":
+                            ui.input(label="Population", placeholder="e.g. Elderly patients with diabetes").props(
+                                "outlined dark dense"
+                            ).classes("w-full").bind_value(form_state, "pcc_p")
+                            ui.input(label="Concept", placeholder="e.g. Self-management strategies").props(
+                                "outlined dark dense"
+                            ).classes("w-full").bind_value(form_state, "pcc_concept")
+                            ui.input(label="Context", placeholder="e.g. Primary care settings").props(
+                                "outlined dark dense"
+                            ).classes("w-full").bind_value(form_state, "pcc_context")
+                        else:
+                            query_input = ui.textarea(
+                                label="Research question",
+                                placeholder="e.g. What is the evidence for SGLT2 inhibitors in heart failure with preserved ejection fraction?",
+                                value=form_state["query"],
+                            ).props("autogrow outlined dark").classes("w-full")
+                            query_input.bind_value(form_state, "query")
+
+                    structured_input()
+
+                    @ui.refreshable
+                    def model_selector() -> None:
+                        provider = form_state["provider"]
+                        models = PROVIDER_MODELS.get(provider)
+                        if models:
+                            api_keys = service.get_api_keys()
+                            has_key = provider in api_keys and bool(api_keys[provider].strip())
+                            sel = ui.select(
+                                models,
+                                label="Model",
+                                value=form_state["model"],
+                            ).props("outlined dark dense").classes("w-full")
+                            sel.bind_value(form_state, "model")
+                            if not has_key and provider != "local":
+                                sel.props("disable")
+                                ui.html(
+                                    '<span style="font-size:0.7rem; color: var(--error)">'
+                                    'Set API key below to enable</span>'
+                                )
+                        else:
+                            # Local / unknown provider: free-form input
+                            local_input = ui.input(
+                                label="Model", value=form_state["model"],
+                            ).props("outlined dark dense").classes("w-full")
+                            local_input.bind_value(form_state, "model")
+
+                    model_selector()
 
                     ui.button("Start Research Run", on_click=start_run).classes("mdr-btn-primary w-full")
 
-                # Provider diagnostics
+                # Provider diagnostics (collapsible)
                 @ui.refreshable
                 def provider_diagnostics() -> None:
                     diagnostics = service.get_provider_diagnostics()
-                    with ui.card().classes("mdr-card w-full p-4"):
-                        ui.html('<div class="mdr-section-title">Provider Status</div>')
+                    with ui.expansion("Provider Status", icon="dns").classes("mdr-card w-full").props("dense"):
                         for entry in diagnostics:
                             is_selected = entry["provider"] == form_state["provider"]
                             card_cls = "mdr-diag-card mdr-diag-card-selected" if is_selected else "mdr-diag-card"
@@ -476,17 +610,67 @@ def build_ui(service: ResearchService) -> None:
 
                 provider_diagnostics()
 
+                # API Keys (collapsible)
+                with ui.expansion("API Keys", icon="key").classes("mdr-card w-full").props("dense"):
+                    ui.html('<div class="mdr-section-desc" style="margin-bottom:0.5rem">Keys are stored locally in the database</div>')
+                    stored_keys = service.get_api_keys()
+                    key_fields: dict[str, Any] = {}
+                    for svc, label in [
+                        ("openai", "OpenAI"),
+                        ("anthropic", "Anthropic"),
+                        ("google", "Google"),
+                        ("ncbi", "NCBI (E-utilities)"),
+                        ("scopus", "Scopus / Elsevier"),
+                    ]:
+                        key_fields[svc] = ui.input(
+                            label=f"{label} API Key",
+                            value=stored_keys.get(svc, ""),
+                            password=True,
+                            password_toggle_button=True,
+                        ).props("outlined dark dense").classes("w-full")
+
+                    def save_keys() -> None:
+                        for svc, field in key_fields.items():
+                            val = field.value.strip()
+                            if val:
+                                service.save_api_key(svc, val)
+                        ui.notify("API keys saved", type="positive")
+                        provider_diagnostics.refresh()
+                        model_selector.refresh()
+
+                    ui.button("Save Keys", on_click=save_keys).props("outline size=sm").style(
+                        "color: var(--accent); border-color: var(--accent); margin-top: 0.5rem"
+                    )
+
                 # Recent runs
+                def prev_page() -> None:
+                    if page_state["page"] > 0:
+                        page_state["page"] -= 1
+                        run_list.refresh()
+
+                def next_page() -> None:
+                    page_state["page"] += 1
+                    run_list.refresh()
+
                 @ui.refreshable
                 def run_list() -> None:
+                    pp = page_state["per_page"]
+                    offset = page_state["page"] * pp
+                    total = service.count_runs()
+                    runs = service.list_runs(limit=pp, offset=offset)
                     with ui.card().classes("mdr-card w-full p-4"):
-                        ui.html('<div class="mdr-section-title">Recent Runs</div>')
-                        runs = service.list_runs()
+                        with ui.row().classes("w-full items-center justify-between"):
+                            ui.html('<div class="mdr-section-title">Research Runs</div>')
+                            if total > 0:
+                                ui.html(
+                                    f'<span class="mdr-section-desc">'
+                                    f'{offset + 1}–{min(offset + pp, total)} of {total}</span>'
+                                )
                         if not runs:
                             ui.label("No runs yet.").style("color: var(--text-muted); font-size: 0.82rem; margin-top: 0.5rem")
                             return
                         with ui.column().classes("w-full gap-1 mt-2"):
-                            for run in runs[:20]:
+                            for run in runs:
                                 is_sel = selected["run_id"] == run.id
                                 item_cls = "mdr-run-item mdr-run-item-selected" if is_sel else "mdr-run-item"
                                 with ui.row().classes(f"{item_cls} w-full items-center justify-between").on(
@@ -501,6 +685,14 @@ def build_ui(service: ResearchService) -> None:
                                             f"{run.provider} / {run.model}"
                                         ).style("font-size: 0.65rem; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace")
                                     ui.html(f'<span class="mdr-badge {_status_badge_class(run.status)}">{run.status}</span>')
+                        if total > pp:
+                            with ui.row().classes("w-full justify-center gap-2 mt-2"):
+                                ui.button(icon="chevron_left", on_click=prev_page).props(
+                                    "flat dense round" + (" disable" if page_state["page"] == 0 else "")
+                                ).style("color: var(--text-secondary)")
+                                ui.button(icon="chevron_right", on_click=next_page).props(
+                                    "flat dense round" + (" disable" if offset + pp >= total else "")
+                                ).style("color: var(--text-secondary)")
 
                 run_list()
 
@@ -557,13 +749,22 @@ def build_ui(service: ResearchService) -> None:
                     artifacts = service.list_artifacts(run.id)
                     events = service.list_events(run.id)
 
-                    with ui.tabs().classes("mdr-tabs w-full") as tabs:
+                    def on_tab_change(e: Any) -> None:
+                        selected["active_tab"] = e.value
+
+                    with ui.tabs(
+                        value=selected.get("active_tab", "trace"),
+                        on_change=on_tab_change,
+                    ).classes("mdr-tabs w-full") as tabs:
                         trace_tab = ui.tab("trace")
                         artifacts_tab = ui.tab("artifacts")
                         report_tab = ui.tab("report")
                         diag_tab = ui.tab("diagnostics")
 
-                    with ui.tab_panels(tabs, value=trace_tab).classes("w-full").style("background: transparent !important"):
+                    _tab_map = {"trace": trace_tab, "artifacts": artifacts_tab, "report": report_tab, "diagnostics": diag_tab}
+                    _active = _tab_map.get(selected.get("active_tab", "trace"), trace_tab)
+
+                    with ui.tab_panels(tabs, value=_active).classes("w-full").style("background: transparent !important"):
 
                         with ui.tab_panel(trace_tab).style("background: transparent !important; padding: 0 !important"):
                             with ui.card().classes("mdr-card w-full p-4"):
@@ -636,8 +837,12 @@ def build_ui(service: ResearchService) -> None:
 
                 detail_panel()
 
-        ui.timer(1.5, run_list.refresh)
-        ui.timer(2.0, provider_diagnostics.refresh)
-        ui.timer(1.5, detail_panel.refresh)
+        def _on_service_change(run_id: str, change_type: str) -> None:
+            """Push-based UI update triggered by service state changes."""
+            run_list.refresh()
+            if selected["run_id"] == run_id:
+                detail_panel.refresh()
+
+        service.add_ui_listener(_on_service_change)
 
     index()

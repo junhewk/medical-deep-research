@@ -322,16 +322,78 @@ async def tool_verify_studies(request: RunRequest, bridge: AgenticEventBridge) -
 async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge) -> dict[str, Any]:
     plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)
     verification = bridge.verification or empty_verification_summary("Verification was not run.")
-    report = render_report(
-        query=request.query, plan=plan,
-        search_results=bridge.search_results,
-        ranked_studies=bridge.ranked_studies,
-        verification=verification,
-        provider=request.provider,
-        runtime_name="Agentic Runtime",
-    )
-    bridge._intermediate["synthesize_report"] = report
-    return {"report": report}
+
+    # Return structured data so the LLM writes a real synthesis — NOT a pre-formatted template
+    studies_data = []
+    for s in bridge.ranked_studies[:12]:
+        entry: dict[str, Any] = {
+            "rank": s.reference_number,
+            "title": s.title,
+            "authors": s.authors[:3] if s.authors else [],
+            "year": s.publication_year,
+            "journal": s.journal,
+            "source": s.source,
+            "doi": s.doi,
+            "pmid": s.pmid,
+            "evidence_level": s.evidence_level,
+            "citation_count": s.citation_count,
+            "score": s.composite_score,
+        }
+        if s.abstract:
+            entry["abstract"] = s.abstract[:500]
+        studies_data.append(entry)
+
+    search_summary = {}
+    for r in bridge.search_results:
+        search_summary[r.source] = {
+            "hits": len(r.studies),
+            "error": r.error,
+            "skipped": r.skipped,
+        }
+
+    data = {
+        "query": request.query,
+        "query_type": request.query_type,
+        "language": request.language,
+        "plan": {
+            "domain": plan.domain,
+            "keywords": plan.keywords,
+            "databases": plan.databases,
+        },
+        "search_summary": search_summary,
+        "total_ranked": len(bridge.ranked_studies),
+        "studies": studies_data,
+        "verification": {
+            "verified_pmids": verification.verified_pmids,
+            "missing_pmids": verification.missing_pmids,
+            "notes": verification.notes,
+        },
+        "instructions": (
+            "Write a comprehensive research synthesis report in markdown. "
+            "The report MUST include: "
+            "(1) An executive summary that directly answers the research question; "
+            "(2) A methods section describing the search strategy; "
+            "(3) A findings section that synthesizes evidence across studies — do NOT just list studies, "
+            "compare and contrast findings, identify patterns, agreements and contradictions; "
+            "(4) A discussion section interpreting the evidence, noting limitations, gaps, and quality of evidence; "
+            "(5) A conclusion with clear takeaways; "
+            "(6) A numbered references section. "
+            "Cite studies by [number] throughout the text. "
+            "Write in the language specified by the query language setting."
+        ),
+    }
+    bridge._intermediate["synthesize_report"] = data
+    return data
+
+
+async def tool_submit_report(request: RunRequest, bridge: AgenticEventBridge, report_markdown: str) -> dict[str, Any]:
+    """Store the agent-written final report."""
+    report_markdown = str(report_markdown).strip()
+    if not report_markdown:
+        return {"error": "Report is empty. Write the full report and submit again."}
+    bridge._intermediate["submitted_report"] = report_markdown
+    bridge.set_result(report_markdown)
+    return {"status": "ok", "length": len(report_markdown)}
 
 
 async def tool_write_todos(request: RunRequest, bridge: AgenticEventBridge, items: list[str]) -> dict[str, Any]:
@@ -565,9 +627,18 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
         "Acknowledge this limitation in your report."
         if request.offline_mode else ""
     )
+    # Choose domain-specific prompt based on query plan
+    from .research import build_query_plan
+    plan = build_query_plan(request.query, request.query_type, request.provider)
+    is_clinical = plan.domain == "clinical"
+
+    if is_clinical:
+        domain_instructions = _clinical_prompt(request)
+    else:
+        domain_instructions = _healthcare_prompt(request)
+
     return f"""\
-You are an autonomous medical literature research agent ({provider_name}). \
-Conduct a literature review and produce a markdown report.
+{domain_instructions}
 
 ## Tools
 
@@ -577,7 +648,8 @@ Conduct a literature review and produce a markdown report.
 - get_studies(context) — deduplicates and pre-scores all collected studies, returns full details for YOUR review
 - finalize_ranking(ranked_indices, rationale) — submit your ranking. Pass indices best-first.
 - verify_studies() — verifies PMIDs of ranked studies
-- synthesize_report() — renders final report from all collected data
+- synthesize_report() — returns structured evidence data for you to write the final report
+- submit_report(report_markdown) — submit your completed report. MUST be called as the final step.
 **Fulltext** (call AFTER finalize_ranking):
 - fetch_fulltext() — queries Unpaywall + PubMed Central for free PDFs across ALL ranked studies
 - parse_pdf(rank) — downloads and parses a specific study's PDF to extract full text
@@ -585,21 +657,27 @@ Conduct a literature review and produce a markdown report.
 ## Workflow (follow exactly)
 
 1. Call `plan_search` with the query.
-2. Call search tools (one per database, use queries from the plan). Search 3-4 databases.
-3. Call `get_studies` with context="clinical" or "general". Review abstracts, assess relevance and evidence quality.
-4. Call `finalize_ranking` with your ordered list of study indices (best first) and rationale.
+2. Call search tools (one per database, use queries from the plan). Search 3-5 databases.
+3. Call `get_studies` with context="{"clinical" if is_clinical else "general"}". \
+Carefully review EVERY abstract. Assess relevance to the query, study design, evidence level, and quality.
+4. Call `finalize_ranking` with your ordered list of study indices (best first) and a detailed rationale.
 5. Call `fetch_fulltext` to find free PDFs across all ranked studies (Unpaywall + PMC).
-6. Call `parse_pdf` for 1-3 studies that have PDFs available — read the full text to deepen your understanding.
+6. Call `parse_pdf` for 1-3 studies that have PDFs available — read the full text.
 7. Call `verify_studies` to validate PMIDs.
-8. Call `synthesize_report` to render the final report. Include its output in your final message.
+8. Call `synthesize_report` — this returns the structured evidence data.
+9. **Write the full report** using the evidence data (see Report Format below).
+10. Call `submit_report(report_markdown)` with your complete report. This is the FINAL step.
 
 Do NOT pass study data as arguments — tools read from shared state.
 Do NOT repeat searches. One call per database, then move forward.
 
-## Rules
+## Anti-Hallucination Rules (CRITICAL)
 
-- ONLY cite studies returned by search tools. NEVER invent PMIDs, DOIs, or findings.
-- Your final message must contain the complete report from synthesize_report.
+- ONLY cite sources from your search results. NEVER invent PMIDs, DOIs, or findings.
+- ONLY state what abstracts EXPLICITLY say.
+- If a conclusion says "no significant difference", report that — NEVER reverse or contradict findings.
+- If findings are mixed or inconclusive, report that accurately.
+- Cite studies as [1], [2], etc. throughout the text.
 
 ## Query
 
@@ -609,19 +687,159 @@ Do NOT repeat searches. One call per database, then move forward.
 """
 
 
+def _clinical_prompt(request: RunRequest) -> str:
+    return f"""\
+You are a Medical Research Agent ({request.provider}) specialized in evidence-based medicine \
+and systematic literature review.
+
+## Core Capabilities
+1. Build optimized search queries using PICO or PCC frameworks
+2. Search medical databases (PubMed, Scopus, Cochrane Library, OpenAlex, Semantic Scholar)
+3. Classify evidence levels (Level I–V)
+4. Validate study populations against target criteria
+5. Synthesize findings into comprehensive evidence-based reports
+
+## Search Strategy Guidelines
+
+### For Clinical Questions (PICO)
+- Use "comprehensive" search strategy to prioritize recent landmark trials
+- Ensure recent RCTs (last 3 years) from NEJM, Lancet, JAMA are included
+- Validate that study populations match the query criteria
+
+### Database Coverage
+Search multiple databases for comprehensive coverage:
+- PubMed (primary for clinical evidence)
+- Cochrane (systematic reviews)
+- OpenAlex (broad academic coverage, free)
+- Semantic Scholar (Medicine-filtered, free)
+- Scopus (if API key available — citation counts)
+
+## Evidence Classification
+
+Assign evidence levels to each study:
+- **Level I**: Systematic reviews, meta-analyses of RCTs
+- **Level II**: Individual RCTs, well-designed controlled trials
+- **Level III**: Non-randomized controlled studies, cohort studies
+- **Level IV**: Case series, case-control studies
+- **Level V**: Expert opinion, narrative reviews, case reports
+
+## Report Format (Markdown) — YOU MUST WRITE THIS
+
+Your final message MUST be a complete research report with these sections:
+
+### 1. Executive Summary
+Directly answer the clinical question in 2-3 paragraphs. Highlight the key finding and \
+cite the landmark trial. State the strength of evidence and bottom-line conclusion.
+
+### 2. Background
+Why this question matters clinically. What is the current state of knowledge.
+
+### 3. Methods
+Search strategy, databases searched with hit counts, population criteria, inclusion/exclusion reasoning.
+
+### 4. Results
+Organize by evidence level, with [n] citations throughout:
+- Level I evidence (systematic reviews, meta-analyses)
+- Level II evidence (RCTs)
+- Level III–V evidence
+- Compare and contrast findings across studies
+- Note agreements, contradictions, and effect sizes
+
+### 5. Discussion
+- Address population-specific considerations
+- Clinical implications and applicability
+- Limitations of the available evidence
+- Gaps in the literature
+
+### 6. Conclusions
+Clear clinical takeaways. What the evidence supports, what remains uncertain.
+
+### 7. References
+Vancouver format with PMIDs/DOIs: [n] Authors. Title. Journal. Year;Vol(Issue):Pages. DOI/PMID.
+
+Write in {request.language} language."""
+
+
+def _healthcare_prompt(request: RunRequest) -> str:
+    return f"""\
+You are a Healthcare Research Agent ({request.provider}) specialized in comprehensive academic \
+literature review across healthcare disciplines including ethics, policy, informatics, social care, \
+nursing, public health, education, and implementation science.
+
+## Core Capabilities
+1. Build keyword-based search strategies for broad healthcare/academic topics
+2. Search academic databases (PubMed, OpenAlex, Semantic Scholar, Scopus)
+3. Identify and include diverse study methodologies (qualitative, mixed methods, policy analyses, \
+theoretical frameworks, reviews)
+4. Synthesize findings into thematic reports
+
+## Search Strategy Guidelines
+
+### For Healthcare/Academic Research Topics
+- Build keyword-based search queries using natural language terms
+- Do NOT use PICO or PCC frameworks for non-clinical topics
+- Do NOT attempt MeSH term mapping for broad healthcare topics
+- Prioritize OpenAlex and Semantic Scholar for cross-disciplinary coverage
+- Use PubMed for healthcare topics it indexes well
+- Skip Cochrane for non-clinical-intervention topics
+
+### Database Coverage
+Search multiple databases for comprehensive coverage:
+- OpenAlex (primary for broad academic coverage, free)
+- Semantic Scholar (cross-disciplinary without field restrictions, free)
+- PubMed (for healthcare topics it indexes: nursing, bioethics, public health)
+- Scopus (if API key available — citation counts and broader coverage)
+
+## Report Format (Markdown) — YOU MUST WRITE THIS
+
+Your final message MUST be a complete research report with these sections:
+
+### 1. Executive Summary
+Directly answer the research question in 2-3 paragraphs. Summarize the state of knowledge, \
+the strength of the evidence base, and the key takeaway.
+
+### 2. Background & Context
+Why this topic matters. The current landscape and knowledge gaps.
+
+### 3. Methods
+Search strategy: databases searched, query terms used, hit counts per source, \
+inclusion/exclusion reasoning.
+
+### 4. Findings
+Organize thematically — do NOT just list studies one by one. Instead:
+- Group related findings by theme, approach, or outcome
+- Compare and contrast what different studies found
+- Consider diverse study types (qualitative, quantitative, mixed methods) as equally valid
+- Note where the literature agrees, disagrees, or shows gaps
+- Cite sources as [n] throughout
+
+### 5. Implications for Practice and Policy
+What do these findings mean for practitioners, educators, or policymakers?
+
+### 6. Recommendations & Future Directions
+What should be done next? Where are the gaps in knowledge?
+
+### 7. References
+Vancouver format with DOIs: [n] Authors. Title. Journal. Year;Vol(Issue):Pages. DOI.
+
+Write in {request.language} language."""
+
+
 # ---------------------------------------------------------------------------
 # Shared recovery
 # ---------------------------------------------------------------------------
 
 def recover_report_from_bridge(request: RunRequest, bridge: AgenticEventBridge, runtime_name: str = "Agentic Runtime") -> str:
-    """Build a report from whatever the agent produced via shared state."""
-    synth_data = bridge._intermediate.get("synthesize_report")
-    if synth_data and isinstance(synth_data, str) and synth_data.strip():
-        return synth_data
-    # If synthesize_report returned a dict with a "report" key
-    if synth_data and isinstance(synth_data, dict) and synth_data.get("report"):
-        return str(synth_data["report"])
+    """Build a report from whatever the agent produced via shared state.
 
+    Priority: submitted_report > agent's own text > fallback template.
+    """
+    # Check if agent called submit_report
+    submitted = bridge._intermediate.get("submitted_report")
+    if submitted and isinstance(submitted, str) and len(submitted.strip()) > 200:
+        return submitted
+
+    # Fallback to deterministic template only as last resort
     plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)
     verification = bridge.verification or empty_verification_summary(
         "Verification was incomplete due to agent timeout or error."
@@ -632,7 +850,7 @@ def recover_report_from_bridge(request: RunRequest, bridge: AgenticEventBridge, 
         ranked_studies=bridge.ranked_studies,
         verification=verification,
         provider=request.provider,
-        runtime_name=f"{runtime_name} (partial recovery)",
+        runtime_name=f"{runtime_name} (fallback)",
     )
 
 
@@ -651,7 +869,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "get_studies": "Deduplicate and pre-score ALL collected studies. Returns full details for your review.",
     "finalize_ranking": "Submit your ranking after reviewing studies. Pass ordered indices (best first).",
     "verify_studies": "Verify PMIDs of the ranked studies against PubMed.",
-    "synthesize_report": "Generate the final markdown report from ALL collected data.",
+    "synthesize_report": "Returns structured evidence data for writing the final report.",
+    "submit_report": "Submit your written research report (full markdown). MUST be called as the last step.",
     "write_todos": "Create a research TODO list to plan the workflow.",
     "update_progress": "Signal a phase transition or progress update to the user.",
     "fetch_fulltext": "Look up free full-text PDFs via Unpaywall + PMC for Level I & II ranked studies.",

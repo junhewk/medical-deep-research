@@ -24,22 +24,44 @@ from .runtime import RunRequest, build_runtime, describe_provider_runtime
 
 
 DEFAULT_MODELS = {
-    "openai": "gpt-5.2",
+    "openai": "gpt-5-mini",
     "anthropic": "claude-haiku-4-5-20251001",
-    "google": "gemini-3-pro-preview",
-    "local": "llama3.3:70b",
+    "google": "gemini-2.5-flash",
+    "local": "qwen3.5-27b",
 }
+
+
+from collections.abc import Callable
+
+_UICallback = Callable[[str, str], None]  # (run_id, change_type)
 
 
 class ResearchService:
     def __init__(self, database: AppDatabase) -> None:
         self.database = database
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._ui_listeners: list[_UICallback] = []
 
-    def list_runs(self) -> list[ResearchRun]:
+    def add_ui_listener(self, callback: _UICallback) -> None:
+        self._ui_listeners.append(callback)
+
+    def _notify_ui(self, run_id: str, change_type: str) -> None:
+        for cb in self._ui_listeners:
+            try:
+                cb(run_id, change_type)
+            except Exception:
+                pass
+
+    def list_runs(self, *, limit: int = 20, offset: int = 0) -> list[ResearchRun]:
         with self.database.session() as session:
-            statement = select(ResearchRun).order_by(desc(ResearchRun.created_at))
+            statement = select(ResearchRun).order_by(desc(ResearchRun.created_at)).offset(offset).limit(limit)
             return list(session.exec(statement))
+
+    def count_runs(self) -> int:
+        with self.database.session() as session:
+            from sqlmodel import func
+            statement = select(func.count()).select_from(ResearchRun)
+            return session.exec(statement).one()
 
     def get_run(self, run_id: str) -> ResearchRun | None:
         with self.database.session() as session:
@@ -81,6 +103,15 @@ class ResearchService:
         with self.database.session() as session:
             statement = select(ApiKey)
             return {record.service: record.api_key for record in session.exec(statement)}
+
+    def save_api_key(self, service: str, api_key: str) -> None:
+        with self.database.session() as session:
+            existing = session.exec(select(ApiKey).where(ApiKey.service == service)).first()
+            if existing:
+                existing.api_key = api_key
+            else:
+                session.add(ApiKey(service=service, api_key=api_key))
+            session.commit()
 
     def get_provider_diagnostics(self) -> list[dict[str, Any]]:
         api_keys = self.get_api_keys()
@@ -171,6 +202,7 @@ class ResearchService:
 
         task = asyncio.create_task(self._execute_run(run.id), name=f"research-run-{run.id}")
         self._tasks[run.id] = task
+        self._notify_ui(run.id, "run_created")
         return run
 
     def interrupt_run(self, run_id: str) -> None:
@@ -189,6 +221,7 @@ class ResearchService:
                 )
             )
             session.commit()
+        self._notify_ui(run_id, "run_interrupted")
 
     def cancel_run(self, run_id: str) -> None:
         task = self._tasks.get(run_id)
@@ -202,6 +235,7 @@ class ResearchService:
             run.phase = "cancelled"
             run.completed_at = utcnow()
             session.commit()
+        self._notify_ui(run_id, "run_cancelled")
 
     def resolve_approval(self, approval_id: str, approved: bool) -> None:
         with self.database.session() as session:
@@ -302,6 +336,7 @@ class ResearchService:
                 )
 
             session.commit()
+        self._notify_ui(run_id, "event")
 
     def _mark_run_complete(self, run_id: str) -> None:
         with self.database.session() as session:
@@ -313,6 +348,7 @@ class ResearchService:
             run.progress = 100
             run.completed_at = utcnow()
             session.commit()
+        self._notify_ui(run_id, "run_completed")
 
     def _mark_run_failed(self, run_id: str, error_message: str) -> None:
         with self.database.session() as session:
@@ -334,3 +370,4 @@ class ResearchService:
                 )
             )
             session.commit()
+        self._notify_ui(run_id, "run_failed")

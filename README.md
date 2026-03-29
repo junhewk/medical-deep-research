@@ -42,7 +42,23 @@ uv sync --extra pdf         # Full-text PDF parsing
 uv run medical-deep-research
 ```
 
-Open http://127.0.0.1:8080
+Open http://127.0.0.1:18515
+
+### Desktop App
+
+Pre-built desktop apps are available on the [Releases](https://github.com/junhewk/medical-deep-research/releases) page for macOS and Windows.
+
+To build locally:
+
+```bash
+# macOS (.app bundle)
+./scripts/build-macos.sh          # builds dist/Medical Deep Research.app
+./scripts/build-macos.sh --dmg    # also creates a .dmg installer
+
+# Requires: Python 3.12+, uv
+```
+
+API keys can be configured in the app's **API Keys** panel (stored locally in SQLite).
 
 ### Environment Variables
 
@@ -73,7 +89,8 @@ The agent autonomously executes an 8-step research workflow:
 5. fetch_fulltext     → Unpaywall + PMC lookup for open-access PDFs
 6. parse_pdf          → Download and parse full-text PDFs to markdown
 7. verify_studies     → Validate PMIDs against PubMed
-8. synthesize_report  → Generate final evidence report
+8. synthesize_report  → Collect structured evidence data
+9. submit_report      → Agent writes and submits the final synthesis report
 ```
 
 The LLM drives the workflow — it decides what to search, reviews evidence quality, ranks studies using medical knowledge, and writes the synthesis. Tools use a **shared-state bridge** so the agent never passes large JSON blobs as arguments.

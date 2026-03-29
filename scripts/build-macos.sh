@@ -16,12 +16,6 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="Medical Deep Research"
 BUNDLE_ID="com.junhewk.medical-deep-research"
-VERSION=$(python3 -c "
-import tomllib, pathlib
-p = tomllib.loads(pathlib.Path('pyproject.toml').read_text())
-print(p['project']['version'])
-")
-echo "=== Building ${APP_NAME} v${VERSION} for macOS ==="
 
 # ---------------------------------------------------------------------------
 # 1. Sync dependencies (all extras for a full-featured build)
@@ -30,18 +24,26 @@ echo "--- Installing dependencies ---"
 uv sync --all-extras
 uv pip install pyinstaller pywebview
 
+# Use uv run for all Python commands so they use the venv
+VERSION=$(uv run python -c "
+import tomllib, pathlib
+p = tomllib.loads(pathlib.Path('pyproject.toml').read_text())
+print(p['project']['version'])
+")
+echo "=== Building ${APP_NAME} v${VERSION} for macOS ==="
+
 # ---------------------------------------------------------------------------
 # 2. Collect paths for --add-data
 # ---------------------------------------------------------------------------
-NICEGUI_DIR=$(python3 -c "import nicegui, pathlib; print(pathlib.Path(nicegui.__file__).parent)")
+NICEGUI_DIR=$(uv run python -c "import nicegui, pathlib; print(pathlib.Path(nicegui.__file__).parent)")
 SRC_DIR="src/medical_deep_research"
 SEP=":"  # macOS/Linux path separator for PyInstaller
 
 # ---------------------------------------------------------------------------
-# 3. Run PyInstaller via nicegui-pack (or directly)
+# 3. Run PyInstaller
 # ---------------------------------------------------------------------------
 echo "--- Running PyInstaller ---"
-python3 -m PyInstaller \
+uv run python -m PyInstaller \
     --name "${APP_NAME}" \
     --windowed \
     --onedir \

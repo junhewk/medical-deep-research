@@ -15,11 +15,17 @@ def main() -> None:
     database.bootstrap_defaults()
     database.import_legacy_data(settings.legacy_db_path)
     service = ResearchService(database)
+
+    port = settings.port
+    if settings.native_window:
+        from nicegui import native
+        port = native.find_open_port()
+
     ui.run(
         root=lambda: build_ui(service),
         title=settings.app_name,
         host=settings.host,
-        port=settings.port,
+        port=port,
         native=settings.native_window,
         storage_secret=settings.storage_secret,
         reload=False,

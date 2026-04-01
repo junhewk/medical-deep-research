@@ -60,6 +60,11 @@ class ApprovalStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class ReadingSessionStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
 class ResearchRun(SQLModel, table=True):
     id: str = Field(default_factory=new_id, primary_key=True)
     query: str
@@ -113,6 +118,32 @@ class ApprovalRequest(SQLModel, table=True):
     status: str = Field(default=ApprovalStatus.PENDING.value, index=True)
     created_at: datetime = Field(default_factory=utcnow, index=True)
     resolved_at: datetime | None = None
+
+
+class ReadingSession(SQLModel, table=True):
+    id: str = Field(default_factory=new_id, primary_key=True)
+    run_id: str = Field(foreign_key="researchrun.id", unique=True, index=True)
+    status: str = Field(default=ReadingSessionStatus.ACTIVE.value)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    last_accessed_at: datetime = Field(default_factory=utcnow)
+
+
+class ReadingChatMessage(SQLModel, table=True):
+    id: str = Field(default_factory=new_id, primary_key=True)
+    session_id: str = Field(foreign_key="readingsession.id", index=True)
+    scope: str = Field(index=True)  # "study:3", "cross:1,3", "session"
+    role: str  # "user" or "assistant"
+    content: str
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class ReadingHighlight(SQLModel, table=True):
+    id: str = Field(default_factory=new_id, primary_key=True)
+    session_id: str = Field(foreign_key="readingsession.id", index=True)
+    scope: str = Field(default="")  # same scope format as chat
+    text: str
+    note: str | None = None
+    created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class ApiKey(SQLModel, table=True):

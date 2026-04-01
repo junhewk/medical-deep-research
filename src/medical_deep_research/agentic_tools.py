@@ -747,9 +747,6 @@ async def tool_parse_pdf(request: RunRequest, bridge: AgenticEventBridge, rank: 
         except OSError:
             pass
 
-    if len(text) > 8000:
-        text = text[:8000] + f"\n\n[... truncated, {len(text)} chars total]"
-
     return {"rank": rank, "title": title, "source": source, "text_length": len(text), "fulltext": text}
 
 

@@ -26,8 +26,9 @@ Built with Python and NiceGUI, packaged as a native desktop app for macOS and Wi
 | **Ranking** | Agent-driven: LLM reviews abstracts and ranks by relevance and evidence quality |
 | **Full-text** | Unpaywall + PubMed Central OA lookup, PDF parsing |
 | **Evidence** | Level I–V classification, PMID verification against PubMed |
+| **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
 | **i18n** | English / Korean UI, LLM-powered report translation |
-| **Desktop** | Native window (pywebview), PyInstaller packaging, push-based UI |
+| **Desktop** | Native window (pywebview), PyInstaller packaging, push-based UI, drawer-based sidebar |
 
 ## Download
 
@@ -146,7 +147,8 @@ After ranking, the agent retrieves open-access full-text for Level I & II studie
 ```
 src/medical_deep_research/
 ├── main.py                 # NiceGUI app entry point
-├── ui.py                   # Dark-theme web UI with i18n
+├── ui.py                   # Dark-theme web UI with i18n, drawer layout, study reader
+├── reading_service.py      # Reading session management, fulltext chat, highlights
 ├── config.py               # Settings (pydantic-settings)
 ├── models.py               # SQLModel data models + RunRequest
 ├── persistence.py          # SQLite database layer

@@ -4,6 +4,7 @@ from nicegui import ui
 
 from .config import load_settings
 from .persistence import AppDatabase
+from .reading_service import ReadingService
 from .service import ResearchService
 from .ui import build_ui
 
@@ -15,6 +16,7 @@ def main() -> None:
     database.bootstrap_defaults()
     database.import_legacy_data(settings.legacy_db_path)
     service = ResearchService(database)
+    reading_service = ReadingService(database)
 
     port = settings.port
     if settings.native_window:
@@ -22,7 +24,7 @@ def main() -> None:
         port = native.find_open_port()
 
     ui.run(
-        root=lambda: build_ui(service),
+        root=lambda: build_ui(service, reading_service),
         title=settings.app_name,
         host=settings.host,
         port=port,

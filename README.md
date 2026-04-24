@@ -43,7 +43,12 @@ API keys are configured in the app's **API Keys** panel (stored locally in SQLit
 
 ### macOS Gatekeeper
 
-The macOS build is ad-hoc signed but not notarized. If macOS reports that the app is "damaged" after downloading the DMG, copy **Medical Deep Research.app** to `/Applications`, then run:
+The macOS build is ad-hoc signed but not Apple-notarized. If macOS says the DMG or app is from an unidentified developer, open it with one of these methods:
+
+1. Control-click the DMG or **Medical Deep Research.app**, choose **Open**, then choose **Open** again.
+2. Or go to **System Settings → Privacy & Security** and choose **Open Anyway** for Medical Deep Research.
+
+If macOS reports that the app is "damaged", copy **Medical Deep Research.app** to `/Applications`, then run:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"

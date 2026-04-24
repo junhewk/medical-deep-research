@@ -41,6 +41,15 @@ Pre-built desktop apps for macOS and Windows are available on the [Releases](htt
 
 API keys are configured in the app's **API Keys** panel (stored locally in SQLite).
 
+### macOS Gatekeeper
+
+The macOS build is ad-hoc signed but not notarized. If macOS reports that the app is "damaged" after downloading the DMG, copy **Medical Deep Research.app** to `/Applications`, then run:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
+open "/Applications/Medical Deep Research.app"
+```
+
 ### v2.8.3 Reliability Update
 
 - Anthropic agent runs now fall back to the deterministic search pipeline if the Claude Agent SDK fails before search, returns no tool calls, or plans without executing any database searches.

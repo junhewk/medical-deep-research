@@ -74,6 +74,12 @@ jobs:
             rm -rf "dist/Medical Deep Research.app/Contents/Resources/nicegui/elements/${elem}/src"
           done
 
+          # Ad-hoc sign the bundle so macOS does not treat nested unsigned
+          # PyInstaller binaries as a damaged app. Full notarization requires
+          # Developer ID credentials, but this fixes broken internal signatures.
+          codesign --force --deep --sign - "dist/Medical Deep Research.app"
+          codesign --verify --deep --strict --verbose=2 "dist/Medical Deep Research.app"
+
           echo "App bundle size: $(du -sh 'dist/Medical Deep Research.app' | cut -f1)"
 
       - name: Create macOS DMG
@@ -84,6 +90,8 @@ jobs:
             -srcfolder "dist/Medical Deep Research.app" \
             -ov -format UDZO \
             "dist/${DMG_NAME}"
+          codesign --force --sign - "dist/${DMG_NAME}"
+          codesign --verify --verbose=2 "dist/${DMG_NAME}"
 
       - name: Upload macOS artifact
         if: matrix.platform == 'macos'

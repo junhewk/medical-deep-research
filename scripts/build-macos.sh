@@ -50,6 +50,11 @@ for elem in plotly echart mermaid codemirror json_editor aggrid scene leaflet xt
     rm -rf "dist/${APP_NAME}.app/Contents/Resources/nicegui/elements/${elem}/dist"
     rm -rf "dist/${APP_NAME}.app/Contents/Resources/nicegui/elements/${elem}/src"
 done
+
+echo "--- Ad-hoc signing app bundle ---"
+codesign --force --deep --sign - "dist/${APP_NAME}.app"
+codesign --verify --deep --strict --verbose=2 "dist/${APP_NAME}.app"
+
 echo "--- Build complete ---"
 echo "App bundle: dist/${APP_NAME}.app"
 ls -lh "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}" 2>/dev/null || true
@@ -75,6 +80,9 @@ if [[ "${1:-}" == "--dmg" ]]; then
             -ov -format UDZO \
             "dist/${DMG_NAME}"
     fi
+    echo "--- Ad-hoc signing DMG ---"
+    codesign --force --sign - "dist/${DMG_NAME}"
+    codesign --verify --verbose=2 "dist/${DMG_NAME}"
     echo "DMG: dist/${DMG_NAME}"
 fi
 

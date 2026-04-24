@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -370,6 +371,8 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         },
         "instructions": (
             "Write a comprehensive research synthesis report in markdown. "
+            "Submit the report itself, not a completion/status message. "
+            "For non-empty evidence, target 1,200-2,000 words. "
             "The report MUST include: "
             "(1) An executive summary that directly answers the research question; "
             "(2) A methods section describing the search strategy; "
@@ -386,11 +389,139 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
     return data
 
 
+_REPORT_META_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bperfect[!.]",
+        r"\bi have successfully completed\b",
+        r"\bsuccessfully completed\b",
+        r"\bcompleted (the )?(literature review|research task)\b",
+        r"\bthe complete (markdown )?report (is )?(above|below)\b",
+        r"\bfull report (is )?(above|below)\b",
+        r"\bhere is (a|the) summary\b",
+        r"완료했습니다",
+        r"완료하였습니다",
+    )
+]
+
+_REPORT_SECTION_GROUPS: dict[str, tuple[str, ...]] = {
+    "executive_summary": (
+        "executive summary",
+        "summary",
+        "요약",
+        "핵심 요약",
+    ),
+    "methods": (
+        "methods",
+        "search strategy",
+        "방법",
+        "검색 전략",
+    ),
+    "results": (
+        "results",
+        "findings",
+        "결과",
+        "근거",
+    ),
+    "discussion": (
+        "discussion",
+        "논의",
+        "고찰",
+    ),
+    "conclusions": (
+        "conclusion",
+        "conclusions",
+        "결론",
+    ),
+    "references": (
+        "references",
+        "bibliography",
+        "참고문헌",
+        "참고 문헌",
+    ),
+}
+
+
+def _report_word_count(text: str) -> int:
+    """Approximate report length across English and common CJK report text."""
+    tokens = re.findall(
+        r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?|[\uac00-\ud7af]+|[\u3040-\u30ff]+|[\u4e00-\u9fff]",
+        text,
+    )
+    return len(tokens)
+
+
+def _has_report_section(text_lower: str, aliases: tuple[str, ...]) -> bool:
+    for alias in aliases:
+        escaped = re.escape(alias.lower())
+        if re.search(rf"(^|\n)\s*#+\s*(?:\d+[.)]?\s*)?{escaped}\b", text_lower):
+            return True
+        if re.search(rf"(^|\n)\s*(?:\d+[.)]\s*)?{escaped}\s*$", text_lower):
+            return True
+    return False
+
+
+def report_quality_issues(report_markdown: str, ranked_count: int = 0, search_count: int = 0) -> list[str]:
+    """Return quality issues that should make an agent rewrite its final report."""
+    report_markdown = str(report_markdown).strip()
+    if not report_markdown:
+        return ["Report is empty."]
+
+    issues: list[str] = []
+    text_lower = report_markdown.lower()
+    word_count = _report_word_count(report_markdown)
+    has_evidence = ranked_count > 0 or search_count > 0
+    min_words = 750 if ranked_count > 0 else 450 if search_count > 0 else 180
+
+    if word_count < min_words:
+        issues.append(f"Report is too short ({word_count} words; minimum {min_words}).")
+
+    report_head = report_markdown[:600]
+    for pattern in _REPORT_META_PATTERNS:
+        if pattern.search(report_head):
+            issues.append("Report appears to be a completion/status message rather than the report itself.")
+            break
+
+    if has_evidence:
+        missing_sections = [
+            section
+            for section, aliases in _REPORT_SECTION_GROUPS.items()
+            if not _has_report_section(text_lower, aliases)
+        ]
+        if missing_sections:
+            issues.append("Report is missing required sections: " + ", ".join(missing_sections) + ".")
+
+    if ranked_count > 0:
+        if not re.search(r"\[\d+\]", report_markdown):
+            issues.append("Report must cite searched studies with numbered citations like [1].")
+        if not _has_report_section(text_lower, _REPORT_SECTION_GROUPS["references"]):
+            issues.append("Report must include a References section.")
+
+    return issues
+
+
 async def tool_submit_report(request: RunRequest, bridge: AgenticEventBridge, report_markdown: str) -> dict[str, Any]:
     """Store the agent-written final report."""
     report_markdown = str(report_markdown).strip()
     if not report_markdown:
         return {"error": "Report is empty. Write the full report and submit again."}
+    quality_issues = report_quality_issues(
+        report_markdown,
+        ranked_count=len(bridge.ranked_studies),
+        search_count=sum(len(result.studies) for result in bridge.search_results),
+    )
+    if quality_issues:
+        bridge._intermediate["rejected_report"] = report_markdown
+        bridge._intermediate["rejected_report_issues"] = quality_issues
+        return {
+            "error": "Report quality gate failed. Rewrite and submit the full report.",
+            "issues": quality_issues,
+            "instructions": (
+                "Submit the complete markdown report itself, not a status update. "
+                "Use the required sections, synthesize the evidence, cite searched studies as [n], "
+                "and include numbered references."
+            ),
+        }
     bridge._intermediate["submitted_report"] = report_markdown
     bridge.set_result(report_markdown)
     return {"status": "ok", "length": len(report_markdown)}
@@ -804,6 +935,15 @@ Carefully review EVERY abstract. Assess relevance to the query, study design, ev
 Do NOT pass study data as arguments — tools read from shared state.
 Do NOT repeat searches. One call per database, then move forward.
 
+## Report Quality Requirements (CRITICAL)
+
+- The submitted report must be the report itself, not a completion note or summary of what you did.
+- If any studies are ranked, write a comprehensive 1,200-2,000 word report unless the evidence base is genuinely empty.
+- Use these markdown sections: Executive Summary, Background, Methods, Results/Findings, Discussion, Conclusions, References.
+- Synthesize across studies; compare findings, study designs, populations, agreement, contradictions, and evidence quality.
+- Cite only searched studies as [1], [2], etc. Do not cite unsearched sources.
+- Never write phrases like "the full report is above/below" or "I have completed the report" in `submit_report`.
+
 ## Anti-Hallucination Rules (CRITICAL)
 
 - ONLY cite sources from your search results. NEVER invent PMIDs, DOIs, or findings.
@@ -858,7 +998,8 @@ Assign evidence levels to each study:
 
 ## Report Format (Markdown) — YOU MUST WRITE THIS
 
-Your final message MUST be a complete research report with these sections:
+Your final submitted report MUST be the complete research report itself, not a status update. \
+For non-empty evidence, write 1,200-2,000 words and include these sections:
 
 ### 1. Executive Summary
 Directly answer the clinical question in 2-3 paragraphs. Highlight the key finding and \
@@ -890,7 +1031,8 @@ Clear clinical takeaways. What the evidence supports, what remains uncertain.
 ### 7. References
 Vancouver format with PMIDs/DOIs: [n] Authors. Title. Journal. Year;Vol(Issue):Pages. DOI/PMID.
 
-Write in {request.language} language."""
+Write in {request.language} language. If you write the prose in a non-English language, keep numbered \
+citations [n], PMID, DOI, journal names, and reference formatting intact."""
 
 
 def _healthcare_prompt(request: RunRequest) -> str:
@@ -925,7 +1067,8 @@ Search multiple databases for comprehensive coverage:
 
 ## Report Format (Markdown) — YOU MUST WRITE THIS
 
-Your final message MUST be a complete research report with these sections:
+Your final submitted report MUST be the complete research report itself, not a status update. \
+For non-empty evidence, write 1,200-2,000 words and include these sections:
 
 ### 1. Executive Summary
 Directly answer the research question in 2-3 paragraphs. Summarize the state of knowledge, \
@@ -955,7 +1098,8 @@ What should be done next? Where are the gaps in knowledge?
 ### 7. References
 Vancouver format with DOIs: [n] Authors. Title. Journal. Year;Vol(Issue):Pages. DOI.
 
-Write in {request.language} language."""
+Write in {request.language} language. If you write the prose in a non-English language, keep numbered \
+citations [n], DOI, journal names, and reference formatting intact."""
 
 
 # ---------------------------------------------------------------------------
@@ -965,12 +1109,12 @@ Write in {request.language} language."""
 def recover_report_from_bridge(request: RunRequest, bridge: AgenticEventBridge, runtime_name: str = "Agentic Runtime") -> str:
     """Build a report from whatever the agent produced via shared state.
 
-    Priority: submitted_report > agent's own text > fallback template.
+    Priority: accepted submitted_report > fallback template.
     """
     # Check if agent called submit_report
     submitted = bridge._intermediate.get("submitted_report")
-    if submitted and isinstance(submitted, str) and len(submitted.strip()) > 200:
-        return submitted
+    if isinstance(submitted, str) and submitted.strip():
+        return submitted.strip()
 
     # Fallback to deterministic template only as last resort
     plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)

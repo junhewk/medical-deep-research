@@ -8,7 +8,8 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from medical_deep_research.models import EventType, RunRequest
-from medical_deep_research.research.models import EvidenceStudy, SearchProviderResult, VerificationSummary
+from medical_deep_research.agentic_tools import AgenticEventBridge, tool_submit_report
+from medical_deep_research.research.models import EvidenceStudy, ScoredStudy, SearchProviderResult, VerificationSummary
 from medical_deep_research.runtime import AnthropicRuntime
 
 
@@ -135,6 +136,69 @@ def make_request() -> RunRequest:
     )
 
 
+def make_valid_report() -> str:
+    synthesis = " ".join(
+        [
+            (
+                "The randomized evidence remains limited but clinically relevant because the ESPB cohort "
+                "reported lower postoperative pain scores than PCA alone while preserving a plausible safety "
+                "profile for cardiac surgery patients [1]."
+            )
+            for _ in range(90)
+        ]
+    )
+    return f"""# Research Report
+
+## Executive Summary
+ESPB after cardiac surgery was evaluated against PCA in the searched evidence. The key finding is that
+regional analgesia may reduce pain scores when added to conventional analgesic care [1].
+
+## Background
+Postoperative pain after cardiac surgery affects mobilization, pulmonary recovery, and patient satisfaction.
+The clinical question asks whether ESPB improves analgesic outcomes compared with PCA alone.
+
+## Methods
+The agent searched PubMed and screened the retrieved study for population, intervention, comparator, and
+outcome alignment. The included evidence was ranked by relevance, evidence level, recency, and source quality.
+
+## Results
+{synthesis}
+
+## Discussion
+The evidence should be interpreted cautiously because the available ranked set is small. Still, the study design
+is relevant to the clinical question and supports further focused comparison of ESPB with PCA-based strategies [1].
+
+## Conclusions
+ESPB may be a useful analgesic adjunct after cardiac surgery, but conclusions should remain proportional to the
+limited evidence retrieved in this run.
+
+## References
+[1] Test AB. Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia.
+2024. PMID: 12345678.
+"""
+
+
+def make_ranked_study() -> ScoredStudy:
+    return ScoredStudy(
+        source="PubMed",
+        source_id="12345678",
+        title="Erector spinae plane block after cardiac surgery randomized trial",
+        abstract="A randomized trial evaluating ESPB after cardiac surgery reported reduced pain scores.",
+        journal="Journal of Clinical Anesthesia",
+        publication_year="2024",
+        pmid="12345678",
+        citation_count=12,
+        evidence_level="Level II",
+        publication_types=["Randomized Controlled Trial"],
+        sources=["PubMed"],
+        evidence_level_score=4.0,
+        citation_score=1.2,
+        recency_score=1.0,
+        composite_score=6.2,
+        reference_number=1,
+    )
+
+
 class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
     async def collect_events(self, query_impl: Callable[..., AsyncIterator[FakeResultMessage]]) -> list[object]:
         with (
@@ -192,12 +256,7 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(final.extra["ranked_results"], 0)
 
     async def test_tool_using_agentic_run_reports_tool_counts(self) -> None:
-        report = (
-            "# Research Report\n\n"
-            "This report is based on searched evidence for ESPB after cardiac surgery. "
-            "The included randomized evidence suggests lower pain scores compared with PCA alone. "
-            "References are restricted to the collected search result [1]."
-        )
+        report = make_valid_report().strip()
 
         async def successful_query(**kwargs: object) -> AsyncIterator[FakeResultMessage]:
             options = kwargs["options"]
@@ -207,7 +266,7 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
             await call_fake_tool(options, "evidence", "finalize_ranking", {"ranked_indices": [1], "rationale": "Most relevant RCT."})
             await call_fake_tool(options, "evidence", "verify_studies", {})
             await call_fake_tool(options, "evidence", "submit_report", {"report_markdown": report})
-            yield FakeResultMessage(result=report)
+            yield FakeResultMessage(result="Perfect! I have successfully completed the literature review.")
 
         events = await self.collect_events(successful_query)
         completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
@@ -219,6 +278,30 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.extra["ranked_results"], 1)
         self.assertEqual(final.extra["search_sources_executed"], ["PubMed"])
         self.assertEqual(final.extra["report_source"], "submitted_report")
+        self.assertEqual(final.report_markdown, report)
+        self.assertNotIn("Perfect!", final.report_markdown or "")
+
+    async def test_submit_report_rejects_short_status_summary(self) -> None:
+        bridge = AgenticEventBridge()
+        bridge.search_results.append(
+            SearchProviderResult(
+                source="PubMed",
+                query="cardiac surgery ESPB PCA pain",
+                studies=[make_ranked_study()],
+            )
+        )
+        bridge.ranked_studies = [make_ranked_study()]
+
+        result = await tool_submit_report(
+            make_request(),
+            bridge,
+            "Perfect! I have successfully completed the literature review. Summary: ESPB may reduce pain [1].",
+        )
+
+        self.assertIn("error", result)
+        self.assertIn("Report quality gate failed", result["error"])
+        self.assertNotIn("submitted_report", bridge._intermediate)
+        self.assertIsNone(bridge._result)
 
 
 if __name__ == "__main__":

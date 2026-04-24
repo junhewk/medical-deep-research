@@ -32,6 +32,7 @@ from .agentic_tools import (
     TOOL_DESCRIPTIONS,
     agentic_system_prompt,
     recover_report_from_bridge,
+    report_quality_issues,
     tool_fetch_fulltext,
     tool_finalize_ranking,
     tool_get_studies,
@@ -1480,6 +1481,36 @@ def _agentic_final_events(
     ]
 
 
+def _select_agentic_final_report(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    runtime_name: str,
+    agent_text: str | None,
+) -> tuple[str, str]:
+    submitted = bridge._intermediate.get("submitted_report")
+    if isinstance(submitted, str) and submitted.strip():
+        return submitted.strip(), "submitted_report"
+
+    recovered = recover_report_from_bridge(request, bridge, runtime_name)
+    candidate = (agent_text or "").strip()
+    if candidate:
+        quality_issues = report_quality_issues(
+            candidate,
+            ranked_count=len(bridge.ranked_studies),
+            search_count=sum(len(result.studies) for result in bridge.search_results),
+        )
+        if not quality_issues:
+            return candidate, "agent_result"
+        bridge._intermediate["agent_final_message"] = candidate
+        bridge._intermediate["agent_final_message_quality_issues"] = quality_issues
+
+    if bridge.search_results or bridge.ranked_studies:
+        return recovered, "recovered_agentic_state"
+    if candidate:
+        return candidate, "agent_result"
+    return recovered, "empty_recovery"
+
+
 # ---------------------------------------------------------------------------
 # OpenAI Agents SDK — agentic runtime
 # ---------------------------------------------------------------------------
@@ -1665,14 +1696,15 @@ class OpenAIRuntime(NativeSDKRuntime):
             _env_ctx.__exit__(None, None, None)
 
         agent_text = bridge._result or ""
-        recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
-        final_report = agent_text if agent_text.strip() else recovered
+        final_report, report_source = _select_agentic_final_report(
+            request, bridge, self.runtime_name, agent_text
+        )
 
         final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
         for evt in translate_events:
             yield evt
 
-        for event in _agentic_final_events(self, request, final_report, bridge):
+        for event in _agentic_final_events(self, request, final_report, bridge, report_source=report_source):
             yield event
 
     async def _run_openai_agent(
@@ -1691,7 +1723,11 @@ class OpenAIRuntime(NativeSDKRuntime):
                 ),
                 timeout=ANTHROPIC_AGENTIC_TIMEOUT_SECONDS,
             )
-            bridge.set_result(str(result.final_output) if result.final_output else None)
+            final_text = str(result.final_output) if result.final_output else None
+            if "submitted_report" in bridge._intermediate:
+                bridge._intermediate["agent_final_message"] = final_text
+            else:
+                bridge.set_result(final_text)
         except asyncio.TimeoutError:
             _log.warning("OpenAI agentic run timed out after %ss", ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
             bridge.set_error(TimeoutError(f"Agent timed out after {ANTHROPIC_AGENTIC_TIMEOUT_SECONDS}s"))
@@ -1939,14 +1975,15 @@ class AnthropicRuntime(NativeSDKRuntime):
                 yield event
             return
 
-        recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
-        final_report = agent_text if agent_text.strip() else recovered
+        final_report, report_source = _select_agentic_final_report(
+            request, bridge, self.runtime_name, agent_text
+        )
 
         final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
         for evt in translate_events:
             yield evt
 
-        for event in _agentic_final_events(self, request, final_report, bridge):
+        for event in _agentic_final_events(self, request, final_report, bridge, report_source=report_source):
             yield event
 
     def _pre_search_fallback_reason(self, bridge: AgenticEventBridge) -> str | None:
@@ -1994,7 +2031,10 @@ class AnthropicRuntime(NativeSDKRuntime):
                         final_text = message.result
 
             await asyncio.wait_for(_inner(), timeout=ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
-            bridge.set_result(final_text)
+            if "submitted_report" in bridge._intermediate:
+                bridge._intermediate["agent_final_message"] = final_text
+            else:
+                bridge.set_result(final_text)
         except asyncio.TimeoutError:
             _log.warning("Anthropic agentic run timed out after %ss", ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
             bridge.set_error(TimeoutError(f"Agent timed out after {ANTHROPIC_AGENTIC_TIMEOUT_SECONDS}s"))
@@ -2194,15 +2234,16 @@ class GoogleRuntime(NativeSDKRuntime):
             _env_ctx.__exit__(None, None, None)
 
         agent_text = bridge._result or ""
-        recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
-        final_report = agent_text if agent_text.strip() else recovered
+        final_report, report_source = _select_agentic_final_report(
+            request, bridge, self.runtime_name, agent_text
+        )
 
         # Translate if non-English
         final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
         for evt in translate_events:
             yield evt
 
-        for event in _agentic_final_events(self, request, final_report, bridge):
+        for event in _agentic_final_events(self, request, final_report, bridge, report_source=report_source):
             yield event
 
     async def _run_google_agent(
@@ -2230,7 +2271,10 @@ class GoogleRuntime(NativeSDKRuntime):
                             final_text = text
 
             await asyncio.wait_for(_inner(), timeout=ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
-            bridge.set_result(final_text)
+            if "submitted_report" in bridge._intermediate:
+                bridge._intermediate["agent_final_message"] = final_text
+            else:
+                bridge.set_result(final_text)
         except asyncio.TimeoutError:
             _log.warning("Google ADK agentic run timed out after %ss", ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
             bridge.set_error(TimeoutError(f"Agent timed out after {ANTHROPIC_AGENTIC_TIMEOUT_SECONDS}s"))
@@ -2497,14 +2541,15 @@ class LangChainLocalRuntime(NativeSDKRuntime):
             bridge.set_error(exc)
 
         agent_text = bridge._result or ""
-        recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
-        final_report = agent_text if agent_text.strip() else recovered
+        final_report, report_source = _select_agentic_final_report(
+            request, bridge, self.runtime_name, agent_text
+        )
 
         final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
         for evt in translate_events:
             yield evt
 
-        for event in _agentic_final_events(self, request, final_report, bridge):
+        for event in _agentic_final_events(self, request, final_report, bridge, report_source=report_source):
             yield event
 
     async def _run_langchain_agent(
@@ -2539,7 +2584,10 @@ class LangChainLocalRuntime(NativeSDKRuntime):
                         break
 
             await asyncio.wait_for(_inner(), timeout=LOCAL_AGENTIC_TIMEOUT_SECONDS)
-            bridge.set_result(final_text)
+            if "submitted_report" in bridge._intermediate:
+                bridge._intermediate["agent_final_message"] = final_text
+            else:
+                bridge.set_result(final_text)
         except asyncio.TimeoutError:
             _log.warning("LangChain local agent timed out after %ss", LOCAL_AGENTIC_TIMEOUT_SECONDS)
             bridge.set_error(TimeoutError(f"Agent timed out after {LOCAL_AGENTIC_TIMEOUT_SECONDS}s"))

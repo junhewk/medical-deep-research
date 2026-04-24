@@ -106,6 +106,15 @@ class ProviderDiagnostics(BaseModel):
     fallback_reason: str | None = None
 
 
+def _format_exception(exc: Exception | None) -> str | None:
+    if exc is None:
+        return None
+    message = str(exc).strip()
+    if not message:
+        return type(exc).__name__
+    return f"{type(exc).__name__}: {message}"
+
+
 class ResearchRuntime(ABC):
     provider: str
     runtime_name: str
@@ -115,7 +124,10 @@ class ResearchRuntime(ABC):
     def sdk_available(self) -> bool:
         if not self.sdk_module:
             return False
-        return importlib.util.find_spec(self.sdk_module) is not None
+        try:
+            return importlib.util.find_spec(self.sdk_module) is not None
+        except (ModuleNotFoundError, ValueError):
+            return False
 
     @abstractmethod
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:  # type: ignore[override]
@@ -616,6 +628,39 @@ class DeterministicRuntime(ResearchRuntime):
             report_markdown=final_report,
             extra=self._run_completed_extra(request, len(ranked)),
         )
+
+
+class AgenticFailureFallbackRuntime(DeterministicRuntime):
+    def __init__(self, source_runtime: ResearchRuntime, fallback_reason: str) -> None:
+        self.provider = source_runtime.provider
+        self.runtime_name = f"{source_runtime.runtime_name} deterministic fallback"
+        self.sdk_module = source_runtime.sdk_module
+        self._source_sdk_available = source_runtime.sdk_available
+        self.planner_name = getattr(source_runtime, "planner_name", self.planner_name)
+        self.search_agent_name = getattr(source_runtime, "search_agent_name", self.search_agent_name)
+        self.synthesis_agent_name = getattr(source_runtime, "synthesis_agent_name", self.synthesis_agent_name)
+        self.verifier_name = getattr(source_runtime, "verifier_name", self.verifier_name)
+        self.fallback_reason = fallback_reason
+
+    @property
+    def sdk_available(self) -> bool:
+        return self._source_sdk_available
+
+    def _execution_mode(self, request: RunRequest) -> str:
+        del request
+        return "deterministic_fallback"
+
+    def _run_start_extra(self, request: RunRequest) -> dict[str, Any]:
+        extra = super()._run_start_extra(request)
+        extra.update(
+            {
+                "fallback_reason": self.fallback_reason,
+                "agentic_fallback": True,
+                "source_execution_mode": "native_sdk_agentic",
+                "report_source": "deterministic_fallback",
+            }
+        )
+        return extra
 
 
 class NativeSDKRuntime(DeterministicRuntime):
@@ -1373,7 +1418,40 @@ def _agentic_final_events(
     request: RunRequest,
     final_report: str,
     bridge: AgenticEventBridge,
+    *,
+    report_source: str | None = None,
+    fallback_reason: str | None = None,
 ) -> list[RuntimeEventPayload]:
+    inferred_report_source = report_source
+    if inferred_report_source is None:
+        submitted = bridge._intermediate.get("submitted_report")
+        if isinstance(submitted, str) and submitted.strip() and final_report == submitted:
+            inferred_report_source = "submitted_report"
+        elif bridge._result and final_report == bridge._result:
+            inferred_report_source = "agent_result"
+        elif bridge.search_results or bridge.ranked_studies:
+            inferred_report_source = "recovered_agentic_state"
+        else:
+            inferred_report_source = "empty_recovery"
+
+    source_counts = {result.source: len(result.studies) for result in bridge.search_results}
+    error_message = _format_exception(bridge._error)
+    completion_extra = {
+        "sdk_available": runtime.sdk_available,
+        "offline_mode": request.offline_mode,
+        "execution_mode": "native_sdk_agentic",
+        "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
+        "tool_calls": bridge._tool_call_count,
+        "had_error": bridge._error is not None,
+        "error_message": error_message,
+        "search_sources_executed": list(source_counts),
+        "source_counts": source_counts,
+        "ranked_results": len(bridge.ranked_studies),
+        "report_source": inferred_report_source,
+    }
+    if fallback_reason:
+        completion_extra["fallback_reason"] = fallback_reason
+
     return [
         RuntimeEventPayload(
             event_type=EventType.REPORT_DELTA,
@@ -1397,14 +1475,7 @@ def _agentic_final_events(
             progress=100,
             message=f"{runtime.runtime_name} agentic run completed",
             report_markdown=final_report,
-            extra={
-                "sdk_available": runtime.sdk_available,
-                "offline_mode": request.offline_mode,
-                "execution_mode": "native_sdk_agentic",
-                "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
-                "tool_calls": bridge._tool_call_count,
-                "had_error": bridge._error is not None,
-            },
+            extra=completion_extra,
         ),
     ]
 
@@ -1845,6 +1916,29 @@ class AnthropicRuntime(NativeSDKRuntime):
             bridge.set_error(exc)
 
         agent_text = bridge._result or ""
+        startup_fallback_reason = self._pre_search_fallback_reason(bridge)
+        if startup_fallback_reason:
+            yield RuntimeEventPayload(
+                event_type=EventType.AGENT_STARTED,
+                phase="searching",
+                progress=12,
+                message=f"{startup_fallback_reason} Running deterministic fallback.",
+                agent_name=self.native_agent_name,
+                extra={
+                    "fallback_reason": startup_fallback_reason,
+                    "tool_calls": bridge._tool_call_count,
+                    "had_error": bridge._error is not None,
+                    "error_message": _format_exception(bridge._error),
+                    "execution_mode": "deterministic_fallback",
+                    "source_execution_mode": "native_sdk_agentic",
+                    "report_source": "deterministic_fallback",
+                },
+            )
+            fallback_runtime = AgenticFailureFallbackRuntime(self, startup_fallback_reason)
+            async for event in fallback_runtime.stream_run(request):
+                yield event
+            return
+
         recovered = recover_report_from_bridge(request, bridge, self.runtime_name)
         final_report = agent_text if agent_text.strip() else recovered
 
@@ -1854,6 +1948,21 @@ class AnthropicRuntime(NativeSDKRuntime):
 
         for event in _agentic_final_events(self, request, final_report, bridge):
             yield event
+
+    def _pre_search_fallback_reason(self, bridge: AgenticEventBridge) -> str | None:
+        submitted = bridge._intermediate.get("submitted_report")
+        if isinstance(submitted, str) and submitted.strip():
+            return None
+        if bridge.search_results:
+            return None
+        if bridge._error is not None:
+            return (
+                f"{self.runtime_name} failed before completing any search tools "
+                f"({_format_exception(bridge._error)})."
+            )
+        if bridge._tool_call_count > 0:
+            return f"{self.runtime_name} completed without executing any search tools."
+        return f"{self.runtime_name} completed without calling any research tools."
 
     async def _run_agent_task(
         self,

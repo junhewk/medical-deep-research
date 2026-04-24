@@ -41,6 +41,13 @@ Pre-built desktop apps for macOS and Windows are available on the [Releases](htt
 
 API keys are configured in the app's **API Keys** panel (stored locally in SQLite).
 
+### v2.8.3 Reliability Update
+
+- Anthropic agent runs now fall back to the deterministic search pipeline if the Claude Agent SDK fails before search, returns no tool calls, or plans without executing any database searches.
+- Run diagnostics now show tool calls, search sources, report source, fallback reason, and SDK error details so empty reports are easier to troubleshoot.
+- Desktop builds now explicitly bundle Claude Agent SDK assets for the Windows and macOS packages.
+- `scripts/eval_anthropic_route.py` provides an opt-in live route check using `ANTHROPIC_API_KEY`.
+
 ## Quick Start (from source)
 
 ```bash
@@ -122,7 +129,7 @@ The system prompt adapts to the query domain:
 | Google | `google-adk` | gemini-2.5-flash | Yes |
 | Local | `langchain` + `langgraph` | qwen3.5-27b | Yes |
 
-All providers fall back to a deterministic pipeline if SDK/credentials are unavailable.
+All providers fall back to a deterministic pipeline if SDK/credentials are unavailable. Anthropic also falls back if the SDK route starts but never reaches a search tool.
 
 ### Search Databases
 
@@ -167,7 +174,8 @@ src/medical_deep_research/
 
 scripts/
 ├── desktop_entry.py        # PyInstaller entry point (pywebview + NiceGUI)
-└── build-macos.sh          # macOS build script
+├── build-macos.sh          # macOS build script
+└── eval_anthropic_route.py # Opt-in Anthropic route smoke eval
 ```
 
 ## Evidence Level Classification
@@ -186,6 +194,10 @@ scripts/
 uv sync --all-extras
 uv run ruff check src/
 uv run mypy src/ --ignore-missing-imports
+uv run python -m unittest discover -s tests -v
+
+# Optional live Anthropic route eval; requires ANTHROPIC_API_KEY
+uv run python scripts/eval_anthropic_route.py
 ```
 
 ## License

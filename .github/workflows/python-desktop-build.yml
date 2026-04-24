@@ -108,6 +108,7 @@ jobs:
             --icon assets/icon.ico \
             --add-data "src/medical_deep_research:medical_deep_research" \
             --collect-all nicegui \
+            --collect-all claude_agent_sdk \
             --collect-submodules medical_deep_research \
             --hidden-import medical_deep_research \
             --hidden-import medical_deep_research.main \
@@ -119,6 +120,8 @@ jobs:
             --hidden-import medical_deep_research.runtime \
             --hidden-import medical_deep_research.agentic_tools \
             --hidden-import medical_deep_research.tools \
+            --hidden-import claude_agent_sdk \
+            --hidden-import claude_agent_sdk.types \
             --hidden-import pydantic_settings \
             --hidden-import sqlmodel \
             --hidden-import nicegui \

@@ -1953,6 +1953,23 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                         ui.label(f"Ranked results: {run_diag['ranked_results']}").style(
                                             "font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem"
                                         )
+                                    if run_diag.get("tool_calls") is not None:
+                                        ui.label(f"Tool calls: {run_diag['tool_calls']}").style(
+                                            "font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem"
+                                        )
+                                    if run_diag.get("report_source"):
+                                        ui.label(f"Report source: {run_diag['report_source']}").style(
+                                            "font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem"
+                                        )
+                                    if run_diag.get("search_sources_executed"):
+                                        sources = ", ".join(run_diag["search_sources_executed"])
+                                        ui.label(f"Search sources: {sources}").style(
+                                            "font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem"
+                                        )
+                                    if run_diag.get("error_message"):
+                                        ui.label(run_diag["error_message"]).style(
+                                            "font-size: 0.75rem; color: var(--error); margin-top: 0.25rem"
+                                        )
                                     if run_diag.get("fallback_reason"):
                                         ui.label(run_diag["fallback_reason"]).style(
                                             "font-size: 0.75rem; color: var(--warn); margin-top: 0.25rem"

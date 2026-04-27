@@ -46,7 +46,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --extra desktop --extra openai --extra pdf --extra langchain --extra google
+          uv sync --extra desktop --extra openai --extra anthropic --extra pdf --extra langchain --extra google
           uv pip install pyinstaller pywebview
 
       - name: Read version
@@ -72,7 +72,7 @@ jobs:
           for elem in plotly echart mermaid codemirror json_editor aggrid scene leaflet xterm joystick anywidget; do
             for base in \
               "dist/Medical Deep Research.app/Contents/Resources" \
-              "dist/Medical Deep Research.app/Contents/Resources/_internal"; do
+              "dist/Medical Deep Research.app/Contents/Resources/runtime"; do
               rm -rf "${base}/nicegui/elements/${elem}/dist"
               rm -rf "${base}/nicegui/elements/${elem}/src"
             done
@@ -117,9 +117,11 @@ jobs:
             --name "Medical Deep Research" \
             --windowed \
             --onedir \
+            --contents-directory runtime \
             --icon assets/icon.ico \
             --add-data "src/medical_deep_research:medical_deep_research" \
             --collect-all nicegui \
+            --collect-all claude_agent_sdk \
             --collect-submodules medical_deep_research \
             --hidden-import medical_deep_research \
             --hidden-import medical_deep_research.main \
@@ -131,19 +133,20 @@ jobs:
             --hidden-import medical_deep_research.runtime \
             --hidden-import medical_deep_research.agentic_tools \
             --hidden-import medical_deep_research.tools \
+            --hidden-import claude_agent_sdk \
+            --hidden-import claude_agent_sdk.types \
             --hidden-import pydantic_settings \
             --hidden-import sqlmodel \
             --hidden-import nicegui \
             --hidden-import httpx \
             --hidden-import anyio \
-            --exclude-module claude_agent_sdk \
             scripts/desktop_entry.py
 
           # Strip unused NiceGUI element JS bundles
           for elem in plotly echart mermaid codemirror json_editor aggrid scene leaflet xterm joystick anywidget; do
             for base in \
               "dist/Medical Deep Research" \
-              "dist/Medical Deep Research/_internal"; do
+              "dist/Medical Deep Research/runtime"; do
               rm -rf "${base}/nicegui/elements/${elem}/dist"
               rm -rf "${base}/nicegui/elements/${elem}/src"
             done

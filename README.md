@@ -57,14 +57,13 @@ open "/Applications/Medical Deep Research.app"
 
 ### v2.8.6 Desktop Packaging and Export Update
 
-This release reduces packaged desktop app size and adds direct report export/copy controls.
+This release improves the desktop package layout and adds direct report export/copy controls.
 
-- **Smaller Windows/macOS bundles:** Desktop builds no longer install or collect `claude-agent-sdk` for PyInstaller, and explicitly exclude `claude_agent_sdk` from the frozen app. This removes the bundled `claude.exe` payload from release artifacts.
-- **Correct cleanup path:** The CI cleanup step now strips unused NiceGUI element bundles from both the app root and PyInstaller's `_internal` directory, which is where Windows onedir builds place most bundled dependencies.
+- **Anthropic desktop support restored:** Packaged desktop builds include `claude-agent-sdk` so the Anthropic route can run instead of immediately falling back to the deterministic pipeline.
+- **Clearer package layout:** PyInstaller support files are placed in a `runtime` folder instead of the default `_internal` folder. Keep this folder next to the executable; it contains required app dependencies, SDK files, and native libraries.
+- **Correct cleanup path:** The CI cleanup step strips unused NiceGUI element bundles from both the app root and the PyInstaller `runtime` directory.
 - **Report export:** The Report tab now includes Copy, Markdown download, and plain text download actions so users can reuse report text and references without manually retyping paper titles.
 - **Selectable reports:** Rendered reports are explicitly selectable in the desktop UI for drag/copy workflows.
-
-Source installs can still opt into the Anthropic SDK with `uv sync --extra anthropic`; packaged desktop builds intentionally do not bundle the Claude SDK or CLI binary.
 
 ### v2.8.5 Reliability Update
 

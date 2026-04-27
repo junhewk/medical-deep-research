@@ -690,6 +690,9 @@ _I18N: dict[str, dict[str, str]] = {
         "download_markdown": "Markdown",
         "download_text": "Text",
         "report_copied": "Report copied to clipboard",
+        "report_download_started": "Report download started",
+        "report_download_failed": "Could not save report",
+        "report_saved": "Report saved",
         "report_empty": "Report is not available yet.",
         "run_diagnostics": "Run Diagnostics",
         "no_diagnostics": "No diagnostics available.",
@@ -760,6 +763,9 @@ _I18N: dict[str, dict[str, str]] = {
         "download_markdown": "Markdown",
         "download_text": "텍스트",
         "report_copied": "보고서가 클립보드에 복사되었습니다",
+        "report_download_started": "보고서 다운로드를 시작했습니다",
+        "report_download_failed": "보고서를 저장할 수 없습니다",
+        "report_saved": "보고서가 저장되었습니다",
         "report_empty": "아직 보고서가 없습니다.",
         "run_diagnostics": "실행 진단",
         "no_diagnostics": "진단 정보가 없습니다.",
@@ -823,6 +829,36 @@ def _plain_report_text(markdown: str) -> str:
     text = re.sub(r"^\s*[-*+]\s+", "- ", text, flags=re.MULTILINE)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+async def _save_report_file(content: str, filename: str, media_type: str, t: Any) -> None:
+    js = f"""
+        (async () => {{
+            const filename = {json.dumps(filename)};
+            const content = {json.dumps(content)};
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.save_text_file) {{
+                return await window.pywebview.api.save_text_file(filename, content);
+            }}
+            const blob = new Blob([content], {{ type: {json.dumps(media_type + ";charset=utf-8")} }});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            return {{ ok: true }};
+        }})()
+    """
+    result = await ui.run_javascript(js, timeout=10.0)
+    if isinstance(result, dict) and result.get("ok") is False:
+        ui.notify(f'{t("report_download_failed")}: {result.get("error", "")}', type="negative")
+    elif isinstance(result, dict) and result.get("path"):
+        ui.notify(f'{t("report_saved")}: {result["path"]}', type="positive")
+    else:
+        ui.notify(t("report_download_started"), type="positive")
 
 
 def _bool_badge(label: str, value: Any) -> None:
@@ -1963,24 +1999,26 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                 report_text = run.result_markdown or ""
                                 report_filename = f"medical-deep-research-{run.id[:8]}"
 
-                                def _download_report_markdown() -> None:
+                                async def _download_report_markdown() -> None:
                                     if not report_text.strip():
                                         ui.notify(t("report_empty"), type="warning")
                                         return
-                                    ui.download(
-                                        report_text.encode("utf-8"),
-                                        filename=f"{report_filename}.md",
-                                        media_type="text/markdown",
+                                    await _save_report_file(
+                                        report_text,
+                                        f"{report_filename}.md",
+                                        "text/markdown",
+                                        t,
                                     )
 
-                                def _download_report_text() -> None:
+                                async def _download_report_text() -> None:
                                     if not report_text.strip():
                                         ui.notify(t("report_empty"), type="warning")
                                         return
-                                    ui.download(
-                                        _plain_report_text(report_text).encode("utf-8"),
-                                        filename=f"{report_filename}.txt",
-                                        media_type="text/plain",
+                                    await _save_report_file(
+                                        _plain_report_text(report_text),
+                                        f"{report_filename}.txt",
+                                        "text/plain",
+                                        t,
                                     )
 
                                 async def _copy_report() -> None:

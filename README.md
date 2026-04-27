@@ -62,7 +62,7 @@ This release improves the desktop package layout and adds direct report export/c
 - **Anthropic desktop support restored:** Packaged desktop builds include `claude-agent-sdk` so the Anthropic route can run instead of immediately falling back to the deterministic pipeline.
 - **Clearer package layout:** PyInstaller support files are placed in a `runtime` folder instead of the default `_internal` folder. Keep this folder next to the executable; it contains required app dependencies, SDK files, and native libraries.
 - **Correct cleanup path:** The CI cleanup step strips unused NiceGUI element bundles from both the app root and the PyInstaller `runtime` directory.
-- **Report export:** The Report tab now includes Copy, Markdown download, and plain text download actions so users can reuse report text and references without manually retyping paper titles.
+- **Report export:** The Report tab now includes Copy, Markdown, and plain text actions so users can reuse report text and references without manually retyping paper titles. Desktop exports save to the user's Downloads folder.
 - **Selectable reports:** Rendered reports are explicitly selectable in the desktop UI for drag/copy workflows.
 
 ### v2.8.5 Reliability Update

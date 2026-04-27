@@ -8,8 +8,10 @@ lifecycle conflicts with AppKit.
 """
 import multiprocessing
 import os
+import re
 import sys
 import threading
+from pathlib import Path
 
 multiprocessing.freeze_support()
 
@@ -31,6 +33,37 @@ if getattr(sys, "frozen", False):
 
 # Do NOT enable native_window — we manage the window ourselves
 os.environ.setdefault("MDR_NATIVE_WINDOW", "false")
+
+
+def _safe_download_target(filename: str) -> Path:
+    """Return a writable, non-overwriting path in the user's Downloads folder."""
+    downloads_dir = Path.home() / "Downloads"
+    if not downloads_dir.exists():
+        downloads_dir = Path.home()
+
+    safe_name = Path(filename).name.strip() or "medical-deep-research-report.txt"
+    safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", safe_name)
+    stem = Path(safe_name).stem or "medical-deep-research-report"
+    suffix = Path(safe_name).suffix or ".txt"
+
+    target = downloads_dir / f"{stem}{suffix}"
+    counter = 1
+    while target.exists():
+        target = downloads_dir / f"{stem} ({counter}){suffix}"
+        counter += 1
+    return target
+
+
+class DesktopApi:
+    """Small pywebview API for desktop-only file saves."""
+
+    def save_text_file(self, filename: str, content: str) -> dict[str, str | bool]:
+        try:
+            target = _safe_download_target(filename)
+            target.write_text(content, encoding="utf-8")
+            return {"ok": True, "path": str(target)}
+        except Exception as exc:  # pragma: no cover - reported to UI
+            return {"ok": False, "error": str(exc)}
 
 
 def _run_server(port: int) -> None:
@@ -110,6 +143,7 @@ def main() -> None:
         url,
         width=1280,
         height=860,
+        js_api=DesktopApi(),
     )
     webview.start()
 

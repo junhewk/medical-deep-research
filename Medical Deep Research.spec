@@ -12,8 +12,6 @@ hiddenimports = ['medical_deep_research', 'medical_deep_research.main', 'medical
 hiddenimports += collect_submodules('medical_deep_research')
 tmp_ret = collect_all('nicegui')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('claude_agent_sdk')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # Strip heavy NiceGUI element JS/CSS bundles that this app never uses (~57 MB)
 _exclude_elements = [
@@ -34,7 +32,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['claude_agent_sdk'],
     noarchive=False,
     optimize=0,
 )

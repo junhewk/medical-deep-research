@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from nicegui import ui
@@ -294,6 +295,11 @@ body {
     color: var(--accent);
 }
 .mdr-report ul { padding-left: 1.2rem; }
+.mdr-report, .mdr-report * {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    cursor: text;
+}
 
 /* Code blocks */
 .mdr-card pre, .mdr-card code {
@@ -680,6 +686,11 @@ _I18N: dict[str, dict[str, str]] = {
         "no_artifacts": "No artifacts yet.",
         "report_title": "Report",
         "report_not_started": "_Report not started yet._",
+        "copy_report": "Copy",
+        "download_markdown": "Markdown",
+        "download_text": "Text",
+        "report_copied": "Report copied to clipboard",
+        "report_empty": "Report is not available yet.",
         "run_diagnostics": "Run Diagnostics",
         "no_diagnostics": "No diagnostics available.",
         "population": "Population",
@@ -745,6 +756,11 @@ _I18N: dict[str, dict[str, str]] = {
         "no_artifacts": "산출물이 없습니다.",
         "report_title": "보고서",
         "report_not_started": "_보고서가 아직 시작되지 않았습니다._",
+        "copy_report": "복사",
+        "download_markdown": "Markdown",
+        "download_text": "텍스트",
+        "report_copied": "보고서가 클립보드에 복사되었습니다",
+        "report_empty": "아직 보고서가 없습니다.",
         "run_diagnostics": "실행 진단",
         "no_diagnostics": "진단 정보가 없습니다.",
         "population": "대상 집단 (Population)",
@@ -793,6 +809,20 @@ _RECALC_PANEL_JS = "window._mdrRecalcPanelHeight && window._mdrRecalcPanelHeight
 
 def _t(lang: str, key: str) -> str:
     return _I18N.get(lang, _I18N["en"]).get(key, _I18N["en"].get(key, key))
+
+
+def _plain_report_text(markdown: str) -> str:
+    text = re.sub(r"```[^\n`]*\n([\s\S]*?)```", r"\1", markdown)
+    text = re.sub(r"```([\s\S]*?)```", r"\1", text)
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"(\*\*|__)(.*?)\1", r"\2", text)
+    text = re.sub(r"(\*|_)(.*?)\1", r"\2", text)
+    text = re.sub(r"^\s*[-*+]\s+", "- ", text, flags=re.MULTILINE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _bool_badge(label: str, value: Any) -> None:
@@ -1930,10 +1960,61 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
 
                         with ui.tab_panel(report_tab).style(_TAB_PANEL_STYLE):
                             with ui.card().classes("mdr-card w-full p-5"):
-                                ui.html('<div class="mdr-section-title" style="margin-bottom:1rem">Report</div>')
+                                report_text = run.result_markdown or ""
+                                report_filename = f"medical-deep-research-{run.id[:8]}"
+
+                                def _download_report_markdown() -> None:
+                                    if not report_text.strip():
+                                        ui.notify(t("report_empty"), type="warning")
+                                        return
+                                    ui.download(
+                                        report_text.encode("utf-8"),
+                                        filename=f"{report_filename}.md",
+                                        media_type="text/markdown",
+                                    )
+
+                                def _download_report_text() -> None:
+                                    if not report_text.strip():
+                                        ui.notify(t("report_empty"), type="warning")
+                                        return
+                                    ui.download(
+                                        _plain_report_text(report_text).encode("utf-8"),
+                                        filename=f"{report_filename}.txt",
+                                        media_type="text/plain",
+                                    )
+
+                                async def _copy_report() -> None:
+                                    if not report_text.strip():
+                                        ui.notify(t("report_empty"), type="warning")
+                                        return
+                                    await ui.run_javascript(
+                                        f"navigator.clipboard.writeText({json.dumps(report_text)})"
+                                    )
+                                    ui.notify(t("report_copied"), type="positive")
+
+                                with ui.row().classes("w-full items-center justify-between gap-2 flex-wrap"):
+                                    ui.html(f'<div class="mdr-section-title">{t("report_title")}</div>')
+                                    with ui.row().classes("items-center gap-1"):
+                                        ui.button(t("copy_report"), icon="content_copy", on_click=_copy_report).props(
+                                            "outline size=xs dense no-caps"
+                                        ).style("color: var(--text-secondary); border-color: var(--border-dim)")
+                                        ui.button(
+                                            t("download_markdown"),
+                                            icon="download",
+                                            on_click=_download_report_markdown,
+                                        ).props("outline size=xs dense no-caps").style(
+                                            "color: var(--accent); border-color: var(--accent)"
+                                        )
+                                        ui.button(
+                                            t("download_text"),
+                                            icon="article",
+                                            on_click=_download_report_text,
+                                        ).props("outline size=xs dense no-caps").style(
+                                            "color: var(--accent); border-color: var(--accent)"
+                                        )
                                 ui.markdown(
-                                    run.result_markdown or t("report_not_started")
-                                ).classes("mdr-report w-full")
+                                    report_text or t("report_not_started")
+                                ).classes("mdr-report w-full mt-4")
 
                         with ui.tab_panel(diag_tab).style(_TAB_PANEL_STYLE):
                             with ui.card().classes("mdr-card w-full p-4"):

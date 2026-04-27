@@ -1961,7 +1961,7 @@ wheels = [
 
 [[package]]
 name = "medical-deep-research"
-version = "2.8.5"
+version = "2.8.6"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

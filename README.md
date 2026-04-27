@@ -57,10 +57,13 @@ open "/Applications/Medical Deep Research.app"
 
 ### v2.8.5 Reliability Update
 
-- Scopus API keys can now be cleared from the UI; stale or rejected keys no longer remain active after saving a blank field.
-- Scopus keyed-request failures fall back to the same optional skip path as the no-key route, with concise diagnostics and no full Elsevier URL leakage.
-- Deterministic fallback searches now parse structured PICO/PCC fields and remove framework labels such as `Population` and `Intervention` from source queries.
-- Anthropic Agent SDK diagnostics now capture stderr tails for Windows pre-search failures before running deterministic fallback.
+This release addresses a Windows reliability report where the app completed a deterministic fallback report but showed noisy Scopus and Anthropic Agent SDK diagnostics.
+
+- **Scopus API key fallback:** If a configured Scopus / Elsevier API key is stale, rejected, rate-limited, or the keyed request fails, Scopus now falls back to the same optional skip path used when no Scopus key is configured. The report can continue with PubMed, Cochrane, OpenAlex, and Semantic Scholar results instead of surfacing a long Scopus exception.
+- **Scopus key management:** Clearing the Scopus field in the API Keys panel now removes the stored key. Previously, saving a blank field left the old key active in the local SQLite database.
+- **Cleaner source diagnostics:** Scopus errors are summarized without full Elsevier request URLs, while run diagnostics still indicate whether Scopus was configured and why it was skipped.
+- **Structured PICO/PCC fallback queries:** Deterministic fallback now parses structured fields and removes labels such as `Population`, `Intervention`, `Comparison`, and `Outcome` from source queries, improving fallback search relevance.
+- **Anthropic Agent SDK troubleshooting:** When the Anthropic Agent SDK fails before any search tool runs, diagnostics now capture the SDK stderr tail before deterministic fallback starts, which makes Windows startup/package issues easier to diagnose.
 
 ## Quick Start (from source)
 

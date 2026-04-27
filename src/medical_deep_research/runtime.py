@@ -116,6 +116,40 @@ def _format_exception(exc: Exception | None) -> str | None:
     return f"{type(exc).__name__}: {message}"
 
 
+def _trim_diagnostic_text(text: str | None, *, max_chars: int = 2000) -> str | None:
+    if not text:
+        return None
+    stripped = str(text).strip()
+    if not stripped:
+        return None
+    if len(stripped) <= max_chars:
+        return stripped
+    return stripped[-max_chars:]
+
+
+def _exception_diagnostics(exc: Exception | None) -> dict[str, Any]:
+    if exc is None:
+        return {}
+    diagnostics: dict[str, Any] = {
+        "sdk_error_type": type(exc).__name__,
+    }
+    exit_code = getattr(exc, "exit_code", None)
+    if exit_code is not None:
+        diagnostics["sdk_exit_code"] = exit_code
+    stderr = _trim_diagnostic_text(getattr(exc, "stderr", None))
+    if stderr:
+        diagnostics["sdk_stderr"] = stderr
+    return diagnostics
+
+
+def _agentic_failure_diagnostics(bridge: AgenticEventBridge) -> dict[str, Any]:
+    diagnostics = _exception_diagnostics(bridge._error)
+    stderr_tail = _trim_diagnostic_text(bridge._intermediate.get("sdk_stderr_tail"))
+    if stderr_tail:
+        diagnostics["sdk_stderr_tail"] = stderr_tail
+    return diagnostics
+
+
 class ResearchRuntime(ABC):
     provider: str
     runtime_name: str
@@ -162,13 +196,15 @@ def _provider_api_env(provider: str, api_keys: dict[str, str]) -> dict[str, str]
 
 def _search_api_env(api_keys: dict[str, str]) -> dict[str, str]:
     env: dict[str, str] = {}
-    ncbi = api_keys.get("ncbi") or os.getenv("MDR_NCBI_API_KEY")
-    scopus = api_keys.get("scopus") or os.getenv("MDR_SCOPUS_API_KEY")
+    ncbi = (api_keys.get("ncbi") or os.getenv("MDR_NCBI_API_KEY") or "").strip()
+    scopus = (api_keys.get("scopus") or os.getenv("MDR_SCOPUS_API_KEY") or "").strip()
     semantic_scholar = (
         api_keys.get("semantic_scholar")
         or api_keys.get("semanticscholar")
         or os.getenv("MDR_SEMANTIC_SCHOLAR_API_KEY")
+        or ""
     )
+    semantic_scholar = semantic_scholar.strip()
     if ncbi:
         env["MDR_NCBI_API_KEY"] = ncbi
     if scopus:
@@ -176,6 +212,15 @@ def _search_api_env(api_keys: dict[str, str]) -> dict[str, str]:
     if semantic_scholar:
         env["MDR_SEMANTIC_SCHOLAR_API_KEY"] = semantic_scholar
     return env
+
+
+def _search_credentials_present(api_keys: dict[str, str]) -> dict[str, bool]:
+    search_credentials = _search_api_env(api_keys)
+    return {
+        "ncbi": "MDR_NCBI_API_KEY" in search_credentials,
+        "scopus": "MDR_SCOPUS_API_KEY" in search_credentials,
+        "semantic_scholar": "MDR_SEMANTIC_SCHOLAR_API_KEY" in search_credentials,
+    }
 
 
 def _has_native_credentials(provider: str, api_keys: dict[str, str]) -> bool:
@@ -201,7 +246,6 @@ def describe_provider_runtime(
 ) -> ProviderDiagnostics:
     runtime = build_runtime(provider)
     provider_credentials_present = _has_native_credentials(provider, api_keys)
-    search_credentials = _search_api_env(api_keys)
     request = RunRequest(
         run_id="diagnostics",
         query="diagnostics",
@@ -220,11 +264,7 @@ def describe_provider_runtime(
         sdk_available=runtime.sdk_available,
         offline_mode=offline_mode,
         provider_credentials_present=provider_credentials_present,
-        search_credentials_present={
-            "ncbi": "MDR_NCBI_API_KEY" in search_credentials,
-            "scopus": "MDR_SCOPUS_API_KEY" in search_credentials,
-            "semantic_scholar": "MDR_SEMANTIC_SCHOLAR_API_KEY" in search_credentials,
-        },
+        search_credentials_present=_search_credentials_present(api_keys),
         active_execution_path="deterministic_fallback" if fallback_reason else "native_sdk",
         fallback_reason=fallback_reason,
     )
@@ -404,6 +444,7 @@ class DeterministicRuntime(ResearchRuntime):
             "offline_mode": request.offline_mode,
             "execution_mode": self._execution_mode(request),
             "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
+            "search_credentials_present": _search_credentials_present(request.api_keys),
         }
 
     def _run_completed_extra(self, request: RunRequest, ranked_results: int) -> dict[str, Any]:
@@ -412,7 +453,7 @@ class DeterministicRuntime(ResearchRuntime):
         return extra
 
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
-        plan = build_query_plan(request.query, request.query_type, request.provider)
+        plan = build_query_plan(request.query, request.query_type, request.provider, request.query_payload)
         yield RuntimeEventPayload(
             event_type=EventType.RUN_STARTED,
             phase="planning",
@@ -632,7 +673,12 @@ class DeterministicRuntime(ResearchRuntime):
 
 
 class AgenticFailureFallbackRuntime(DeterministicRuntime):
-    def __init__(self, source_runtime: ResearchRuntime, fallback_reason: str) -> None:
+    def __init__(
+        self,
+        source_runtime: ResearchRuntime,
+        fallback_reason: str,
+        failure_diagnostics: dict[str, Any] | None = None,
+    ) -> None:
         self.provider = source_runtime.provider
         self.runtime_name = f"{source_runtime.runtime_name} deterministic fallback"
         self.sdk_module = source_runtime.sdk_module
@@ -642,6 +688,7 @@ class AgenticFailureFallbackRuntime(DeterministicRuntime):
         self.synthesis_agent_name = getattr(source_runtime, "synthesis_agent_name", self.synthesis_agent_name)
         self.verifier_name = getattr(source_runtime, "verifier_name", self.verifier_name)
         self.fallback_reason = fallback_reason
+        self.failure_diagnostics = failure_diagnostics or {}
 
     @property
     def sdk_available(self) -> bool:
@@ -659,6 +706,7 @@ class AgenticFailureFallbackRuntime(DeterministicRuntime):
                 "agentic_fallback": True,
                 "source_execution_mode": "native_sdk_agentic",
                 "report_source": "deterministic_fallback",
+                **self.failure_diagnostics,
             }
         )
         return extra
@@ -693,6 +741,7 @@ class NativeSDKRuntime(DeterministicRuntime):
                     "offline_mode": request.offline_mode,
                     "execution_mode": "native_sdk",
                     "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
+                    "search_credentials_present": _search_credentials_present(request.api_keys),
                 },
             ),
             RuntimeEventPayload(
@@ -1105,7 +1154,7 @@ class NativeSDKRuntime(DeterministicRuntime):
         for event in self._native_start_events(request):
             yield event
 
-        base_plan = build_query_plan(request.query, request.query_type, request.provider)
+        base_plan = build_query_plan(request.query, request.query_type, request.provider, request.query_payload)
         yield RuntimeEventPayload(
             event_type=EventType.TOOL_CALLED,
             phase="planning",
@@ -1358,6 +1407,7 @@ def _agentic_run_started(runtime: ResearchRuntime, request: RunRequest) -> Runti
             "offline_mode": request.offline_mode,
             "execution_mode": "native_sdk_agentic",
             "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
+            "search_credentials_present": _search_credentials_present(request.api_keys),
         },
     )
 
@@ -1442,6 +1492,7 @@ def _agentic_final_events(
         "offline_mode": request.offline_mode,
         "execution_mode": "native_sdk_agentic",
         "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
+        "search_credentials_present": _search_credentials_present(request.api_keys),
         "tool_calls": bridge._tool_call_count,
         "had_error": bridge._error is not None,
         "error_message": error_message,
@@ -1452,6 +1503,7 @@ def _agentic_final_events(
     }
     if fallback_reason:
         completion_extra["fallback_reason"] = fallback_reason
+    completion_extra.update(_agentic_failure_diagnostics(bridge))
 
     return [
         RuntimeEventPayload(
@@ -1909,6 +1961,15 @@ class AnthropicRuntime(NativeSDKRuntime):
         yield _agentic_run_started(self, request)
         yield _agentic_agent_started(self.native_agent_name)
 
+        sdk_stderr_lines: list[str] = []
+
+        def capture_sdk_stderr(line: str) -> None:
+            cleaned = str(line).strip()
+            if not cleaned:
+                return
+            sdk_stderr_lines.append(cleaned)
+            del sdk_stderr_lines[:-20]
+
         options = ClaudeAgentOptions(
             tools=[],
             model=request.model,
@@ -1933,6 +1994,7 @@ class AnthropicRuntime(NativeSDKRuntime):
             permission_mode="dontAsk",
             cwd=str(REPO_ROOT),
             env=_provider_api_env(self.provider, request.api_keys),
+            stderr=capture_sdk_stderr,
         )
 
         agent_task = asyncio.create_task(
@@ -1950,10 +2012,13 @@ class AnthropicRuntime(NativeSDKRuntime):
         except Exception as exc:
             _log.warning("Anthropic agentic task error: %s", exc)
             bridge.set_error(exc)
+        if sdk_stderr_lines:
+            bridge._intermediate["sdk_stderr_tail"] = "\n".join(sdk_stderr_lines[-20:])
 
         agent_text = bridge._result or ""
         startup_fallback_reason = self._pre_search_fallback_reason(bridge)
         if startup_fallback_reason:
+            failure_diagnostics = _agentic_failure_diagnostics(bridge)
             yield RuntimeEventPayload(
                 event_type=EventType.AGENT_STARTED,
                 phase="searching",
@@ -1968,9 +2033,10 @@ class AnthropicRuntime(NativeSDKRuntime):
                     "execution_mode": "deterministic_fallback",
                     "source_execution_mode": "native_sdk_agentic",
                     "report_source": "deterministic_fallback",
+                    **failure_diagnostics,
                 },
             )
-            fallback_runtime = AgenticFailureFallbackRuntime(self, startup_fallback_reason)
+            fallback_runtime = AgenticFailureFallbackRuntime(self, startup_fallback_reason, failure_diagnostics)
             async for event in fallback_runtime.stream_run(request):
                 yield event
             return
@@ -1993,9 +2059,14 @@ class AnthropicRuntime(NativeSDKRuntime):
         if bridge.search_results:
             return None
         if bridge._error is not None:
+            stderr_tail = _trim_diagnostic_text(bridge._intermediate.get("sdk_stderr_tail"), max_chars=300)
+            stderr_hint = ""
+            if stderr_tail:
+                last_line = stderr_tail.splitlines()[-1]
+                stderr_hint = f" Last stderr: {last_line}"
             return (
                 f"{self.runtime_name} failed before completing any search tools "
-                f"({_format_exception(bridge._error)})."
+                f"({_format_exception(bridge._error)}).{stderr_hint}"
             )
         if bridge._tool_call_count > 0:
             return f"{self.runtime_name} completed without executing any search tools."

@@ -36,6 +36,13 @@ class FakeResultMessage:
         self.errors = errors or []
 
 
+class FakeProcessError(RuntimeError):
+    def __init__(self, message: str, *, exit_code: int, stderr: str) -> None:
+        self.exit_code = exit_code
+        self.stderr = stderr
+        super().__init__(message)
+
+
 def fake_tool(name: str, _description: str, _schema: dict[str, object]) -> Callable[[Callable[..., object]], Callable[..., object]]:
     def decorator(func: Callable[..., object]) -> Callable[..., object]:
         setattr(func, "_sdk_tool_name", name)
@@ -240,6 +247,28 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.extra["execution_mode"], "deterministic_fallback")
         self.assertIn("RuntimeError: missing claude binary", final.extra["fallback_reason"])
         self.assertGreater(final.extra["ranked_results"], 0)
+
+    async def test_sdk_error_before_tools_captures_stderr_tail(self) -> None:
+        async def error_query(**kwargs: object) -> AsyncIterator[FakeResultMessage]:
+            options = kwargs["options"]
+            options.stderr("node: not found")
+            if False:
+                yield FakeResultMessage()
+            raise FakeProcessError(
+                "Command failed with exit code 1",
+                exit_code=1,
+                stderr="Check stderr output for details",
+            )
+
+        events = await self.collect_events(error_query)
+        completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
+
+        final = completed[-1]
+        self.assertEqual(final.extra["execution_mode"], "deterministic_fallback")
+        self.assertEqual(final.extra["sdk_error_type"], "FakeProcessError")
+        self.assertEqual(final.extra["sdk_exit_code"], 1)
+        self.assertIn("node: not found", final.extra["sdk_stderr_tail"])
+        self.assertIn("Last stderr: node: not found", final.extra["fallback_reason"])
 
     async def test_planning_only_run_falls_back_before_empty_report(self) -> None:
         async def planning_only_query(**kwargs: object) -> AsyncIterator[FakeResultMessage]:

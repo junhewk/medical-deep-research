@@ -1664,6 +1664,8 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                     _bool_badge("SDK", entry["sdk_available"])
                                     _bool_badge("Key", entry["provider_credentials_present"])
                                     _bool_badge("Online", not entry["offline_mode"])
+                                    search_keys = entry.get("search_credentials_present") or {}
+                                    _bool_badge("Scopus", search_keys.get("scopus"))
                                 if entry.get("fallback_reason"):
                                     ui.label(entry["fallback_reason"]).style(
                                         "font-size:0.7rem; color: var(--warn); margin-top:0.25rem"
@@ -1694,8 +1696,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                     def save_keys() -> None:
                         for svc, field in key_fields.items():
                             val = field.value.strip()
-                            if val:
-                                service.save_api_key(svc, val)
+                            service.save_api_key(svc, val)
                         ui.notify(t("keys_saved"), type="positive")
                         provider_diagnostics.refresh()
                         model_selector.refresh()
@@ -1946,6 +1947,8 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                         _bool_badge("SDK", run_diag.get("sdk_available"))
                                         _bool_badge("Key", run_diag.get("provider_credentials_present"))
                                         _bool_badge("Online", not run_diag.get("offline_mode", False))
+                                        search_keys = run_diag.get("search_credentials_present") or {}
+                                        _bool_badge("Scopus", search_keys.get("scopus"))
                                     ui.label(
                                         f"{run_diag.get('runtime_name', '')} · {run_diag.get('model', '')}"
                                     ).style("font-size: 0.75rem; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace; margin-top: 0.5rem")
@@ -1969,6 +1972,10 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                     if run_diag.get("error_message"):
                                         ui.label(run_diag["error_message"]).style(
                                             "font-size: 0.75rem; color: var(--error); margin-top: 0.25rem"
+                                        )
+                                    if run_diag.get("sdk_stderr_tail"):
+                                        ui.label(f"SDK stderr: {run_diag['sdk_stderr_tail']}").style(
+                                            "font-size: 0.75rem; color: var(--warn); margin-top: 0.25rem"
                                         )
                                     if run_diag.get("fallback_reason"):
                                         ui.label(run_diag["fallback_reason"]).style(

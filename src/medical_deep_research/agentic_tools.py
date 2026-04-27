@@ -218,7 +218,8 @@ class AgenticEventBridge:
 # ---------------------------------------------------------------------------
 
 async def tool_plan_search(request: RunRequest, bridge: AgenticEventBridge, query: str, query_type: str) -> dict[str, Any]:
-    plan = build_query_plan(query, query_type or request.query_type, request.provider)
+    payload = request.query_payload if query == request.query else None
+    plan = build_query_plan(query, query_type or request.query_type, request.provider, payload)
     bridge.plan = plan
     return plan.model_dump()
 
@@ -321,7 +322,7 @@ async def tool_verify_studies(request: RunRequest, bridge: AgenticEventBridge) -
 
 
 async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge) -> dict[str, Any]:
-    plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)
+    plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider, request.query_payload)
     verification = bridge.verification or empty_verification_summary("Verification was not run.")
 
     # Return structured data so the LLM writes a real synthesis — NOT a pre-formatted template
@@ -893,7 +894,7 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
     )
     # Choose domain-specific prompt based on query plan
     from .research import build_query_plan
-    plan = build_query_plan(request.query, request.query_type, request.provider)
+    plan = build_query_plan(request.query, request.query_type, request.provider, request.query_payload)
     is_clinical = plan.domain == "clinical"
 
     if is_clinical:
@@ -1117,7 +1118,7 @@ def recover_report_from_bridge(request: RunRequest, bridge: AgenticEventBridge, 
         return submitted.strip()
 
     # Fallback to deterministic template only as last resort
-    plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider)
+    plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider, request.query_payload)
     verification = bridge.verification or empty_verification_summary(
         "Verification was incomplete due to agent timeout or error."
     )

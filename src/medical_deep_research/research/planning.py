@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from .models import QueryPlan
 
@@ -51,10 +52,79 @@ STOP_WORDS = {
     "this",
     "with",
 }
+FRAMEWORK_LABELS = {
+    "population",
+    "intervention",
+    "comparison",
+    "outcome",
+    "concept",
+    "context",
+}
+_STRUCTURED_FIELD_ORDER = (
+    "population",
+    "intervention",
+    "comparison",
+    "outcome",
+    "concept",
+    "context",
+)
+_STRUCTURED_FIELD_RE = re.compile(
+    r"\b(population|intervention|comparison|outcome|concept|context)\s*:\s*"
+    r"(.*?)(?=\s*;\s*(?:population|intervention|comparison|outcome|concept|context)\s*:|$)",
+    re.I | re.S,
+)
 
 
 def normalize_query(query: str) -> str:
     return " ".join(query.strip().split())
+
+
+def _clean_structured_value(value: Any) -> str:
+    text = normalize_query(str(value or ""))
+    return "" if text.lower() in {"none", "null", "n/a"} else text
+
+
+def _structured_fields_from_payload(query_payload: dict[str, Any] | None) -> dict[str, str]:
+    if not query_payload:
+        return {}
+    normalized: dict[str, str] = {}
+    aliases = {
+        "p": "population",
+        "i": "intervention",
+        "c": "comparison",
+        "o": "outcome",
+        "pico_p": "population",
+        "pico_i": "intervention",
+        "pico_c": "comparison",
+        "pico_o": "outcome",
+        "pcc_p": "population",
+        "pcc_concept": "concept",
+        "pcc_context": "context",
+    }
+    for key, value in query_payload.items():
+        target = aliases.get(str(key).lower(), str(key).lower())
+        if target not in FRAMEWORK_LABELS:
+            continue
+        cleaned = _clean_structured_value(value)
+        if cleaned:
+            normalized[target] = cleaned
+    return normalized
+
+
+def parse_structured_query(query: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for match in _STRUCTURED_FIELD_RE.finditer(query):
+        key = match.group(1).lower()
+        value = _clean_structured_value(match.group(2))
+        if value:
+            fields[key] = value
+    return fields
+
+
+def structured_query_text(query: str, query_payload: dict[str, Any] | None = None) -> str:
+    fields = _structured_fields_from_payload(query_payload) or parse_structured_query(query)
+    values = [fields[key] for key in _STRUCTURED_FIELD_ORDER if fields.get(key)]
+    return normalize_query(" ".join(values)) if values else normalize_query(query)
 
 
 def extract_keywords(query: str, limit: int = 8) -> list[str]:
@@ -62,7 +132,7 @@ def extract_keywords(query: str, limit: int = 8) -> list[str]:
     keywords: list[str] = []
     for token in re.split(r"\s+", normalize_query(query).replace(",", " ")):
         lowered = token.strip().lower().strip("()[]{}.:;!?")
-        if len(lowered) < 4 or lowered in STOP_WORDS or lowered in seen:
+        if len(lowered) < 4 or lowered in STOP_WORDS or lowered in FRAMEWORK_LABELS or lowered in seen:
             continue
         seen.add(lowered)
         keywords.append(lowered)
@@ -121,7 +191,7 @@ def quote_term(term: str) -> str:
 def build_pubmed_query(query: str, keywords: list[str]) -> str:
     # Use the most specific keywords (skip generic ones) for title/abstract search
     specificity_keywords = [kw for kw in keywords if kw not in {"what", "current", "evidence", "using", "role", "best", "recent", "effect", "impact"}]
-    terms = specificity_keywords[:6] or keywords[:6]
+    terms = specificity_keywords[:10] or keywords[:10]
     tagged_terms = [f"{quote_term(term)}[tiab]" for term in terms]
     if tagged_terms:
         return " AND ".join(tagged_terms)
@@ -145,11 +215,18 @@ def convert_to_scopus_query(pubmed_query: str) -> str:
     return f"TITLE-ABS-KEY({' AND '.join(unique_terms)})"
 
 
-def build_query_plan(query: str, query_type: str, provider: str) -> QueryPlan:
-    normalized_query = normalize_query(query)
+def build_query_plan(
+    query: str,
+    query_type: str,
+    provider: str,
+    query_payload: dict[str, Any] | None = None,
+) -> QueryPlan:
+    structured_fields = _structured_fields_from_payload(query_payload) or parse_structured_query(query)
+    normalized_query = structured_query_text(query, structured_fields)
     keywords = extract_keywords(normalized_query, limit=10)
-    domain = classify_domain(normalized_query)
-    databases = suggest_databases(normalized_query, provider)
+    classification_query = normalize_query(f"{query} {normalized_query}")
+    domain = classify_domain(classification_query)
+    databases = suggest_databases(classification_query, provider)
     pubmed_query = build_pubmed_query(normalized_query, keywords)
 
     source_queries = {
@@ -166,6 +243,8 @@ def build_query_plan(query: str, query_type: str, provider: str) -> QueryPlan:
         f"Domain classified as `{domain}`.",
         "PubMed query uses title/abstract terms only in the deterministic pipeline.",
     ]
+    if structured_fields:
+        notes.append("Structured query fields were used to remove PICO/PCC labels from source searches.")
     if "Scopus" in databases and not scopus_query:
         notes.append("Scopus was requested but no valid Scopus query could be derived.")
 
@@ -181,4 +260,3 @@ def build_query_plan(query: str, query_type: str, provider: str) -> QueryPlan:
         source_queries=source_queries,
         notes=notes,
     )
-

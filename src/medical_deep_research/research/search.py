@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import re
 import xml.etree.ElementTree as ET
 
@@ -81,11 +82,35 @@ def _offline_result(source: str, query: str) -> SearchProviderResult:
 
 
 def _network_error(source: str, query: str, exc: Exception) -> SearchProviderResult:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        message = f"{source} returned HTTP {status_code}; run continued without {source} results"
+    else:
+        message = str(exc).split(" for url ", 1)[0].strip()
+        message = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
     return SearchProviderResult(
         source=source,
         query=query,
-        error=f"{type(exc).__name__}: {exc}",
+        error=message,
     )
+
+
+def _scopus_date_range() -> str:
+    return f"2015-{datetime.now().year}"
+
+
+def _scopus_error_message(status_code: int) -> str:
+    if status_code in {401, 403}:
+        return "Scopus API key was rejected by Elsevier; skipped Scopus as if no API key was configured"
+    if status_code == 429:
+        return "Scopus quota or rate limit was reached; skipped Scopus as if no API key was configured"
+    if 500 <= status_code <= 599:
+        return f"Scopus returned HTTP {status_code} from Elsevier Search API; skipped Scopus as if no API key was configured"
+    return f"Scopus returned HTTP {status_code} from Elsevier Search API; skipped Scopus as if no API key was configured"
+
+
+def _scopus_keyed_skip(query: str, error: str) -> SearchProviderResult:
+    return SearchProviderResult(source="Scopus", query=query, skipped=True, error=error)
 
 
 def _get_text(element: ET.Element | None) -> str:
@@ -366,21 +391,26 @@ async def search_scopus(
 ) -> SearchProviderResult:
     if offline_mode:
         return _offline_result("Scopus", query)
+    api_key = (api_key or "").strip()
     if not api_key:
-        return SearchProviderResult(source="Scopus", query=query, skipped=True, error="Scopus API key not configured")
+        return _scopus_keyed_skip(query, "Scopus API key not configured")
 
     headers = {"Accept": "application/json", "X-ELS-APIKey": api_key}
     params = {
         "query": query,
         "count": str(max_results),
         "sort": "relevancy",
-        "date": "2015-2026",
+        "date": _scopus_date_range(),
         "view": "COMPLETE",
     }
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers=headers) as client:
             response = await client.get(SCOPUS_BASE_URL, params=params)
-            response.raise_for_status()
+            if 500 <= response.status_code <= 599:
+                fallback_params = {**params, "view": "STANDARD"}
+                response = await client.get(SCOPUS_BASE_URL, params=fallback_params)
+            if response.status_code >= 400:
+                return _scopus_keyed_skip(query, _scopus_error_message(response.status_code))
         entries = response.json().get("search-results", {}).get("entry", []) or []
         studies: list[EvidenceStudy] = []
         for entry in entries:
@@ -408,8 +438,15 @@ async def search_scopus(
                 )
             )
         return SearchProviderResult(source="Scopus", query=query, studies=studies)
+    except httpx.HTTPStatusError as exc:
+        return _scopus_keyed_skip(query, _scopus_error_message(exc.response.status_code))
     except Exception as exc:
-        return _network_error("Scopus", query, exc)
+        fallback_error = str(exc).split(" for url ", 1)[0].strip()
+        fallback_error = fallback_error or type(exc).__name__
+        return _scopus_keyed_skip(
+            query,
+            f"Scopus API request failed ({type(exc).__name__}: {fallback_error}); skipped Scopus as if no API key was configured",
+        )
 
 
 async def search_source(
@@ -447,4 +484,3 @@ def flatten_studies(results: list[SearchProviderResult]) -> list[EvidenceStudy]:
     for result in results:
         studies.extend(result.studies)
     return studies
-

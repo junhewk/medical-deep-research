@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "medical-deep-research"
-version = "2.8.4"
+version = "2.8.5"
 description = "Python-first rewrite of the Medical Deep Research desktop application"
 readme = "README.md"
 requires-python = ">=3.12"

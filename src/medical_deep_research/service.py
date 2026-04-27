@@ -109,12 +109,16 @@ class ResearchService:
     def get_api_keys(self) -> dict[str, str]:
         with self.database.session() as session:
             statement = select(ApiKey)
-            return {record.service: record.api_key for record in session.exec(statement)}
+            return {record.service: record.api_key for record in session.exec(statement) if record.api_key.strip()}
 
     def save_api_key(self, service: str, api_key: str) -> None:
+        api_key = api_key.strip()
         with self.database.session() as session:
             existing = session.exec(select(ApiKey).where(ApiKey.service == service)).first()
-            if existing:
+            if not api_key:
+                if existing:
+                    session.delete(existing)
+            elif existing:
                 existing.api_key = api_key
             else:
                 session.add(ApiKey(service=service, api_key=api_key))
@@ -175,11 +179,16 @@ class ResearchService:
             "sdk_available": payload.get("sdk_available"),
             "offline_mode": payload.get("offline_mode"),
             "provider_credentials_present": payload.get("provider_credentials_present"),
+            "search_credentials_present": payload.get("search_credentials_present"),
             "fallback_reason": payload.get("fallback_reason"),
             "ranked_results": payload.get("ranked_results"),
             "tool_calls": payload.get("tool_calls"),
             "had_error": payload.get("had_error"),
             "error_message": payload.get("error_message"),
+            "sdk_error_type": payload.get("sdk_error_type"),
+            "sdk_exit_code": payload.get("sdk_exit_code"),
+            "sdk_stderr": payload.get("sdk_stderr"),
+            "sdk_stderr_tail": payload.get("sdk_stderr_tail"),
             "search_sources_executed": payload.get("search_sources_executed"),
             "source_counts": payload.get("source_counts"),
             "report_source": payload.get("report_source"),
@@ -266,6 +275,15 @@ class ResearchService:
         if run is None:
             return
 
+        query_payload: dict[str, str] = {}
+        if run.query_payload_json:
+            try:
+                parsed_payload = json.loads(run.query_payload_json)
+            except json.JSONDecodeError:
+                parsed_payload = {}
+            if isinstance(parsed_payload, dict):
+                query_payload = {str(k): str(v) for k, v in parsed_payload.items() if str(v).strip()}
+
         runtime = build_runtime(run.provider)
         request = RunRequest(
             run_id=run.id,
@@ -275,6 +293,7 @@ class ResearchService:
             provider=run.provider,
             model=run.model,
             language=run.language,
+            query_payload=query_payload,
             api_keys=self.get_api_keys(),
             offline_mode=self.database.settings.offline_mode,
         )

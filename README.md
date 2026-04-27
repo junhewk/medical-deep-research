@@ -55,12 +55,12 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.8.3 Reliability Update
+### v2.8.5 Reliability Update
 
-- Anthropic agent runs now fall back to the deterministic search pipeline if the Claude Agent SDK fails before search, returns no tool calls, or plans without executing any database searches.
-- Run diagnostics now show tool calls, search sources, report source, fallback reason, and SDK error details so empty reports are easier to troubleshoot.
-- Desktop builds now explicitly bundle Claude Agent SDK assets for the Windows and macOS packages.
-- `scripts/eval_anthropic_route.py` provides an opt-in live route check using `ANTHROPIC_API_KEY`.
+- Scopus API keys can now be cleared from the UI; stale or rejected keys no longer remain active after saving a blank field.
+- Scopus keyed-request failures fall back to the same optional skip path as the no-key route, with concise diagnostics and no full Elsevier URL leakage.
+- Deterministic fallback searches now parse structured PICO/PCC fields and remove framework labels such as `Population` and `Intervention` from source queries.
+- Anthropic Agent SDK diagnostics now capture stderr tails for Windows pre-search failures before running deterministic fallback.
 
 ## Quick Start (from source)
 

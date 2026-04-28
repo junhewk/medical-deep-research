@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import html
 from typing import Any
 
 from nicegui import ui
@@ -870,6 +871,12 @@ def _bool_badge(label: str, value: Any) -> None:
         ui.html(f'<span class="mdr-badge mdr-badge-neutral">{label}: ?</span>')
 
 
+def _text_badge(label: str, value: Any) -> None:
+    if value:
+        safe = html.escape(str(value).replace("_", " "))
+        ui.html(f'<span class="mdr-badge mdr-badge-neutral">{label}: {safe}</span>')
+
+
 def _evidence_badge_class(level: str | None) -> str:
     if not level:
         return "mdr-evidence-NA"
@@ -1727,6 +1734,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                     "font-size:0.72rem; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace"
                                 )
                                 with ui.row().classes("flex-wrap gap-1 mt-1"):
+                                    _text_badge("Engine", entry.get("runtime_engine"))
                                     _bool_badge("SDK", entry["sdk_available"])
                                     _bool_badge("Key", entry["provider_credentials_present"])
                                     _bool_badge("Online", not entry["offline_mode"])
@@ -2063,6 +2071,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                     with ui.row().classes("flex-wrap gap-1 mt-2"):
                                         exec_mode = run_diag.get("execution_mode")
                                         ui.html(f'<span class="mdr-badge {_exec_badge_class(exec_mode)}">{_exec_label(exec_mode)}</span>')
+                                        _text_badge("Engine", run_diag.get("runtime_engine"))
                                         _bool_badge("SDK", run_diag.get("sdk_available"))
                                         _bool_badge("Key", run_diag.get("provider_credentials_present"))
                                         _bool_badge("Online", not run_diag.get("offline_mode", False))
@@ -2082,6 +2091,14 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                     if run_diag.get("report_source"):
                                         ui.label(f"Report source: {run_diag['report_source']}").style(
                                             "font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem"
+                                        )
+                                    if run_diag.get("translation_status"):
+                                        ui.label(f"Translation: {run_diag['translation_status']}").style(
+                                            "font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem"
+                                        )
+                                    if run_diag.get("translation_error"):
+                                        ui.label(f"Translation error: {run_diag['translation_error']}").style(
+                                            "font-size: 0.75rem; color: var(--warn); margin-top: 0.25rem"
                                         )
                                     if run_diag.get("search_sources_executed"):
                                         sources = ", ".join(run_diag["search_sources_executed"])

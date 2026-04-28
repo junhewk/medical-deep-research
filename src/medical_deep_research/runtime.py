@@ -5,6 +5,7 @@ import importlib.util
 import json
 import logging
 import os
+import shutil
 import sys
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -66,6 +67,17 @@ TModel = TypeVar("TModel", bound=BaseModel)
 _log = logging.getLogger(__name__)
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 class AgentResearchOutput(BaseModel):
     plan: QueryPlan
     search_results: list[SearchProviderResult] = Field(default_factory=list)
@@ -98,6 +110,7 @@ class FinalSynthesisOutput(BaseModel):
 class ProviderDiagnostics(BaseModel):
     provider: str
     runtime_name: str
+    runtime_engine: str | None = None
     default_model: str | None = None
     sdk_available: bool
     offline_mode: bool
@@ -154,6 +167,7 @@ class ResearchRuntime(ABC):
     provider: str
     runtime_name: str
     sdk_module: str | None = None
+    runtime_engine: str | None = None
 
     @property
     def sdk_available(self) -> bool:
@@ -227,11 +241,35 @@ def _has_native_credentials(provider: str, api_keys: dict[str, str]) -> bool:
     return bool(_provider_api_env(provider, api_keys))
 
 
+def _legacy_claude_sdk_dependency_reason() -> str | None:
+    if os.name == "nt":
+        configured = os.getenv("CLAUDE_CODE_GIT_BASH_PATH")
+        candidates = [
+            configured,
+            shutil.which("bash"),
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+        ]
+        if any(candidate and Path(candidate).exists() for candidate in candidates):
+            return None
+        return (
+            "Legacy Claude SDK mode requires Git Bash on Windows. Install Git for Windows "
+            "or set CLAUDE_CODE_GIT_BASH_PATH to bash.exe."
+        )
+    if shutil.which("git"):
+        return None
+    return "Legacy Claude SDK mode requires Git on PATH."
+
+
 def provider_fallback_reason(runtime: ResearchRuntime, request: RunRequest) -> str | None:
     if request.offline_mode:
         return "Offline mode is enabled."
     if not runtime.sdk_available:
         return f"{runtime.runtime_name} is not installed."
+    if runtime.runtime_engine == "claude_sdk_legacy":
+        dependency_reason = _legacy_claude_sdk_dependency_reason()
+        if dependency_reason:
+            return dependency_reason
     if not _has_native_credentials(runtime.provider, request.api_keys):
         return f"{runtime.provider} API key is not configured."
     return None
@@ -260,6 +298,7 @@ def describe_provider_runtime(
     return ProviderDiagnostics(
         provider=provider,
         runtime_name=runtime.runtime_name,
+        runtime_engine=runtime.runtime_engine,
         default_model=default_model,
         sdk_available=runtime.sdk_available,
         offline_mode=offline_mode,
@@ -428,6 +467,42 @@ def _google_text_from_event(event: Any) -> str:
     return "\n".join(part for part in text_parts if part).strip()
 
 
+def _message_content_text(message: Any) -> str:
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+            else:
+                text = getattr(item, "text", None) or getattr(item, "content", None)
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(part for part in parts if part.strip()).strip()
+    return ""
+
+
+def _langchain_final_text(result: Any) -> str | None:
+    messages = result.get("messages") if isinstance(result, dict) else getattr(result, "messages", None)
+    if messages:
+        for message in reversed(list(messages)):
+            text = _message_content_text(message)
+            if text:
+                return text
+    final_output = result.get("final_output") if isinstance(result, dict) else getattr(result, "final_output", None)
+    if isinstance(final_output, str) and final_output.strip():
+        return final_output.strip()
+    if isinstance(result, str) and result.strip():
+        return result.strip()
+    return None
+
+
 class DeterministicRuntime(ResearchRuntime):
     planner_name: str = "Planner"
     search_agent_name: str = "Search Agent"
@@ -443,6 +518,7 @@ class DeterministicRuntime(ResearchRuntime):
             "sdk_available": self.sdk_available,
             "offline_mode": request.offline_mode,
             "execution_mode": self._execution_mode(request),
+            "runtime_engine": self.runtime_engine,
             "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
             "search_credentials_present": _search_credentials_present(request.api_keys),
         }
@@ -646,6 +722,10 @@ class DeterministicRuntime(ResearchRuntime):
             provider=request.provider,
             runtime_name=self.runtime_name,
         )
+        translation_bridge = AgenticEventBridge()
+        final_report, translate_events = await _maybe_translate_report(request, translation_bridge, final_report)
+        for evt in translate_events:
+            yield evt
         yield RuntimeEventPayload(
             event_type=EventType.REPORT_DELTA,
             phase="synthesizing",
@@ -668,7 +748,10 @@ class DeterministicRuntime(ResearchRuntime):
             progress=100,
             message=f"{self.runtime_name} run completed",
             report_markdown=final_report,
-            extra=self._run_completed_extra(request, len(ranked)),
+            extra={
+                **self._run_completed_extra(request, len(ranked)),
+                **_translation_diagnostics(translation_bridge),
+            },
         )
 
 
@@ -682,6 +765,7 @@ class AgenticFailureFallbackRuntime(DeterministicRuntime):
         self.provider = source_runtime.provider
         self.runtime_name = f"{source_runtime.runtime_name} deterministic fallback"
         self.sdk_module = source_runtime.sdk_module
+        self.runtime_engine = source_runtime.runtime_engine
         self._source_sdk_available = source_runtime.sdk_available
         self.planner_name = getattr(source_runtime, "planner_name", self.planner_name)
         self.search_agent_name = getattr(source_runtime, "search_agent_name", self.search_agent_name)
@@ -740,6 +824,7 @@ class NativeSDKRuntime(DeterministicRuntime):
                     "sdk_available": self.sdk_available,
                     "offline_mode": request.offline_mode,
                     "execution_mode": "native_sdk",
+                    "runtime_engine": self.runtime_engine,
                     "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
                     "search_credentials_present": _search_credentials_present(request.api_keys),
                 },
@@ -1406,6 +1491,7 @@ def _agentic_run_started(runtime: ResearchRuntime, request: RunRequest) -> Runti
             "sdk_available": runtime.sdk_available,
             "offline_mode": request.offline_mode,
             "execution_mode": "native_sdk_agentic",
+            "runtime_engine": runtime.runtime_engine,
             "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
             "search_credentials_present": _search_credentials_present(request.api_keys),
         },
@@ -1429,6 +1515,14 @@ async def _maybe_translate_report(
 ) -> tuple[str, list[RuntimeEventPayload]]:
     """Translate the report if language is not English. Returns (report, events)."""
     if request.language in ("en", "english", "") or not report.strip():
+        return report, []
+    if request.offline_mode:
+        bridge._intermediate["translation_status"] = "skipped"
+        bridge._intermediate["translation_error"] = "Offline mode is enabled."
+        return report, []
+    if request.provider != "local" and not _has_native_credentials(request.provider, request.api_keys):
+        bridge._intermediate["translation_status"] = "skipped"
+        bridge._intermediate["translation_error"] = f"{request.provider} API key is not configured."
         return report, []
 
     _log.info("Translating report to %s", request.language)
@@ -1456,12 +1550,28 @@ async def _maybe_translate_report(
         if result.get("status") == "ok" and result.get("length", 0) > 200:
             translated = bridge._intermediate.get("submitted_report", "") or bridge._result or ""
             if translated.strip():
+                bridge._intermediate["translation_status"] = "ok"
                 _log.info("Translation completed: %d chars", len(translated))
                 return translated, events
+        bridge._intermediate["translation_status"] = "failed"
+        bridge._intermediate["translation_error"] = str(result.get("error") or result)
         _log.warning("Translation returned error or empty: %s", result)
     except Exception as exc:
+        bridge._intermediate["translation_status"] = "failed"
+        bridge._intermediate["translation_error"] = _format_exception(exc)
         _log.warning("Translation failed: %s", exc, exc_info=True)
     return report, events
+
+
+def _translation_diagnostics(bridge: AgenticEventBridge) -> dict[str, Any]:
+    status = bridge._intermediate.get("translation_status")
+    if not status:
+        return {}
+    diagnostics: dict[str, Any] = {"translation_status": status}
+    error = bridge._intermediate.get("translation_error")
+    if error:
+        diagnostics["translation_error"] = str(error)
+    return diagnostics
 
 
 def _agentic_final_events(
@@ -1491,6 +1601,7 @@ def _agentic_final_events(
         "sdk_available": runtime.sdk_available,
         "offline_mode": request.offline_mode,
         "execution_mode": "native_sdk_agentic",
+        "runtime_engine": runtime.runtime_engine,
         "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
         "search_credentials_present": _search_credentials_present(request.api_keys),
         "tool_calls": bridge._tool_call_count,
@@ -1504,6 +1615,7 @@ def _agentic_final_events(
     if fallback_reason:
         completion_extra["fallback_reason"] = fallback_reason
     completion_extra.update(_agentic_failure_diagnostics(bridge))
+    completion_extra.update(_translation_diagnostics(bridge))
 
     return [
         RuntimeEventPayload(
@@ -1698,6 +1810,7 @@ class OpenAIRuntime(NativeSDKRuntime):
     provider = "openai"
     runtime_name = "OpenAI Agents SDK"
     sdk_module = "agents"
+    runtime_engine = "openai_agents"
     planner_name = "OpenAI Planner"
     search_agent_name = "OpenAI Search Agent"
     synthesis_agent_name = "OpenAI Synthesis Agent"
@@ -1814,7 +1927,7 @@ class OpenAIRuntime(NativeSDKRuntime):
 
 
 # ---------------------------------------------------------------------------
-# Anthropic Agent SDK — agentic runtime (using shared tools)
+# Legacy Anthropic Agent SDK runtime (requires Claude Code/Git Bash on some platforms)
 # ---------------------------------------------------------------------------
 
 def _build_anthropic_mcp_servers(
@@ -1929,10 +2042,11 @@ def _build_anthropic_mcp_servers(
     }
 
 
-class AnthropicRuntime(NativeSDKRuntime):
+class ClaudeSDKAnthropicRuntime(NativeSDKRuntime):
     provider = "anthropic"
     runtime_name = "Anthropic Agent SDK"
     sdk_module = "claude_agent_sdk"
+    runtime_engine = "claude_sdk_legacy"
     planner_name = "Claude Planner"
     search_agent_name = "Claude Search Agent"
     synthesis_agent_name = "Claude Synthesis Agent"
@@ -2235,6 +2349,7 @@ class GoogleRuntime(NativeSDKRuntime):
     provider = "google"
     runtime_name = "Google ADK"
     sdk_module = "google.adk"
+    runtime_engine = "google_adk"
     planner_name = "ADK Planner"
     search_agent_name = "ADK Search Workflow"
     synthesis_agent_name = "ADK Synthesis Workflow"
@@ -2529,10 +2644,192 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
     ]
 
 
+# ---------------------------------------------------------------------------
+# Anthropic via constrained LangChain agent
+# ---------------------------------------------------------------------------
+
+class AnthropicRuntime(NativeSDKRuntime):
+    provider = "anthropic"
+    runtime_name = "Anthropic LangChain Agent"
+    sdk_module = "langchain_anthropic"
+    runtime_engine = "langchain_anthropic"
+    planner_name = "Claude Planner"
+    search_agent_name = "Claude Search Agent"
+    synthesis_agent_name = "Claude Synthesis Agent"
+    verifier_name = "Claude Verification Agent"
+    native_agent_name = "Claude Research Agent"
+    agentic_timeout_seconds = _env_float("MDR_ANTHROPIC_AGENTIC_TIMEOUT_SECONDS", 600.0)
+
+    @property
+    def sdk_available(self) -> bool:
+        required = ("langchain", "langchain_anthropic", "langchain_core")
+        return all(importlib.util.find_spec(module) is not None for module in required)
+
+    async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
+        if self._should_fallback(request):
+            async for event in DeterministicRuntime.stream_run(self, request):
+                yield event
+            return
+
+        bridge = AgenticEventBridge()
+        tools = _build_langchain_tools(request, bridge)
+
+        yield _agentic_run_started(self, request)
+        yield _agentic_agent_started(self.native_agent_name)
+
+        env_updates = _provider_api_env(self.provider, request.api_keys)
+        _env_ctx = _temporary_env(env_updates)
+        _env_ctx.__enter__()
+        agent_task = asyncio.create_task(
+            self._run_langchain_agent(request, bridge, tools)
+        )
+
+        while True:
+            queued: RuntimeEventPayload | None = await bridge.queue.get()
+            if queued is None:
+                break
+            yield queued
+
+        try:
+            await agent_task
+        except Exception as exc:
+            _log.warning("Anthropic LangChain agent task error: %s", exc)
+            bridge.set_error(exc)
+        finally:
+            _env_ctx.__exit__(None, None, None)
+
+        fallback_reason = self._agentic_fallback_reason(bridge)
+        if fallback_reason:
+            failure_diagnostics = _agentic_failure_diagnostics(bridge)
+            yield RuntimeEventPayload(
+                event_type=EventType.AGENT_STARTED,
+                phase="searching",
+                progress=12,
+                message=f"{fallback_reason} Running deterministic fallback.",
+                agent_name=self.native_agent_name,
+                extra={
+                    "fallback_reason": fallback_reason,
+                    "tool_calls": bridge._tool_call_count,
+                    "had_error": bridge._error is not None,
+                    "error_message": _format_exception(bridge._error),
+                    "execution_mode": "deterministic_fallback",
+                    "runtime_engine": self.runtime_engine,
+                    "source_execution_mode": "native_sdk_agentic",
+                    "report_source": "deterministic_fallback",
+                    **failure_diagnostics,
+                },
+            )
+            fallback_runtime = AgenticFailureFallbackRuntime(self, fallback_reason, failure_diagnostics)
+            async for event in fallback_runtime.stream_run(request):
+                yield event
+            return
+
+        agent_text = bridge._result or ""
+        final_report, report_source = _select_agentic_final_report(
+            request, bridge, self.runtime_name, agent_text
+        )
+
+        final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
+        for evt in translate_events:
+            yield evt
+
+        for event in _agentic_final_events(self, request, final_report, bridge, report_source=report_source):
+            yield event
+
+    def _agentic_fallback_reason(self, bridge: AgenticEventBridge) -> str | None:
+        submitted = bridge._intermediate.get("submitted_report")
+        if isinstance(submitted, str) and submitted.strip():
+            return None
+        if bridge._error is not None:
+            if isinstance(bridge._error, TimeoutError):
+                return (
+                    f"{self.runtime_name} timed out before submitting a final report "
+                    f"({_format_exception(bridge._error)})."
+                )
+            if not bridge.search_results:
+                return (
+                    f"{self.runtime_name} failed before completing any search tools "
+                    f"({_format_exception(bridge._error)})."
+                )
+            return (
+                f"{self.runtime_name} failed before submitting a final report "
+                f"({_format_exception(bridge._error)})."
+            )
+        if not bridge.search_results:
+            if bridge._tool_call_count > 0:
+                return f"{self.runtime_name} completed without executing any search tools."
+            return f"{self.runtime_name} completed without calling any research tools."
+        return None
+
+    async def _run_langchain_agent(
+        self,
+        request: RunRequest,
+        bridge: AgenticEventBridge,
+        tools: list[Any],
+    ) -> None:
+        try:
+            from langchain.agents import create_agent
+
+            agent = create_agent(
+                model=f"anthropic:{request.model}",
+                tools=tools,
+                system_prompt=agentic_system_prompt(request, self.runtime_name),
+            )
+
+            final_text: str | None = None
+
+            async def _inner() -> None:
+                nonlocal final_text
+                result = await agent.ainvoke(
+                    {"messages": [{"role": "user", "content": _agentic_user_prompt(request)}]},
+                )
+                final_text = _langchain_final_text(result)
+
+            await asyncio.wait_for(_inner(), timeout=self.agentic_timeout_seconds)
+            if "submitted_report" in bridge._intermediate:
+                bridge._intermediate["agent_final_message"] = final_text
+            else:
+                bridge.set_result(final_text)
+        except asyncio.TimeoutError:
+            _log.warning("Anthropic LangChain agent timed out after %ss", self.agentic_timeout_seconds)
+            bridge.set_error(TimeoutError(f"Agent timed out after {self.agentic_timeout_seconds}s"))
+        except Exception as exc:
+            _log.warning("Anthropic LangChain agent failed: %s", exc)
+            bridge.set_error(exc)
+        finally:
+            await bridge.queue.put(None)
+
+    async def _run_structured_checkpoint(
+        self,
+        request: RunRequest,
+        *,
+        task_name: str,
+        instructions: str,
+        prompt: str,
+        output_model: type[TModel],
+    ) -> TModel:
+        from langchain.agents import create_agent
+
+        with _temporary_env(_provider_api_env(self.provider, request.api_keys)):
+            agent = create_agent(
+                model=f"anthropic:{request.model}",
+                tools=[],
+                system_prompt=instructions,
+            )
+            result = await agent.ainvoke(
+                {"messages": [{"role": "user", "content": prompt}]},
+            )
+        text = _langchain_final_text(result)
+        if text is None:
+            raise RuntimeError(f"Anthropic LangChain agent did not return a {task_name} result.")
+        return _coerce_model_output(text, output_model)
+
+
 class LangChainLocalRuntime(NativeSDKRuntime):
     provider = "local"
     runtime_name = "LangChain Local LLM"
     sdk_module = "langchain_core"
+    runtime_engine = "langchain"
     planner_name = "Local Planner"
     search_agent_name = "Local Search Agent"
     synthesis_agent_name = "Local Synthesis Agent"
@@ -2647,12 +2944,7 @@ class LangChainLocalRuntime(NativeSDKRuntime):
                 result = await agent.ainvoke(
                     {"messages": [HumanMessage(content=_agentic_user_prompt(request))]},
                 )
-                # Extract final AI message
-                messages = result.get("messages", [])
-                for msg in reversed(messages):
-                    if hasattr(msg, "content") and isinstance(msg.content, str) and msg.content.strip():
-                        final_text = msg.content
-                        break
+                final_text = _langchain_final_text(result)
 
             await asyncio.wait_for(_inner(), timeout=LOCAL_AGENTIC_TIMEOUT_SECONDS)
             if "submitted_report" in bridge._intermediate:
@@ -2694,6 +2986,8 @@ class LangChainLocalRuntime(NativeSDKRuntime):
 
 def build_runtime(provider: str) -> ResearchRuntime:
     if provider == "anthropic":
+        if os.getenv("MDR_ANTHROPIC_RUNTIME", "").strip().lower() == "claude_sdk":
+            return ClaudeSDKAnthropicRuntime()
         return AnthropicRuntime()
     if provider == "google":
         return GoogleRuntime()

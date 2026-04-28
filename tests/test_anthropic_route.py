@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from contextlib import contextmanager
+from typing import Any
 from unittest.mock import patch
 
-from medical_deep_research.models import EventType, RunRequest
 from medical_deep_research.agentic_tools import AgenticEventBridge, tool_submit_report
+from medical_deep_research.models import EventType, RunRequest
 from medical_deep_research.research.models import EvidenceStudy, ScoredStudy, SearchProviderResult, VerificationSummary
 from medical_deep_research.runtime import AnthropicRuntime
 
@@ -19,73 +21,82 @@ class AlwaysAvailableAnthropicRuntime(AnthropicRuntime):
         return True
 
 
-class FakeClaudeAgentOptions:
-    def __init__(self, **kwargs: object) -> None:
-        self.__dict__.update(kwargs)
+class FastTimeoutAnthropicRuntime(AlwaysAvailableAnthropicRuntime):
+    agentic_timeout_seconds = 0.01
 
 
-class FakeHookMatcher:
-    def __init__(self, hooks: list[Callable[..., object]]) -> None:
-        self.hooks = hooks
-
-
-class FakeResultMessage:
-    def __init__(self, result: str | None = None, is_error: bool = False, errors: list[str] | None = None) -> None:
-        self.result = result
-        self.is_error = is_error
-        self.errors = errors or []
-
-
-class FakeProcessError(RuntimeError):
-    def __init__(self, message: str, *, exit_code: int, stderr: str) -> None:
-        self.exit_code = exit_code
-        self.stderr = stderr
-        super().__init__(message)
-
-
-def fake_tool(name: str, _description: str, _schema: dict[str, object]) -> Callable[[Callable[..., object]], Callable[..., object]]:
-    def decorator(func: Callable[..., object]) -> Callable[..., object]:
-        setattr(func, "_sdk_tool_name", name)
+def fake_lc_tool(arg: object = None) -> object:
+    def decorate(func: Callable[..., object], name: str | None = None) -> Callable[..., object]:
+        setattr(func, "name", name or func.__name__)
         return func
 
-    return decorator
+    if callable(arg):
+        return decorate(arg)
+    if isinstance(arg, str):
+        return lambda func: decorate(func, arg)
+    return lambda func: decorate(func)
 
 
-def fake_create_sdk_mcp_server(name: str, tools: list[Callable[..., object]]) -> dict[str, object]:
-    return {
-        "name": name,
-        "tools": tools,
-        "tools_by_name": {getattr(tool, "_sdk_tool_name"): tool for tool in tools},
-    }
+def _tool_name(tool: object) -> str:
+    return str(getattr(tool, "name", getattr(tool, "__name__", "tool")))
+
+
+async def call_fake_tool(tools: list[object], tool_name: str, **kwargs: object) -> object:
+    for tool in tools:
+        if _tool_name(tool) == tool_name:
+            return await tool(**kwargs)  # type: ignore[misc]
+    raise AssertionError(f"Tool not found: {tool_name}")
 
 
 @contextmanager
-def fake_claude_sdk(query_impl: Callable[..., AsyncIterator[FakeResultMessage]]) -> object:
-    sdk_module = types.ModuleType("claude_agent_sdk")
-    sdk_module.ClaudeAgentOptions = FakeClaudeAgentOptions
-    sdk_module.create_sdk_mcp_server = fake_create_sdk_mcp_server
-    sdk_module.query = query_impl
-    sdk_module.tool = fake_tool
+def fake_langchain_agent(agent_impl: Callable[[list[object], dict[str, object]], Any]) -> object:
+    agents_module = types.ModuleType("langchain.agents")
+    core_tools_module = types.ModuleType("langchain_core.tools")
+    langchain_module = types.ModuleType("langchain")
+    langchain_core_module = types.ModuleType("langchain_core")
+    langchain_anthropic_module = types.ModuleType("langchain_anthropic")
 
-    types_module = types.ModuleType("claude_agent_sdk.types")
-    types_module.HookMatcher = FakeHookMatcher
-    types_module.ResultMessage = FakeResultMessage
+    class FakeAgent:
+        def __init__(self, tools: list[object]) -> None:
+            self.tools = tools
 
-    previous_sdk = sys.modules.get("claude_agent_sdk")
-    previous_types = sys.modules.get("claude_agent_sdk.types")
-    sys.modules["claude_agent_sdk"] = sdk_module
-    sys.modules["claude_agent_sdk.types"] = types_module
+        async def ainvoke(self, inputs: dict[str, object]) -> object:
+            result = agent_impl(self.tools, inputs)
+            if hasattr(result, "__await__"):
+                return await result
+            return result
+
+    def create_agent(*, model: str, tools: list[object], system_prompt: str) -> FakeAgent:
+        assert model.startswith("anthropic:")
+        assert system_prompt
+        return FakeAgent(tools)
+
+    agents_module.create_agent = create_agent
+    core_tools_module.tool = fake_lc_tool
+
+    previous = {
+        name: sys.modules.get(name)
+        for name in (
+            "langchain",
+            "langchain.agents",
+            "langchain_core",
+            "langchain_core.tools",
+            "langchain_anthropic",
+        )
+    }
+    sys.modules["langchain"] = langchain_module
+    sys.modules["langchain.agents"] = agents_module
+    sys.modules["langchain_core"] = langchain_core_module
+    sys.modules["langchain_core.tools"] = core_tools_module
+    sys.modules["langchain_anthropic"] = langchain_anthropic_module
     try:
         yield
     finally:
-        if previous_sdk is None:
-            sys.modules.pop("claude_agent_sdk", None)
-        else:
-            sys.modules["claude_agent_sdk"] = previous_sdk
-        if previous_types is None:
-            sys.modules.pop("claude_agent_sdk.types", None)
-        else:
-            sys.modules["claude_agent_sdk.types"] = previous_types
+        for name, module in previous.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
 
 async def fake_search_source(source: str, query: str, **_kwargs: object) -> SearchProviderResult:
@@ -119,18 +130,7 @@ async def fake_verify_studies(studies: list[object], **_kwargs: object) -> Verif
     )
 
 
-async def call_fake_tool(options: object, server_name: str, tool_name: str, args: dict[str, object]) -> object:
-    namespaced = f"mcp__{server_name}__{tool_name}"
-    for matcher in options.hooks.get("PreToolUse", []):
-        await matcher.hooks[0]({"tool_name": namespaced, "tool_input": args}, None, None)
-    tool = options.mcp_servers[server_name]["tools_by_name"][tool_name]
-    result = await tool(args)
-    for matcher in options.hooks.get("PostToolUse", []):
-        await matcher.hooks[0]({"tool_name": namespaced, "tool_response": result}, None, None)
-    return result
-
-
-def make_request() -> RunRequest:
+def make_request(*, language: str = "en") -> RunRequest:
     return RunRequest(
         run_id="test-run",
         query="Population: cardiac surgery; Intervention: ESPB; Comparison: PCA; Outcome: Pain score",
@@ -138,6 +138,7 @@ def make_request() -> RunRequest:
         mode="detailed",
         provider="anthropic",
         model="claude-haiku-4-5-20251001",
+        language=language,
         api_keys={"anthropic": "test-key"},
         offline_mode=False,
     )
@@ -207,23 +208,29 @@ def make_ranked_study() -> ScoredStudy:
 
 
 class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def collect_events(self, query_impl: Callable[..., AsyncIterator[FakeResultMessage]]) -> list[object]:
+    async def collect_events(
+        self,
+        agent_impl: Callable[[list[object], dict[str, object]], Any],
+        *,
+        runtime: AnthropicRuntime | None = None,
+        request: RunRequest | None = None,
+    ) -> list[object]:
         with (
-            fake_claude_sdk(query_impl),
+            fake_langchain_agent(agent_impl),
             patch("medical_deep_research.runtime.search_source", fake_search_source),
             patch("medical_deep_research.runtime.verify_studies", fake_verify_studies),
             patch("medical_deep_research.agentic_tools.search_source", fake_search_source),
             patch("medical_deep_research.agentic_tools.verify_studies", fake_verify_studies),
         ):
-            runtime = AlwaysAvailableAnthropicRuntime()
-            return [event async for event in runtime.stream_run(make_request())]
+            selected_runtime = runtime or AlwaysAvailableAnthropicRuntime()
+            selected_request = request or make_request()
+            return [event async for event in selected_runtime.stream_run(selected_request)]
 
     async def test_no_tool_calls_runs_deterministic_fallback(self) -> None:
-        async def no_op_query(**_kwargs: object) -> AsyncIterator[FakeResultMessage]:
-            if False:
-                yield FakeResultMessage()
+        async def no_op_agent(_tools: list[object], _inputs: dict[str, object]) -> object:
+            return {"messages": []}
 
-        events = await self.collect_events(no_op_query)
+        events = await self.collect_events(no_op_agent)
         completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
 
         self.assertGreaterEqual(len(completed), 1)
@@ -234,49 +241,34 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(final.extra["ranked_results"], 0)
         self.assertNotIn("not executed", final.report_markdown or "")
 
-    async def test_sdk_error_before_tools_runs_deterministic_fallback_with_reason(self) -> None:
-        async def error_query(**_kwargs: object) -> AsyncIterator[FakeResultMessage]:
-            if False:
-                yield FakeResultMessage()
-            raise RuntimeError("missing claude binary")
+    async def test_agent_error_before_tools_runs_deterministic_fallback_with_reason(self) -> None:
+        async def error_agent(_tools: list[object], _inputs: dict[str, object]) -> object:
+            raise RuntimeError("missing Anthropic dependency")
 
-        events = await self.collect_events(error_query)
+        events = await self.collect_events(error_agent)
         completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
 
         final = completed[-1]
         self.assertEqual(final.extra["execution_mode"], "deterministic_fallback")
-        self.assertIn("RuntimeError: missing claude binary", final.extra["fallback_reason"])
+        self.assertIn("RuntimeError: missing Anthropic dependency", final.extra["fallback_reason"])
         self.assertGreater(final.extra["ranked_results"], 0)
 
-    async def test_sdk_error_before_tools_captures_stderr_tail(self) -> None:
-        async def error_query(**kwargs: object) -> AsyncIterator[FakeResultMessage]:
-            options = kwargs["options"]
-            options.stderr("node: not found")
-            if False:
-                yield FakeResultMessage()
-            raise FakeProcessError(
-                "Command failed with exit code 1",
-                exit_code=1,
-                stderr="Check stderr output for details",
-            )
+    async def test_default_anthropic_path_does_not_require_git(self) -> None:
+        async def no_op_agent(_tools: list[object], _inputs: dict[str, object]) -> object:
+            return {"messages": []}
 
-        events = await self.collect_events(error_query)
-        completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
+        events = await self.collect_events(no_op_agent)
+        start = next(event for event in events if event.event_type == EventType.RUN_STARTED)
 
-        final = completed[-1]
-        self.assertEqual(final.extra["execution_mode"], "deterministic_fallback")
-        self.assertEqual(final.extra["sdk_error_type"], "FakeProcessError")
-        self.assertEqual(final.extra["sdk_exit_code"], 1)
-        self.assertIn("node: not found", final.extra["sdk_stderr_tail"])
-        self.assertIn("Last stderr: node: not found", final.extra["fallback_reason"])
+        self.assertEqual(start.extra["runtime_engine"], "langchain_anthropic")
+        self.assertNotIn("git", str(start.extra).lower())
 
     async def test_planning_only_run_falls_back_before_empty_report(self) -> None:
-        async def planning_only_query(**kwargs: object) -> AsyncIterator[FakeResultMessage]:
-            options = kwargs["options"]
-            await call_fake_tool(options, "literature", "plan_search", {"query": make_request().query, "query_type": "pico"})
-            yield FakeResultMessage(result="Planning finished but no searches were executed.")
+        async def planning_only_agent(tools: list[object], _inputs: dict[str, object]) -> object:
+            await call_fake_tool(tools, "plan_search", query=make_request().query, query_type="pico")
+            return {"messages": [{"content": "Planning finished but no searches were executed."}]}
 
-        events = await self.collect_events(planning_only_query)
+        events = await self.collect_events(planning_only_agent)
         completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
 
         final = completed[-1]
@@ -287,21 +279,21 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_tool_using_agentic_run_reports_tool_counts(self) -> None:
         report = make_valid_report().strip()
 
-        async def successful_query(**kwargs: object) -> AsyncIterator[FakeResultMessage]:
-            options = kwargs["options"]
-            await call_fake_tool(options, "literature", "plan_search", {"query": make_request().query, "query_type": "pico"})
-            await call_fake_tool(options, "literature", "search_pubmed", {"query": "cardiac surgery ESPB PCA pain", "max_results": 3})
-            await call_fake_tool(options, "evidence", "get_studies", {"context": "clinical"})
-            await call_fake_tool(options, "evidence", "finalize_ranking", {"ranked_indices": [1], "rationale": "Most relevant RCT."})
-            await call_fake_tool(options, "evidence", "verify_studies", {})
-            await call_fake_tool(options, "evidence", "submit_report", {"report_markdown": report})
-            yield FakeResultMessage(result="Perfect! I have successfully completed the literature review.")
+        async def successful_agent(tools: list[object], _inputs: dict[str, object]) -> object:
+            await call_fake_tool(tools, "plan_search", query=make_request().query, query_type="pico")
+            await call_fake_tool(tools, "search_pubmed", query="cardiac surgery ESPB PCA pain", max_results=3)
+            await call_fake_tool(tools, "get_studies", context="clinical")
+            await call_fake_tool(tools, "finalize_ranking", ranked_indices=[1], rationale="Most relevant RCT.")
+            await call_fake_tool(tools, "verify_studies")
+            await call_fake_tool(tools, "submit_report", report_markdown=report)
+            return {"messages": [{"content": "Perfect! I have successfully completed the literature review."}]}
 
-        events = await self.collect_events(successful_query)
+        events = await self.collect_events(successful_agent)
         completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
 
         final = completed[-1]
         self.assertEqual(final.extra["execution_mode"], "native_sdk_agentic")
+        self.assertEqual(final.extra["runtime_engine"], "langchain_anthropic")
         self.assertFalse(final.extra["had_error"])
         self.assertGreater(final.extra["tool_calls"], 0)
         self.assertEqual(final.extra["ranked_results"], 1)
@@ -309,6 +301,68 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.extra["report_source"], "submitted_report")
         self.assertEqual(final.report_markdown, report)
         self.assertNotIn("Perfect!", final.report_markdown or "")
+
+    async def test_timeout_without_submitted_report_runs_deterministic_fallback(self) -> None:
+        async def timeout_agent(tools: list[object], _inputs: dict[str, object]) -> object:
+            await call_fake_tool(tools, "search_pubmed", query="cardiac surgery ESPB PCA pain", max_results=3)
+            await asyncio.sleep(1)
+            return {"messages": []}
+
+        events = await self.collect_events(timeout_agent, runtime=FastTimeoutAnthropicRuntime())
+        completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
+
+        final = completed[-1]
+        self.assertEqual(final.extra["execution_mode"], "deterministic_fallback")
+        self.assertTrue(final.extra["agentic_fallback"])
+        self.assertIn("timed out before submitting a final report", final.extra["fallback_reason"])
+        self.assertGreater(final.extra["ranked_results"], 0)
+
+    async def test_submitted_report_survives_late_timeout(self) -> None:
+        report = make_valid_report().strip()
+
+        async def timeout_after_submit_agent(tools: list[object], _inputs: dict[str, object]) -> object:
+            await call_fake_tool(tools, "search_pubmed", query="cardiac surgery ESPB PCA pain", max_results=3)
+            await call_fake_tool(tools, "get_studies", context="clinical")
+            await call_fake_tool(tools, "finalize_ranking", ranked_indices=[1], rationale="Most relevant RCT.")
+            await call_fake_tool(tools, "submit_report", report_markdown=report)
+            await asyncio.sleep(1)
+            return {"messages": []}
+
+        events = await self.collect_events(timeout_after_submit_agent, runtime=FastTimeoutAnthropicRuntime())
+        completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
+
+        final = completed[-1]
+        self.assertEqual(final.extra["execution_mode"], "native_sdk_agentic")
+        self.assertTrue(final.extra["had_error"])
+        self.assertEqual(final.extra["report_source"], "submitted_report")
+        self.assertEqual(final.report_markdown, report)
+
+    async def test_deterministic_fallback_translates_when_language_is_non_english(self) -> None:
+        translated = ("## 번역 보고서\n\n" + "한국어 번역입니다. " * 80).strip()
+
+        async def no_op_agent(_tools: list[object], _inputs: dict[str, object]) -> object:
+            return {"messages": []}
+
+        async def fake_translate(
+            _request: RunRequest,
+            bridge: AgenticEventBridge,
+            _report_markdown: str,
+            _target_language: str = "ko",
+        ) -> dict[str, object]:
+            bridge._intermediate["submitted_report"] = translated
+            bridge.set_result(translated)
+            return {"status": "ok", "length": len(translated)}
+
+        with patch("medical_deep_research.runtime.tool_translate_report", fake_translate):
+            events = await self.collect_events(no_op_agent, request=make_request(language="ko"))
+
+        completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
+        artifacts = [event for event in events if event.event_type == EventType.ARTIFACT_CREATED]
+
+        final = completed[-1]
+        self.assertEqual(final.report_markdown, translated)
+        self.assertEqual(final.extra["translation_status"], "ok")
+        self.assertTrue(any(event.artifact_name == "Report (English)" for event in artifacts))
 
     async def test_submit_report_rejects_short_status_summary(self) -> None:
         bridge = AgenticEventBridge()

@@ -41,6 +41,18 @@ Pre-built desktop apps for macOS and Windows are available on the [Releases](htt
 
 API keys are configured in the app's **API Keys** panel (stored locally in SQLite).
 
+### Anthropic Runtime
+
+Current builds use a Python-only LangChain/Anthropic agent runtime for Claude. This path does **not** require Git, Git Bash, Claude Code, or `claude-agent-sdk`.
+
+The older Claude SDK route remains available only as an opt-in legacy mode from source:
+
+```bash
+MDR_ANTHROPIC_RUNTIME=claude_sdk uv run medical-deep-research
+```
+
+Legacy Claude SDK mode may require Git on macOS/Linux and Git for Windows/Git Bash on Windows.
+
 ### macOS Gatekeeper
 
 The macOS build is ad-hoc signed but not Apple-notarized. If macOS says the DMG or app is from an unidentified developer, open it with one of these methods:
@@ -55,25 +67,15 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.8.6 Desktop Packaging and Export Update
+### v2.8.7 Anthropic Runtime Update
 
-This release improves the desktop package layout and adds direct report export/copy controls.
+This release removes Git/Git Bash from the default Anthropic desktop path.
 
-- **Anthropic desktop support restored:** Packaged desktop builds include `claude-agent-sdk` so the Anthropic route can run instead of immediately falling back to the deterministic pipeline.
-- **Clearer package layout:** PyInstaller support files are placed in a `runtime` folder instead of the default `_internal` folder. Keep this folder next to the executable; it contains required app dependencies, SDK files, and native libraries.
-- **Correct cleanup path:** The CI cleanup step strips unused NiceGUI element bundles from both the app root and the PyInstaller `runtime` directory.
-- **Report export:** The Report tab now includes Copy, Markdown, and plain text actions so users can reuse report text and references without manually retyping paper titles. Desktop exports save to the user's Downloads folder.
-- **Selectable reports:** Rendered reports are explicitly selectable in the desktop UI for drag/copy workflows.
-
-### v2.8.5 Reliability Update
-
-This release addresses a Windows reliability report where the app completed a deterministic fallback report but showed noisy Scopus and Anthropic Agent SDK diagnostics.
-
-- **Scopus API key fallback:** If a configured Scopus / Elsevier API key is stale, rejected, rate-limited, or the keyed request fails, Scopus now falls back to the same optional skip path used when no Scopus key is configured. The report can continue with PubMed, Cochrane, OpenAlex, and Semantic Scholar results instead of surfacing a long Scopus exception.
-- **Scopus key management:** Clearing the Scopus field in the API Keys panel now removes the stored key. Previously, saving a blank field left the old key active in the local SQLite database.
-- **Cleaner source diagnostics:** Scopus errors are summarized without full Elsevier request URLs, while run diagnostics still indicate whether Scopus was configured and why it was skipped.
-- **Structured PICO/PCC fallback queries:** Deterministic fallback now parses structured fields and removes labels such as `Population`, `Intervention`, `Comparison`, and `Outcome` from source queries, improving fallback search relevance.
-- **Anthropic Agent SDK troubleshooting:** When the Anthropic Agent SDK fails before any search tool runs, diagnostics now capture the SDK stderr tail before deterministic fallback starts, which makes Windows startup/package issues easier to diagnose.
+- **Claude without Git:** Anthropic runs through a constrained LangChain/Anthropic tool-calling agent instead of the Claude Code SDK, so packaged desktop apps no longer need Git, Git Bash, or Claude Code for normal Claude runs.
+- **Legacy SDK opt-in:** The old `claude-agent-sdk` route is separated behind `MDR_ANTHROPIC_RUNTIME=claude_sdk`; only that mode requires Git/Git Bash preflight checks.
+- **Safer timeout behavior:** If the agent times out before submitting a final report, the app runs the deterministic fallback instead of presenting a recovered partial report as a normal completion.
+- **Fallback translation:** Korean and other non-English fallback reports now attempt the same LLM translation path as agentic reports, preserving the English original as an artifact.
+- **Runtime diagnostics:** Provider and run diagnostics now show the active runtime engine and translation status.
 
 ## Quick Start (from source)
 
@@ -82,7 +84,8 @@ This release addresses a Windows reliability report where the app completed a de
 uv sync --all-extras
 
 # Or pick your provider
-uv sync --extra anthropic   # Claude Agent SDK
+uv sync --extra anthropic   # Claude via LangChain/Anthropic
+uv sync --extra claude-sdk   # Optional legacy Claude SDK mode
 uv sync --extra openai      # OpenAI Agents SDK
 uv sync --extra google      # Google ADK
 uv sync --extra langchain   # Local LLMs (Ollama, LM Studio)
@@ -151,7 +154,7 @@ The system prompt adapts to the query domain:
 
 | Provider | SDK | Default Model | Agentic |
 |----------|-----|---------------|---------|
-| Anthropic | `claude-agent-sdk` | claude-haiku-4-5 | Yes |
+| Anthropic | `langchain-anthropic` | claude-haiku-4-5 | Yes |
 | OpenAI | `openai-agents` | gpt-5-mini | Yes |
 | Google | `google-adk` | gemini-2.5-flash | Yes |
 | Local | `langchain` + `langgraph` | qwen3.5-27b | Yes |

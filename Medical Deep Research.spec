@@ -2,6 +2,7 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
+import importlib.util as _importlib_util
 import re as _re
 
 datas = [('src/medical_deep_research', 'medical_deep_research')]
@@ -12,8 +13,11 @@ hiddenimports = ['medical_deep_research', 'medical_deep_research.main', 'medical
 hiddenimports += collect_submodules('medical_deep_research')
 tmp_ret = collect_all('nicegui')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('claude_agent_sdk')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+for _pkg in ('anthropic', 'langchain', 'langchain_anthropic', 'langgraph', 'deepagents'):
+    if _importlib_util.find_spec(_pkg) is None:
+        continue
+    tmp_ret = collect_all(_pkg)
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # Strip heavy NiceGUI element JS/CSS bundles that this app never uses (~57 MB)
 _exclude_elements = [

@@ -108,8 +108,12 @@ def _clean_api_key(value: str | None) -> str:
     return re.sub(r"\s+", "", key)
 
 
-def _scopus_date_range() -> str:
-    return f"2015-{datetime.now().year}"
+def _resolve_year_window(start_year: int | None) -> tuple[int, int]:
+    end_year = datetime.now().year
+    if start_year is None:
+        start_year = end_year - 4  # default: last 5 years inclusive
+    start_year = max(1900, min(end_year, int(start_year)))
+    return start_year, end_year
 
 
 def _scopus_error_message(status_code: int) -> str:
@@ -132,14 +136,14 @@ def _get_text(element: ET.Element | None) -> str:
     return "".join(element.itertext()).strip()
 
 
-def _ebm_boosted_pubmed_query(query: str) -> str:
+def _ebm_boosted_pubmed_query(query: str, start_year: int) -> str:
     """Wrap a PubMed query to prioritize high-evidence study types and recent years."""
     ebm_filter = (
         '("systematic review"[pt] OR "meta-analysis"[pt] OR '
         '"randomized controlled trial"[pt] OR "clinical trial"[pt] OR '
         '"review"[pt] OR "guideline"[pt] OR "practice guideline"[pt])'
     )
-    recency = '("2019"[pdat] : "3000"[pdat])'
+    recency = f'("{start_year}"[pdat] : "3000"[pdat])'
     # Use boolean preference: (EBM types AND recency AND query) OR (query alone)
     # PubMed "sort=relevance" will rank EBM+recent hits higher
     return f"(({query}) AND {ebm_filter} AND {recency}) OR ({query})"
@@ -151,11 +155,13 @@ async def search_pubmed(
     *,
     api_key: str | None = None,
     offline_mode: bool = False,
+    start_year: int | None = None,
 ) -> SearchProviderResult:
     if offline_mode:
         return _offline_result("PubMed", query)
 
-    boosted_query = _ebm_boosted_pubmed_query(query)
+    start_year_value, _ = _resolve_year_window(start_year)
+    boosted_query = _ebm_boosted_pubmed_query(query, start_year_value)
     params = {
         "db": "pubmed",
         "term": boosted_query,
@@ -251,13 +257,20 @@ async def search_pubmed(
         return _network_error("PubMed", query, exc)
 
 
-async def search_openalex(query: str, max_results: int = 8, *, offline_mode: bool = False) -> SearchProviderResult:
+async def search_openalex(
+    query: str,
+    max_results: int = 8,
+    *,
+    offline_mode: bool = False,
+    start_year: int | None = None,
+) -> SearchProviderResult:
     if offline_mode:
         return _offline_result("OpenAlex", query)
 
+    start_year_value, _ = _resolve_year_window(start_year)
     params = {
         "search": query,
-        "filter": "type:article,from_publication_date:2015-01-01",
+        "filter": f"type:article,from_publication_date:{start_year_value}-01-01",
         "sort": "relevance_score:desc",
         "per_page": str(max_results),
         "mailto": POLITE_EMAIL,
@@ -318,15 +331,26 @@ async def search_semantic_scholar(
     api_key: str | None = None,
     fields_of_study: str | None = None,
     offline_mode: bool = False,
+    start_year: int | None = None,
 ) -> SearchProviderResult:
     if offline_mode:
         return _offline_result("Semantic Scholar", query)
 
+    api_key = _clean_api_key(api_key)
+    if not api_key:
+        return SearchProviderResult(
+            source="Semantic Scholar",
+            query=query,
+            skipped=True,
+            error="Semantic Scholar API key not configured",
+        )
+
+    start_year_value, _ = _resolve_year_window(start_year)
     params = {
         "query": query,
         "limit": str(min(max_results, 100)),
         "fields": SEMANTIC_SCHOLAR_FIELDS,
-        "year": "2015-",
+        "year": f"{start_year_value}-",
     }
     requested_fields_of_study = fields_of_study or "Medicine"
     if requested_fields_of_study:
@@ -334,10 +358,8 @@ async def search_semantic_scholar(
     headers = {
         "Accept": "application/json",
         "User-Agent": USER_AGENT,
+        "x-api-key": api_key,
     }
-    api_key = _clean_api_key(api_key)
-    if api_key:
-        headers["x-api-key"] = api_key
 
     async def _get_with_retries(client: httpx.AsyncClient, request_params: dict[str, object]) -> httpx.Response:
         response: httpx.Response | None = None
@@ -409,12 +431,14 @@ async def search_cochrane(
     *,
     api_key: str | None = None,
     offline_mode: bool = False,
+    start_year: int | None = None,
 ) -> SearchProviderResult:
     del api_key
     result = await search_pubmed(
         f'{query} AND ("Cochrane Database Syst Rev"[Journal])',
         max_results=max_results,
         offline_mode=offline_mode,
+        start_year=start_year,
     )
     result.source = "Cochrane"
     for study in result.studies:
@@ -430,6 +454,8 @@ async def search_scopus(
     *,
     api_key: str | None = None,
     offline_mode: bool = False,
+    start_year: int | None = None,
+    scopus_view: str = "STANDARD",
 ) -> SearchProviderResult:
     if offline_mode:
         return _offline_result("Scopus", query)
@@ -437,13 +463,22 @@ async def search_scopus(
     if not api_key:
         return _scopus_keyed_skip(query, "Scopus API key not configured")
 
+    start_year_value, end_year_value = _resolve_year_window(start_year)
+    # Inline PUBYEAR clause; Scopus's `date=YYYY-YYYY` URL param triggers
+    # an XSL transform 500 error in the Search API.
+    bounded_query = (
+        f"{query} AND PUBYEAR > {start_year_value - 1} AND PUBYEAR < {end_year_value + 1}"
+    )
+
+    requested_view = (scopus_view or "STANDARD").upper()
+    if requested_view not in {"STANDARD", "COMPLETE"}:
+        requested_view = "STANDARD"
     headers = {"Accept": "application/json", "X-ELS-APIKey": api_key}
     params = {
-        "query": query,
+        "query": bounded_query,
         "count": str(max_results),
         "sort": "relevancy",
-        "date": _scopus_date_range(),
-        "view": "COMPLETE",
+        "view": requested_view,
     }
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers=headers) as client:
@@ -459,6 +494,9 @@ async def search_scopus(
             identifier = str(entry.get("dc:identifier", "")).replace("SCOPUS_ID:", "")
             title = entry.get("dc:title") or "Untitled"
             journal = entry.get("prism:publicationName") or "Unknown"
+            cover_date = entry.get("prism:coverDate")
+            year_match = re.match(r"(\d{4})", cover_date or "")
+            publication_year = year_match.group(1) if year_match else None
             studies.append(
                 EvidenceStudy(
                     source="scopus",
@@ -467,7 +505,8 @@ async def search_scopus(
                     abstract=entry.get("dc:description"),
                     authors=[entry["dc:creator"]] if entry.get("dc:creator") else [],
                     journal=journal,
-                    publication_date=entry.get("prism:coverDate"),
+                    publication_date=cover_date,
+                    publication_year=publication_year,
                     doi=entry.get("prism:doi"),
                     citation_count=int(entry.get("citedby-count") or 0),
                     url=next(
@@ -499,12 +538,25 @@ async def search_source(
     max_results: int = 8,
     offline_mode: bool = False,
     domain: str | None = None,
+    start_year: int | None = None,
+    scopus_view: str = "STANDARD",
 ) -> SearchProviderResult:
     key_map = api_keys or {}
     if source == "PubMed":
-        return await search_pubmed(query, max_results=max_results, api_key=key_map.get("ncbi"), offline_mode=offline_mode)
+        return await search_pubmed(
+            query,
+            max_results=max_results,
+            api_key=key_map.get("ncbi"),
+            offline_mode=offline_mode,
+            start_year=start_year,
+        )
     if source == "OpenAlex":
-        return await search_openalex(query, max_results=max_results, offline_mode=offline_mode)
+        return await search_openalex(
+            query,
+            max_results=max_results,
+            offline_mode=offline_mode,
+            start_year=start_year,
+        )
     if source == "Semantic Scholar":
         fields = "Medicine" if domain == "clinical" else None
         return await search_semantic_scholar(
@@ -513,11 +565,25 @@ async def search_source(
             api_key=key_map.get("semantic_scholar") or key_map.get("semanticscholar"),
             fields_of_study=fields,
             offline_mode=offline_mode,
+            start_year=start_year,
         )
     if source == "Cochrane":
-        return await search_cochrane(query, max_results=max_results, api_key=key_map.get("cochrane"), offline_mode=offline_mode)
+        return await search_cochrane(
+            query,
+            max_results=max_results,
+            api_key=key_map.get("cochrane"),
+            offline_mode=offline_mode,
+            start_year=start_year,
+        )
     if source == "Scopus":
-        return await search_scopus(query, max_results=max_results, api_key=key_map.get("scopus"), offline_mode=offline_mode)
+        return await search_scopus(
+            query,
+            max_results=max_results,
+            api_key=key_map.get("scopus"),
+            offline_mode=offline_mode,
+            start_year=start_year,
+            scopus_view=scopus_view,
+        )
     return SearchProviderResult(source=source, query=query, skipped=True, error="Unsupported source")
 
 

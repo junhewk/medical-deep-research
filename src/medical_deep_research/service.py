@@ -106,6 +106,42 @@ class ResearchService:
                 session.add(Setting(key="language", value=language, category="general"))
             session.commit()
 
+    def get_recent_years_lookback(self) -> int:
+        with self.database.session() as session:
+            rec = session.get(Setting, "recent_years_lookback")
+            try:
+                return max(1, int(rec.value)) if rec else 5
+            except (TypeError, ValueError):
+                return 5
+
+    def set_recent_years_lookback(self, years: int) -> None:
+        years = max(1, min(50, int(years)))
+        with self.database.session() as session:
+            existing = session.get(Setting, "recent_years_lookback")
+            if existing:
+                existing.value = str(years)
+            else:
+                session.add(Setting(key="recent_years_lookback", value=str(years), category="search"))
+            session.commit()
+
+    def get_scopus_view(self) -> str:
+        with self.database.session() as session:
+            rec = session.get(Setting, "scopus_view")
+            value = (rec.value if rec else "STANDARD").upper()
+            return value if value in {"STANDARD", "COMPLETE"} else "STANDARD"
+
+    def set_scopus_view(self, view: str) -> None:
+        normalized = (view or "").upper()
+        if normalized not in {"STANDARD", "COMPLETE"}:
+            normalized = "STANDARD"
+        with self.database.session() as session:
+            existing = session.get(Setting, "scopus_view")
+            if existing:
+                existing.value = normalized
+            else:
+                session.add(Setting(key="scopus_view", value=normalized, category="search"))
+            session.commit()
+
     def get_api_keys(self) -> dict[str, str]:
         with self.database.session() as session:
             statement = select(ApiKey)
@@ -301,6 +337,8 @@ class ResearchService:
             query_payload=query_payload,
             api_keys=self.get_api_keys(),
             offline_mode=self.database.settings.offline_mode,
+            recent_years_lookback=self.get_recent_years_lookback(),
+            scopus_view=self.get_scopus_view(),
         )
 
         with self.database.session() as session:

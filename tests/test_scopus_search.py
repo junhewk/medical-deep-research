@@ -82,7 +82,7 @@ class ScopusSearchTests(unittest.IsolatedAsyncioTestCase):
         FakeAsyncClient.responses = [response(500), response(500)]
 
         with patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient):
-            result = await search_scopus("TITLE-ABS-KEY(vats)", api_key="test-key")
+            result = await search_scopus("TITLE-ABS-KEY(vats)", api_key="test-key", scopus_view="COMPLETE")
 
         self.assertTrue(result.skipped)
         self.assertIn("HTTP 500", result.error or "")
@@ -91,6 +91,14 @@ class ScopusSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(FakeAsyncClient.calls), 2)
         self.assertEqual(FakeAsyncClient.calls[0]["view"], "COMPLETE")
         self.assertEqual(FakeAsyncClient.calls[1]["view"], "STANDARD")
+
+    async def test_default_view_is_standard(self) -> None:
+        FakeAsyncClient.responses = [response(200)]
+
+        with patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient):
+            await search_scopus("TITLE-ABS-KEY(vats)", api_key="test-key")
+
+        self.assertEqual(FakeAsyncClient.calls[0]["view"], "STANDARD")
 
     async def test_scopus_key_is_sanitized_from_pasted_header(self) -> None:
         FakeAsyncClient.responses = [response(200)]
@@ -101,12 +109,29 @@ class ScopusSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.skipped)
         self.assertEqual(FakeAsyncClient.last_headers["X-ELS-APIKey"], "test-key")
 
+    async def test_scopus_uses_inline_pubyear_not_date_param(self) -> None:
+        FakeAsyncClient.responses = [response(200)]
+
+        with patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient):
+            await search_scopus("TITLE-ABS-KEY(vats)", api_key="test-key", start_year=2020)
+
+        params = FakeAsyncClient.calls[0]
+        self.assertNotIn("date", params)
+        self.assertIn("PUBYEAR > 2019", str(params.get("query", "")))
+        self.assertIn("PUBYEAR <", str(params.get("query", "")))
+
 
 class SemanticScholarSearchTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         FakeAsyncClient.responses = []
         FakeAsyncClient.calls = []
         FakeAsyncClient.last_headers = {}
+
+    async def test_no_key_skips_semantic_scholar_cleanly(self) -> None:
+        result = await search_semantic_scholar("query", api_key="")
+
+        self.assertTrue(result.skipped)
+        self.assertEqual(result.error, "Semantic Scholar API key not configured")
 
     async def test_bad_field_filter_retries_without_fields_of_study(self) -> None:
         FakeAsyncClient.responses = [
@@ -128,7 +153,9 @@ class SemanticScholarSearchTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         with patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient):
-            result = await search_semantic_scholar("cardiac surgery ESPB", max_results=5)
+            result = await search_semantic_scholar(
+                "cardiac surgery ESPB", max_results=5, api_key="test-key"
+            )
 
         self.assertIsNone(result.error)
         self.assertEqual(len(result.studies), 1)
@@ -154,7 +181,9 @@ class SemanticScholarSearchTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         with patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient):
-            result = await search_semantic_scholar("cardiac surgery ESPB", max_results=5)
+            result = await search_semantic_scholar(
+                "cardiac surgery ESPB", max_results=5, api_key="test-key"
+            )
 
         self.assertIsNone(result.error)
         self.assertEqual(len(result.studies), 1)
@@ -184,7 +213,9 @@ class SemanticScholarSearchTests(unittest.IsolatedAsyncioTestCase):
             patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient),
             patch("medical_deep_research.research.search.asyncio.sleep", sleep_mock),
         ):
-            result = await search_semantic_scholar("thoracic surgery block", max_results=5)
+            result = await search_semantic_scholar(
+                "thoracic surgery block", max_results=5, api_key="test-key"
+            )
 
         self.assertIsNone(result.error)
         self.assertEqual(len(result.studies), 1)

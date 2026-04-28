@@ -236,6 +236,8 @@ async def tool_search(request: RunRequest, bridge: AgenticEventBridge, source: s
         max_results=max_results,
         offline_mode=request.offline_mode,
         domain="clinical",
+        start_year=request.search_start_year,
+        scopus_view=request.scopus_view,
     )
     bridge.search_results.append(result)
     studies_summary = []
@@ -964,26 +966,46 @@ async def tool_parse_pdf(request: RunRequest, bridge: AgenticEventBridge, rank: 
         pdf_path = f.name
 
     text = ""
+    # Stage 1: markitdown[pdf] (no Java required)
     try:
-        import opendataloader_pdf
-        import glob as _glob
-        output_dir = tempfile.mkdtemp()
-        await asyncio.to_thread(opendataloader_pdf.convert, input_path=[pdf_path], output_dir=output_dir, format="markdown")
-        md_files = _glob.glob(f"{output_dir}/**/*.md", recursive=True)
-        if md_files:
-            with open(md_files[0]) as mf:
-                text = mf.read()
-        _log.info("[PARSE_PDF] Parsed %d chars for rank %d (source=%s)", len(text), rank, source)
+        from markitdown import MarkItDown
+        md = MarkItDown()
+        result = await asyncio.to_thread(md.convert, pdf_path)
+        text = (getattr(result, "text_content", None) or "").strip()
     except ImportError:
-        text = f"[opendataloader-pdf not installed. PDF: {len(pdf_bytes)} bytes from {source}.]"
+        pass
     except Exception as exc:
-        text = f"[PDF parse error: {exc}. PDF: {len(pdf_bytes)} bytes from {source}.]"
-    finally:
-        import os as _os
+        _log.info("[PARSE_PDF] markitdown failed for rank %d: %s", rank, exc)
+
+    # Stage 2: opendataloader-pdf fallback (requires Java)
+    if not text:
         try:
-            _os.unlink(pdf_path)
-        except OSError:
+            import opendataloader_pdf
+            import glob as _glob
+            output_dir = tempfile.mkdtemp()
+            await asyncio.to_thread(
+                opendataloader_pdf.convert,
+                input_path=[pdf_path], output_dir=output_dir, format="markdown",
+            )
+            md_files = _glob.glob(f"{output_dir}/**/*.md", recursive=True)
+            if md_files:
+                with open(md_files[0]) as mf:
+                    text = mf.read()
+        except ImportError:
             pass
+        except Exception as exc:
+            _log.info("[PARSE_PDF] opendataloader failed for rank %d: %s", rank, exc)
+
+    if not text:
+        text = f"[PDF parse error: no parser available. PDF: {len(pdf_bytes)} bytes from {source}.]"
+
+    _log.info("[PARSE_PDF] Parsed %d chars for rank %d (source=%s)", len(text), rank, source)
+
+    import os as _os
+    try:
+        _os.unlink(pdf_path)
+    except OSError:
+        pass
 
     return {"rank": rank, "title": title, "source": source, "text_length": len(text), "fulltext": text}
 

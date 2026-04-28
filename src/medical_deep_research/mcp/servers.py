@@ -50,6 +50,30 @@ def _resolve_offline_mode(explicit: bool | None) -> bool:
     return explicit
 
 
+def _resolve_lookback(explicit: int | None) -> int:
+    if explicit is not None and explicit > 0:
+        return explicit
+    raw = os.getenv("MDR_RECENT_YEARS_LOOKBACK")
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return 5
+
+
+def _start_year_from_lookback(lookback: int) -> int:
+    from datetime import datetime
+    return datetime.now().year - max(1, lookback) + 1
+
+
+def _resolve_scopus_view(explicit: str | None) -> str:
+    candidate = (explicit or os.getenv("MDR_SCOPUS_VIEW") or "STANDARD").upper()
+    return candidate if candidate in {"STANDARD", "COMPLETE"} else "STANDARD"
+
+
 def _parse_search_results(results_json: str | list[dict[str, object]]) -> list[SearchProviderResult]:
     records = _decode_payload(results_json)
     return [SearchProviderResult.model_validate(record) for record in records]
@@ -91,6 +115,7 @@ def create_literature_server() -> FastMCP:
         max_results: int = 8,
         api_key: str | None = None,
         offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
     ) -> dict[str, object]:
         """Search PubMed with the deterministic Python adapter."""
         result = await search_source(
@@ -100,6 +125,7 @@ def create_literature_server() -> FastMCP:
             max_results=max_results,
             offline_mode=_resolve_offline_mode(offline_mode),
             domain="clinical",
+            start_year=_start_year_from_lookback(_resolve_lookback(recent_years_lookback)),
         )
         return result.model_dump()
 
@@ -108,6 +134,7 @@ def create_literature_server() -> FastMCP:
         query: str,
         max_results: int = 8,
         offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
     ) -> dict[str, object]:
         """Search OpenAlex with the deterministic Python adapter."""
         result = await search_source(
@@ -115,6 +142,7 @@ def create_literature_server() -> FastMCP:
             query,
             max_results=max_results,
             offline_mode=_resolve_offline_mode(offline_mode),
+            start_year=_start_year_from_lookback(_resolve_lookback(recent_years_lookback)),
         )
         return result.model_dump()
 
@@ -123,6 +151,7 @@ def create_literature_server() -> FastMCP:
         query: str,
         max_results: int = 6,
         offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
     ) -> dict[str, object]:
         """Search Cochrane reviews through the deterministic Python adapter."""
         result = await search_source(
@@ -130,6 +159,7 @@ def create_literature_server() -> FastMCP:
             query,
             max_results=max_results,
             offline_mode=_resolve_offline_mode(offline_mode),
+            start_year=_start_year_from_lookback(_resolve_lookback(recent_years_lookback)),
         )
         return result.model_dump()
 
@@ -140,6 +170,7 @@ def create_literature_server() -> FastMCP:
         api_key: str | None = None,
         fields_of_study: str | None = None,
         offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
     ) -> dict[str, object]:
         """Search Semantic Scholar with the deterministic Python adapter."""
         del fields_of_study
@@ -151,6 +182,7 @@ def create_literature_server() -> FastMCP:
             max_results=max_results,
             offline_mode=_resolve_offline_mode(offline_mode),
             domain="clinical",
+            start_year=_start_year_from_lookback(_resolve_lookback(recent_years_lookback)),
         )
         return result.model_dump()
 
@@ -160,6 +192,8 @@ def create_literature_server() -> FastMCP:
         max_results: int = 8,
         api_key: str | None = None,
         offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
+        scopus_view: str | None = None,
     ) -> dict[str, object]:
         """Search Scopus with the deterministic Python adapter."""
         resolved_api_key = _resolve_secret(api_key, "MDR_SCOPUS_API_KEY")
@@ -169,6 +203,8 @@ def create_literature_server() -> FastMCP:
             api_keys={"scopus": resolved_api_key} if resolved_api_key else {},
             max_results=max_results,
             offline_mode=_resolve_offline_mode(offline_mode),
+            start_year=_start_year_from_lookback(_resolve_lookback(recent_years_lookback)),
+            scopus_view=_resolve_scopus_view(scopus_view),
         )
         return result.model_dump()
 
@@ -182,10 +218,14 @@ def create_literature_server() -> FastMCP:
         scopus_api_key: str | None = None,
         semantic_scholar_api_key: str | None = None,
         offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
+        scopus_view: str | None = None,
     ) -> dict[str, object]:
         """Execute the deterministic search plan across all configured sources."""
         plan = build_query_plan(query, query_type, provider)
         resolved_offline_mode = _resolve_offline_mode(offline_mode)
+        start_year = _start_year_from_lookback(_resolve_lookback(recent_years_lookback))
+        resolved_view = _resolve_scopus_view(scopus_view)
         api_keys = {
             key: value
             for key, value in {
@@ -208,6 +248,8 @@ def create_literature_server() -> FastMCP:
                     max_results=max_results_per_source,
                     offline_mode=resolved_offline_mode,
                     domain=plan.domain,
+                    start_year=start_year,
+                    scopus_view=resolved_view,
                 )
             )
         flattened = flatten_studies(results)

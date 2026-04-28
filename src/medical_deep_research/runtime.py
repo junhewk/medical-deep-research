@@ -627,6 +627,8 @@ class DeterministicRuntime(ResearchRuntime):
                 max_results=6,
                 offline_mode=request.offline_mode,
                 domain=plan.domain,
+                start_year=request.search_start_year,
+                scopus_view=request.scopus_view,
             )
             provider_results.append(result)
             yield RuntimeEventPayload(
@@ -1128,6 +1130,8 @@ class NativeSDKRuntime(DeterministicRuntime):
                 max_results=6,
                 offline_mode=request.offline_mode,
                 domain=plan.domain,
+                start_year=request.search_start_year,
+                scopus_view=request.scopus_view,
             )
             provider_results.append(result)
             events.append(

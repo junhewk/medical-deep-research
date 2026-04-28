@@ -67,15 +67,14 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.8.7 Anthropic Runtime Update
+### v2.8.7 — Search Reliability & Configurable Lookback
 
-This release removes Git/Git Bash from the default Anthropic desktop path.
-
-- **Claude without Git:** Anthropic runs through a constrained LangChain/Anthropic tool-calling agent instead of the Claude Code SDK, so packaged desktop apps no longer need Git, Git Bash, or Claude Code for normal Claude runs.
-- **Legacy SDK opt-in:** The old `claude-agent-sdk` route is separated behind `MDR_ANTHROPIC_RUNTIME=claude_sdk`; only that mode requires Git/Git Bash preflight checks.
-- **Safer timeout behavior:** If the agent times out before submitting a final report, the app runs the deterministic fallback instead of presenting a recovered partial report as a normal completion.
-- **Fallback translation:** Korean and other non-English fallback reports now attempt the same LLM translation path as agentic reports, preserving the English original as an artifact.
-- **Runtime diagnostics:** Provider and run diagnostics now show the active runtime engine and translation status.
+- **Scopus 500 fix:** the `date=YYYY-YYYY` URL parameter triggered an XSL transform error in the Scopus Search API. Replaced with inline `PUBYEAR > A AND PUBYEAR < B` in the query, so Scopus actually returns results again.
+- **Configurable year lookback:** new "Years lookback" control in Sidebar → Research Settings (default 5 years). Applies uniformly to PubMed, OpenAlex, Semantic Scholar, and Scopus.
+- **Scopus response view selector:** STANDARD (works on any Scopus key) is now the default; users on a higher-tier Elsevier subscription can opt into COMPLETE for full abstracts.
+- **Semantic Scholar gating:** the public unauthenticated endpoint is unreliable, so Semantic Scholar is now skipped silently with a diagnostic when no API key is configured.
+- **PDF parsing without Java:** `markitdown[pdf]` is the primary PDF parser; `opendataloader-pdf` (Java-dependent) is the fallback.
+- **Scopus year display:** `publication_year` is now parsed from `prism:coverDate`, so Scopus results stop rendering "N/A" for the year.
 
 ## Quick Start (from source)
 
@@ -165,11 +164,13 @@ All providers fall back to a deterministic pipeline if SDK/credentials are unava
 
 | Database | Access | Notes |
 |----------|--------|-------|
-| PubMed | Free (NCBI key optional) | EBM publication type boost, relevance sort, 2019+ |
+| PubMed | Free (NCBI key optional) | EBM publication type boost, relevance sort |
 | Cochrane | Free (via PubMed) | Systematic reviews only |
-| OpenAlex | Free | Broad academic coverage, 2015+ |
-| Semantic Scholar | Free (API key optional) | Medicine field filter, 2015+ |
-| Scopus | API key required | Citation counts, broader coverage |
+| OpenAlex | Free | Broad academic coverage |
+| Semantic Scholar | API key required | Medicine field filter; skipped without key |
+| Scopus | API key required | Citation counts, broader coverage; STANDARD/COMPLETE view toggle |
+
+The publication-year window is configurable per-app via Sidebar → Research Settings (default: last 5 years).
 
 ### Full-text Pipeline
 
@@ -177,7 +178,7 @@ After ranking, the agent retrieves open-access full-text for Level I & II studie
 
 1. **Unpaywall** — parallel lookup for ranked studies with DOIs
 2. **PubMed Central** — batch PMID→PMCID conversion, OA service
-3. **PDF parsing** — download and parse to markdown via opendataloader-pdf
+3. **PDF parsing** — `markitdown[pdf]` (primary, no Java required) with `opendataloader-pdf` as a fallback
 
 ## Architecture
 
@@ -239,7 +240,7 @@ MIT License — see [LICENSE](LICENSE)
 - Inspired by [Local Deep Research](https://github.com/LearningCircuit/local-deep-research) by LearningCircuit
 - PubMed/MeSH: [NCBI/NLM](https://www.ncbi.nlm.nih.gov/)
 - Open access: [Unpaywall](https://unpaywall.org/), [PubMed Central](https://pmc.ncbi.nlm.nih.gov/)
-- PDF parsing: [opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf)
+- PDF parsing: [markitdown](https://github.com/microsoft/markitdown), [opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf)
 - Agent SDKs: [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code/sdk), [OpenAI Agents](https://openai.github.io/openai-agents-python/), [Google ADK](https://google.github.io/adk-docs/), [LangChain](https://python.langchain.com/)
 - UI framework: [NiceGUI](https://nicegui.io/)
 

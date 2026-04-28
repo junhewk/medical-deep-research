@@ -172,6 +172,12 @@ class RunRequest(SQLModel):
     query_payload: dict[str, str] = Field(default_factory=dict)
     api_keys: dict[str, str] = Field(default_factory=dict)
     offline_mode: bool = False
+    recent_years_lookback: int = Field(default=5)
+    scopus_view: str = Field(default="STANDARD")
+
+    @property
+    def search_start_year(self) -> int:
+        return datetime.now().year - max(1, self.recent_years_lookback) + 1
 
 
 class RuntimeEventPayload(SQLModel):

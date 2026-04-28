@@ -677,6 +677,13 @@ _I18N: dict[str, dict[str, str]] = {
         "api_keys": "API Keys",
         "api_keys_desc": "Keys are stored locally in the database",
         "save_keys": "Save Keys",
+        "research_settings": "Research Settings",
+        "years_lookback": "Years lookback",
+        "years_lookback_desc": "Limit searches to the last N years (applies to PubMed, OpenAlex, Semantic Scholar, Scopus)",
+        "save_settings": "Save Settings",
+        "settings_saved": "Settings saved",
+        "scopus_view": "Scopus response view",
+        "scopus_view_desc": "STANDARD works for any Scopus key. COMPLETE adds full abstracts but requires a higher Elsevier subscription.",
         "research_runs": "Research Runs",
         "no_runs": "No runs yet.",
         "select_run": "Select a run to inspect",
@@ -750,6 +757,13 @@ _I18N: dict[str, dict[str, str]] = {
         "api_keys": "API 키",
         "api_keys_desc": "키는 로컬 데이터베이스에 저장됩니다",
         "save_keys": "키 저장",
+        "research_settings": "연구 설정",
+        "years_lookback": "검색 연도 범위",
+        "years_lookback_desc": "최근 N년 이내 문헌만 검색합니다 (PubMed, OpenAlex, Semantic Scholar, Scopus)",
+        "save_settings": "설정 저장",
+        "settings_saved": "설정이 저장되었습니다",
+        "scopus_view": "Scopus 응답 형식",
+        "scopus_view_desc": "STANDARD는 모든 Scopus 키에서 동작합니다. COMPLETE는 전체 초록을 포함하지만 상위 Elsevier 구독이 필요합니다.",
         "research_runs": "연구 기록",
         "no_runs": "연구 기록이 없습니다.",
         "select_run": "연구를 선택하세요",
@@ -1776,6 +1790,39 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                         model_selector.refresh()
 
                     ui.button(t("save_keys"), on_click=save_keys).props("outline size=sm").style(
+                        "color: var(--accent); border-color: var(--accent); margin-top: 0.5rem"
+                    )
+
+                # Research Settings (collapsible)
+                with ui.expansion(t("research_settings"), icon="tune").classes("mdr-card w-full").props("dense"):
+                    ui.html(
+                        f'<div class="mdr-section-desc" style="margin-bottom:0.5rem">{t("years_lookback_desc")}</div>'
+                    )
+                    years_input = ui.number(
+                        label=t("years_lookback"),
+                        value=service.get_recent_years_lookback(),
+                        min=1, max=50, step=1, format="%d",
+                    ).props("outlined dark dense").classes("w-full")
+
+                    ui.html(
+                        f'<div class="mdr-section-desc" style="margin-top:0.75rem; margin-bottom:0.5rem">{t("scopus_view_desc")}</div>'
+                    )
+                    scopus_view_select = ui.select(
+                        {"STANDARD": "STANDARD", "COMPLETE": "COMPLETE"},
+                        label=t("scopus_view"),
+                        value=service.get_scopus_view(),
+                    ).props("outlined dark dense").classes("w-full")
+
+                    def save_research_settings() -> None:
+                        try:
+                            value = int(years_input.value or 5)
+                        except (TypeError, ValueError):
+                            value = 5
+                        service.set_recent_years_lookback(value)
+                        service.set_scopus_view(scopus_view_select.value or "STANDARD")
+                        ui.notify(t("settings_saved"), type="positive")
+
+                    ui.button(t("save_settings"), on_click=save_research_settings).props("outline size=sm").style(
                         "color: var(--accent); border-color: var(--accent); margin-top: 0.5rem"
                     )
 

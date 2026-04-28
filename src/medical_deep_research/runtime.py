@@ -2796,6 +2796,7 @@ class AnthropicRuntime(NativeSDKRuntime):
     verifier_name = "Claude Verification Agent"
     native_agent_name = "Claude Research Agent"
     agentic_timeout_seconds = _env_float("MDR_ANTHROPIC_AGENTIC_TIMEOUT_SECONDS", 600.0)
+    first_tool_timeout_seconds = _env_float("MDR_ANTHROPIC_FIRST_TOOL_TIMEOUT_SECONDS", 120.0)
     max_retries = _env_int("MDR_ANTHROPIC_MAX_RETRIES", 5)
 
     @property
@@ -2823,13 +2824,26 @@ class AnthropicRuntime(NativeSDKRuntime):
         )
 
         while True:
-            queued: RuntimeEventPayload | None = await bridge.queue.get()
+            timeout = self.first_tool_timeout_seconds if bridge._tool_call_count == 0 else None
+            try:
+                queued: RuntimeEventPayload | None = await asyncio.wait_for(bridge.queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                if bridge._tool_call_count == 0 and not agent_task.done():
+                    bridge._intermediate["startup_timeout_reason"] = (
+                        f"{self.runtime_name} did not begin tool use within "
+                        f"{self.first_tool_timeout_seconds:g}s; running deterministic fallback."
+                    )
+                    agent_task.cancel()
+                    break
+                continue
             if queued is None:
                 break
             yield queued
 
         try:
             await agent_task
+        except asyncio.CancelledError:
+            pass
         except Exception as exc:
             _log.warning("Anthropic LangChain agent task error: %s", exc)
             bridge.set_error(exc)
@@ -2875,6 +2889,9 @@ class AnthropicRuntime(NativeSDKRuntime):
             yield event
 
     def _agentic_fallback_reason(self, bridge: AgenticEventBridge) -> str | None:
+        startup_timeout_reason = bridge._intermediate.get("startup_timeout_reason")
+        if startup_timeout_reason:
+            return str(startup_timeout_reason)
         submitted = bridge._intermediate.get("submitted_report")
         if isinstance(submitted, str) and submitted.strip():
             return None

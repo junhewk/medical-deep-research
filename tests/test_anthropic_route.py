@@ -29,6 +29,10 @@ class FastTimeoutAnthropicRuntime(AlwaysAvailableAnthropicRuntime):
     agentic_timeout_seconds = 0.01
 
 
+class FastStartupTimeoutAnthropicRuntime(AlwaysAvailableAnthropicRuntime):
+    first_tool_timeout_seconds = 0.01
+
+
 def fake_lc_tool(arg: object = None) -> object:
     def decorate(func: Callable[..., object], name: str | None = None) -> Callable[..., object]:
         setattr(func, "name", name or func.__name__)
@@ -350,6 +354,26 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(final.extra["agentic_fallback"])
         self.assertIn("timed out before submitting a final report", final.extra["fallback_reason"])
         self.assertGreater(final.extra["ranked_results"], 0)
+
+    async def test_startup_watchdog_falls_back_before_global_timeout(self) -> None:
+        async def stalled_agent(_tools: list[object], _inputs: dict[str, object]) -> object:
+            await asyncio.sleep(1)
+            return {"messages": []}
+
+        events = await self.collect_events(stalled_agent, runtime=FastStartupTimeoutAnthropicRuntime())
+        completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
+
+        final = completed[-1]
+        self.assertEqual(final.extra["execution_mode"], "deterministic_fallback")
+        self.assertIn("did not begin tool use within 0.01s", final.extra["fallback_reason"])
+        self.assertGreater(final.extra["ranked_results"], 0)
+        fallback_notice = next(
+            event
+            for event in events
+            if event.event_type == EventType.AGENT_STARTED
+            and event.extra.get("source_execution_mode") == "native_sdk_agentic"
+        )
+        self.assertFalse(fallback_notice.extra["had_error"])
 
     async def test_submitted_report_stops_before_late_timeout(self) -> None:
         report = make_valid_report().strip()

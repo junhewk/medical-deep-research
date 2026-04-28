@@ -13,7 +13,7 @@ hiddenimports = ['medical_deep_research', 'medical_deep_research.main', 'medical
 hiddenimports += collect_submodules('medical_deep_research')
 tmp_ret = collect_all('nicegui')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-for _pkg in ('anthropic', 'langchain', 'langchain_anthropic', 'langgraph', 'deepagents'):
+for _pkg in ('anthropic', 'langchain', 'langchain_anthropic', 'langgraph', 'deepagents', 'markitdown'):
     if _importlib_util.find_spec(_pkg) is None:
         continue
     tmp_ret = collect_all(_pkg)

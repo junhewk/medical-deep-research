@@ -22,6 +22,11 @@ class AppDatabase:
     def create_all(self) -> None:
         SQLModel.metadata.create_all(self.engine)
 
+    def close(self) -> None:
+        # On Windows, SQLite holds the file handle until the engine is disposed,
+        # which blocks tempdir cleanup in tests and prevents safe re-opens.
+        self.engine.dispose()
+
     @contextmanager
     def session(self) -> Iterator[Session]:
         with Session(self.engine) as session:

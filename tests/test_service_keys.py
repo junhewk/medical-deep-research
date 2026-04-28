@@ -14,14 +14,19 @@ class ServiceKeyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
             database = AppDatabase(settings)
-            database.create_all()
-            service = ResearchService(database)
+            try:
+                database.create_all()
+                service = ResearchService(database)
 
-            service.save_api_key("scopus", "stale-key")
-            self.assertEqual(service.get_api_keys()["scopus"], "stale-key")
+                service.save_api_key("scopus", "stale-key")
+                self.assertEqual(service.get_api_keys()["scopus"], "stale-key")
 
-            service.save_api_key("scopus", "")
-            self.assertNotIn("scopus", service.get_api_keys())
+                service.save_api_key("scopus", "")
+                self.assertNotIn("scopus", service.get_api_keys())
+            finally:
+                # On Windows, the SQLite engine must be disposed before the
+                # TemporaryDirectory cleanup or the file handle blocks deletion.
+                database.close()
 
 
 if __name__ == "__main__":

@@ -78,6 +78,17 @@ def _env_float(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 class AgentResearchOutput(BaseModel):
     plan: QueryPlan
     search_results: list[SearchProviderResult] = Field(default_factory=list)
@@ -505,6 +516,21 @@ def _langchain_final_text(result: Any) -> str | None:
 
 class _ReportSubmitted(BaseException):
     """Internal control-flow sentinel used to stop LangChain after accepted submit_report."""
+
+
+def _anthropic_cached_system_prompt(system_prompt: str) -> Any:
+    """Wrap the stable Anthropic system prompt in an ephemeral cache block."""
+    from langchain_core.messages import SystemMessage
+
+    return SystemMessage(
+        content=[
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    )
 
 
 class DeterministicRuntime(ResearchRuntime):
@@ -2770,6 +2796,7 @@ class AnthropicRuntime(NativeSDKRuntime):
     verifier_name = "Claude Verification Agent"
     native_agent_name = "Claude Research Agent"
     agentic_timeout_seconds = _env_float("MDR_ANTHROPIC_AGENTIC_TIMEOUT_SECONDS", 600.0)
+    max_retries = _env_int("MDR_ANTHROPIC_MAX_RETRIES", 5)
 
     @property
     def sdk_available(self) -> bool:
@@ -2880,11 +2907,22 @@ class AnthropicRuntime(NativeSDKRuntime):
     ) -> None:
         try:
             from langchain.agents import create_agent
+            from langchain_anthropic import ChatAnthropic
+
+            model = ChatAnthropic(
+                model_name=request.model,
+                max_retries=self.max_retries,
+                temperature=0.1,
+                timeout=60.0,
+            )
+            system_prompt = _anthropic_cached_system_prompt(
+                agentic_system_prompt(request, self.runtime_name)
+            )
 
             agent = create_agent(
-                model=f"anthropic:{request.model}",
+                model=model,
                 tools=tools,
-                system_prompt=agentic_system_prompt(request, self.runtime_name),
+                system_prompt=system_prompt,
             )
 
             final_text: str | None = None

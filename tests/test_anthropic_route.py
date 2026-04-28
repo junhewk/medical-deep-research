@@ -15,6 +15,10 @@ from medical_deep_research.research.models import EvidenceStudy, ScoredStudy, Se
 from medical_deep_research.runtime import AnthropicRuntime
 
 
+FAKE_CHAT_ANTHROPIC_KWARGS: list[dict[str, object]] = []
+FAKE_SYSTEM_PROMPTS: list[object] = []
+
+
 class AlwaysAvailableAnthropicRuntime(AnthropicRuntime):
     @property
     def sdk_available(self) -> bool:
@@ -52,6 +56,7 @@ async def call_fake_tool(tools: list[object], tool_name: str, **kwargs: object) 
 def fake_langchain_agent(agent_impl: Callable[[list[object], dict[str, object]], Any]) -> object:
     agents_module = types.ModuleType("langchain.agents")
     core_tools_module = types.ModuleType("langchain_core.tools")
+    core_messages_module = types.ModuleType("langchain_core.messages")
     langchain_module = types.ModuleType("langchain")
     langchain_core_module = types.ModuleType("langchain_core")
     langchain_anthropic_module = types.ModuleType("langchain_anthropic")
@@ -66,13 +71,26 @@ def fake_langchain_agent(agent_impl: Callable[[list[object], dict[str, object]],
                 return await result
             return result
 
-    def create_agent(*, model: str, tools: list[object], system_prompt: str) -> FakeAgent:
-        assert model.startswith("anthropic:")
+    class FakeChatAnthropic:
+        def __init__(self, **kwargs: object) -> None:
+            FAKE_CHAT_ANTHROPIC_KWARGS.append(dict(kwargs))
+            self.kwargs = kwargs
+
+    class FakeSystemMessage:
+        def __init__(self, content: object = None, **kwargs: object) -> None:
+            self.content = content
+            self.kwargs = kwargs
+
+    def create_agent(*, model: object, tools: list[object], system_prompt: object) -> FakeAgent:
+        assert isinstance(model, FakeChatAnthropic)
         assert system_prompt
+        FAKE_SYSTEM_PROMPTS.append(system_prompt)
         return FakeAgent(tools)
 
     agents_module.create_agent = create_agent
     core_tools_module.tool = fake_lc_tool
+    core_messages_module.SystemMessage = FakeSystemMessage
+    langchain_anthropic_module.ChatAnthropic = FakeChatAnthropic
 
     previous = {
         name: sys.modules.get(name)
@@ -80,6 +98,7 @@ def fake_langchain_agent(agent_impl: Callable[[list[object], dict[str, object]],
             "langchain",
             "langchain.agents",
             "langchain_core",
+            "langchain_core.messages",
             "langchain_core.tools",
             "langchain_anthropic",
         )
@@ -87,6 +106,7 @@ def fake_langchain_agent(agent_impl: Callable[[list[object], dict[str, object]],
     sys.modules["langchain"] = langchain_module
     sys.modules["langchain.agents"] = agents_module
     sys.modules["langchain_core"] = langchain_core_module
+    sys.modules["langchain_core.messages"] = core_messages_module
     sys.modules["langchain_core.tools"] = core_tools_module
     sys.modules["langchain_anthropic"] = langchain_anthropic_module
     try:
@@ -215,6 +235,8 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         runtime: AnthropicRuntime | None = None,
         request: RunRequest | None = None,
     ) -> list[object]:
+        FAKE_CHAT_ANTHROPIC_KWARGS.clear()
+        FAKE_SYSTEM_PROMPTS.clear()
         with (
             fake_langchain_agent(agent_impl),
             patch("medical_deep_research.runtime.search_source", fake_search_source),
@@ -262,6 +284,18 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(start.extra["runtime_engine"], "langchain_anthropic")
         self.assertNotIn("git", str(start.extra).lower())
+
+    async def test_anthropic_agent_uses_extra_retries_and_cached_system_prompt(self) -> None:
+        async def no_op_agent(_tools: list[object], _inputs: dict[str, object]) -> object:
+            return {"messages": []}
+
+        await self.collect_events(no_op_agent)
+
+        self.assertEqual(FAKE_CHAT_ANTHROPIC_KWARGS[-1]["max_retries"], 5)
+        self.assertEqual(FAKE_CHAT_ANTHROPIC_KWARGS[-1]["temperature"], 0.1)
+        content = getattr(FAKE_SYSTEM_PROMPTS[-1], "content")
+        self.assertIsInstance(content, list)
+        self.assertEqual(content[0]["cache_control"], {"type": "ephemeral"})
 
     async def test_planning_only_run_falls_back_before_empty_report(self) -> None:
         async def planning_only_agent(tools: list[object], _inputs: dict[str, object]) -> object:

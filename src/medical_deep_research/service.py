@@ -186,6 +186,8 @@ class ResearchService:
             "tool_calls": payload.get("tool_calls"),
             "had_error": payload.get("had_error"),
             "error_message": payload.get("error_message"),
+            "post_submit_error_message": payload.get("post_submit_error_message"),
+            "post_submit_error_type": payload.get("post_submit_error_type"),
             "sdk_error_type": payload.get("sdk_error_type"),
             "sdk_exit_code": payload.get("sdk_exit_code"),
             "sdk_stderr": payload.get("sdk_stderr"),

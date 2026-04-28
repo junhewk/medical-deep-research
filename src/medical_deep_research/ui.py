@@ -2109,6 +2109,10 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                         ui.label(run_diag["error_message"]).style(
                                             "font-size: 0.75rem; color: var(--error); margin-top: 0.25rem"
                                         )
+                                    if run_diag.get("post_submit_error_message"):
+                                        ui.label(f"Post-submit warning: {run_diag['post_submit_error_message']}").style(
+                                            "font-size: 0.75rem; color: var(--warn); margin-top: 0.25rem"
+                                        )
                                     if run_diag.get("sdk_stderr_tail"):
                                         ui.label(f"SDK stderr: {run_diag['sdk_stderr_tail']}").style(
                                             "font-size: 0.75rem; color: var(--warn); margin-top: 0.25rem"

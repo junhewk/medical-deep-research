@@ -317,7 +317,7 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("timed out before submitting a final report", final.extra["fallback_reason"])
         self.assertGreater(final.extra["ranked_results"], 0)
 
-    async def test_submitted_report_survives_late_timeout(self) -> None:
+    async def test_submitted_report_stops_before_late_timeout(self) -> None:
         report = make_valid_report().strip()
 
         async def timeout_after_submit_agent(tools: list[object], _inputs: dict[str, object]) -> object:
@@ -333,7 +333,9 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
 
         final = completed[-1]
         self.assertEqual(final.extra["execution_mode"], "native_sdk_agentic")
-        self.assertTrue(final.extra["had_error"])
+        self.assertFalse(final.extra["had_error"])
+        self.assertIsNone(final.extra["error_message"])
+        self.assertNotIn("post_submit_error_message", final.extra)
         self.assertEqual(final.extra["report_source"], "submitted_report")
         self.assertEqual(final.report_markdown, report)
 
@@ -385,6 +387,72 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Report quality gate failed", result["error"])
         self.assertNotIn("submitted_report", bridge._intermediate)
         self.assertIsNone(bridge._result)
+
+    async def test_submit_report_rejects_out_of_order_evidence_levels(self) -> None:
+        bridge = AgenticEventBridge()
+        bridge.search_results.append(
+            SearchProviderResult(
+                source="PubMed",
+                query="cardiac surgery ESPB PCA pain",
+                studies=[make_ranked_study()],
+            )
+        )
+        bridge.ranked_studies = [make_ranked_study()]
+        synthesis = " ".join(
+            "The evidence summary compares study designs, outcomes, limitations, and clinical applicability [1] [2]."
+            for _ in range(90)
+        )
+        report = f"""# Research Report
+
+## Executive Summary
+ESPB may reduce pain after cardiac surgery, but certainty varies by study design [1].
+
+## Background
+The clinical question compares regional analgesia with PCA-only strategies.
+
+## Methods
+The search reviewed PubMed and ranked evidence by relevance and study quality.
+
+## Results
+Level IV evidence suggested a possible signal from observational studies [1].
+{synthesis}
+Level I evidence synthesized randomized evidence and should have appeared before lower-level evidence [2].
+
+## Discussion
+The interpretation should be proportional to the evidence base and its limitations [1] [2].
+
+## Conclusions
+Higher-level evidence should be presented before lower-level evidence.
+
+## References
+[1] Test AB. Observational ESPB study. Journal. 2023.
+[2] Test CD. Systematic review of ESPB. Journal. 2024.
+"""
+
+        result = await tool_submit_report(make_request(), bridge, report)
+
+        self.assertIn("error", result)
+        self.assertTrue(any("Level I to Level V" in issue for issue in result["issues"]))
+        self.assertNotIn("submitted_report", bridge._intermediate)
+
+    async def test_submit_report_rejects_reference_number_gaps(self) -> None:
+        bridge = AgenticEventBridge()
+        bridge.search_results.append(
+            SearchProviderResult(
+                source="PubMed",
+                query="cardiac surgery ESPB PCA pain",
+                studies=[make_ranked_study()],
+            )
+        )
+        bridge.ranked_studies = [make_ranked_study()]
+        report = make_valid_report().replace("[1] Test AB.", "[1] Test AB.\n[3] Test CD.")
+        report = report.replace("limited evidence retrieved in this run.", "limited evidence retrieved in this run [3].")
+
+        result = await tool_submit_report(make_request(), bridge, report)
+
+        self.assertIn("error", result)
+        self.assertTrue(any("ordered sequentially" in issue for issue in result["issues"]))
+        self.assertNotIn("submitted_report", bridge._intermediate)
 
 
 if __name__ == "__main__":

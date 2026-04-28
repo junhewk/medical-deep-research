@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 import re
 import xml.etree.ElementTree as ET
@@ -18,6 +19,7 @@ SEMANTIC_SCHOLAR_FIELDS = (
 )
 HTTP_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 POLITE_EMAIL = "medical-deep-research@users.noreply.github.com"
+USER_AGENT = f"MedicalDeepResearch/2.8.7 (mailto:{POLITE_EMAIL})"
 LANDMARK_JOURNALS = {
     "new england journal of medicine",
     "nejm",
@@ -93,6 +95,17 @@ def _network_error(source: str, query: str, exc: Exception) -> SearchProviderRes
         query=query,
         error=message,
     )
+
+
+def _clean_api_key(value: str | None) -> str:
+    key = (value or "").strip().strip("\"'")
+    key = key.lstrip("\ufeff").strip()
+    header_match = re.match(r"^(?:x-els-apikey|x-api-key|api[-_\s]*key)\s*:\s*(.+)$", key, re.IGNORECASE)
+    if header_match:
+        key = header_match.group(1).strip()
+    if key.lower().startswith("bearer "):
+        key = key[7:].strip()
+    return re.sub(r"\s+", "", key)
 
 
 def _scopus_date_range() -> str:
@@ -314,24 +327,53 @@ async def search_semantic_scholar(
         "limit": str(min(max_results, 100)),
         "fields": SEMANTIC_SCHOLAR_FIELDS,
         "year": "2015-",
-        "fieldsOfStudy": fields_of_study or "Medicine",
     }
-    headers = {"Accept": "application/json"}
+    requested_fields_of_study = fields_of_study or "Medicine"
+    if requested_fields_of_study:
+        params["fieldsOfStudy"] = requested_fields_of_study
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+    }
+    api_key = _clean_api_key(api_key)
     if api_key:
         headers["x-api-key"] = api_key
 
+    async def _get_with_retries(client: httpx.AsyncClient, request_params: dict[str, object]) -> httpx.Response:
+        response: httpx.Response | None = None
+        for attempt in range(4):
+            response = await client.get(SEMANTIC_SCHOLAR_BASE_URL, params=request_params)
+            if response.status_code not in {429, 500, 502, 503, 504}:
+                return response
+            retry_after = response.headers.get("retry-after")
+            try:
+                delay = float(retry_after) if retry_after else 1.5 * (attempt + 1)
+            except ValueError:
+                delay = 1.5 * (attempt + 1)
+            await asyncio.sleep(min(delay, 10.0))
+        assert response is not None
+        return response
+
+    def _parse_papers(response: httpx.Response) -> list[dict[str, object]]:
+        payload = response.json()
+        data = payload.get("data", []) if isinstance(payload, dict) else []
+        return data if isinstance(data, list) else []
+
     try:
-        import asyncio as _aio
-        response = None
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers=headers) as client:
-            for attempt in range(3):
-                response = await client.get(SEMANTIC_SCHOLAR_BASE_URL, params=params)
-                if response.status_code != 429:
-                    break
-                await _aio.sleep(1.5 * (attempt + 1))
-            if response is not None:
+            response = await _get_with_retries(client, params)
+            if response.status_code in {400, 422} and "fieldsOfStudy" in params:
+                fallback_params = dict(params)
+                fallback_params.pop("fieldsOfStudy", None)
+                response = await _get_with_retries(client, fallback_params)
+            response.raise_for_status()
+            papers = _parse_papers(response)
+            if not papers and "fieldsOfStudy" in params:
+                fallback_params = dict(params)
+                fallback_params.pop("fieldsOfStudy", None)
+                response = await _get_with_retries(client, fallback_params)
                 response.raise_for_status()
-        papers = (response.json() if response else {}).get("data", [])
+                papers = _parse_papers(response)
         studies: list[EvidenceStudy] = []
         for paper in papers:
             title = paper.get("title") or "Untitled"
@@ -391,7 +433,7 @@ async def search_scopus(
 ) -> SearchProviderResult:
     if offline_mode:
         return _offline_result("Scopus", query)
-    api_key = (api_key or "").strip()
+    api_key = _clean_api_key(api_key)
     if not api_key:
         return _scopus_keyed_skip(query, "Scopus API key not configured")
 

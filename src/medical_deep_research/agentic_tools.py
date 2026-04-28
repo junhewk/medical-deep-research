@@ -383,6 +383,8 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
             "(5) A conclusion with clear takeaways; "
             "(6) A numbered references section. "
             "Cite studies by [number] throughout the text. "
+            "In Results/Findings, present evidence levels from highest to lowest: Level I, Level II, Level III, Level IV, Level V. "
+            "Number references sequentially as [1], [2], [3] with no gaps, and use only those same numbers in text citations. "
             "Write in the language specified by the query language setting."
         ),
     }
@@ -462,6 +464,107 @@ def _has_report_section(text_lower: str, aliases: tuple[str, ...]) -> bool:
     return False
 
 
+def _heading_matches(line: str, aliases: tuple[str, ...]) -> bool:
+    lowered = line.strip().lower()
+    lowered = re.sub(r"^#{1,6}\s*", "", lowered)
+    lowered = re.sub(r"^\d+[.)]\s*", "", lowered)
+    return any(re.search(rf"^{re.escape(alias.lower())}\b", lowered) for alias in aliases)
+
+
+def _extract_section(
+    report_markdown: str,
+    start_aliases: tuple[str, ...],
+    end_aliases: tuple[str, ...],
+) -> str:
+    lines = report_markdown.splitlines()
+    start_index: int | None = None
+    for index, line in enumerate(lines):
+        if _heading_matches(line, start_aliases):
+            start_index = index + 1
+            break
+    if start_index is None:
+        return ""
+    end_index = len(lines)
+    for index in range(start_index, len(lines)):
+        if re.match(r"^\s*#{1,6}\s+", lines[index]) and _heading_matches(lines[index], end_aliases):
+            end_index = index
+            break
+        if _heading_matches(lines[index], end_aliases):
+            end_index = index
+            break
+    return "\n".join(lines[start_index:end_index]).strip()
+
+
+def _extract_references_section(report_markdown: str) -> tuple[str, str]:
+    start_aliases = _REPORT_SECTION_GROUPS["references"]
+    lines = report_markdown.splitlines()
+    for index, line in enumerate(lines):
+        if _heading_matches(line, start_aliases):
+            return "\n".join(lines[:index]).strip(), "\n".join(lines[index + 1:]).strip()
+    return report_markdown, ""
+
+
+def _reference_number_issues(report_markdown: str) -> list[str]:
+    body, references = _extract_references_section(report_markdown)
+    ref_numbers = [
+        int(match.group(1))
+        for match in re.finditer(r"(?m)^\s*(?:[-*]\s*)?\[(\d{1,3})\]\s+", references)
+    ]
+    if not ref_numbers:
+        return ["References must be numbered as [1], [2], [3], etc."]
+
+    issues: list[str] = []
+    expected = list(range(1, len(ref_numbers) + 1))
+    if ref_numbers != expected:
+        issues.append("References must be ordered sequentially from [1] with no gaps.")
+
+    ref_set = set(ref_numbers)
+    citation_numbers = {int(match.group(1)) for match in re.finditer(r"\[(\d{1,3})\]", body)}
+    missing = sorted(number for number in citation_numbers if number not in ref_set)
+    if missing:
+        issues.append(
+            "Text citations reference missing bibliography entries: "
+            + ", ".join(f"[{number}]" for number in missing)
+            + "."
+        )
+    return issues
+
+
+_EVIDENCE_LEVEL_RE = re.compile(r"\bLevel\s+(IV|III|II|I|V)\b", re.IGNORECASE)
+_EVIDENCE_LEVEL_ORDER = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
+
+
+def _evidence_level_order_issues(report_markdown: str) -> list[str]:
+    findings = _extract_section(
+        report_markdown,
+        _REPORT_SECTION_GROUPS["results"],
+        (
+            *_REPORT_SECTION_GROUPS["discussion"],
+            *_REPORT_SECTION_GROUPS["conclusions"],
+            *_REPORT_SECTION_GROUPS["references"],
+            "limitations",
+            "implications",
+            "recommendations",
+        ),
+    )
+    if not findings:
+        return []
+
+    ordered_levels = [
+        _EVIDENCE_LEVEL_ORDER[match.group(1).upper()]
+        for match in _EVIDENCE_LEVEL_RE.finditer(findings)
+    ]
+    if len(set(ordered_levels)) < 2:
+        return []
+
+    highest_seen = ordered_levels[0]
+    for level in ordered_levels[1:]:
+        if level < highest_seen:
+            return ["Results/Findings must present evidence levels from Level I to Level V, not lower levels before higher levels."]
+        highest_seen = max(highest_seen, level)
+    return []
+
+
 def report_quality_issues(report_markdown: str, ranked_count: int = 0, search_count: int = 0) -> list[str]:
     """Return quality issues that should make an agent rewrite its final report."""
     report_markdown = str(report_markdown).strip()
@@ -497,6 +600,9 @@ def report_quality_issues(report_markdown: str, ranked_count: int = 0, search_co
             issues.append("Report must cite searched studies with numbered citations like [1].")
         if not _has_report_section(text_lower, _REPORT_SECTION_GROUPS["references"]):
             issues.append("Report must include a References section.")
+        else:
+            issues.extend(_reference_number_issues(report_markdown))
+        issues.extend(_evidence_level_order_issues(report_markdown))
 
     return issues
 
@@ -520,7 +626,7 @@ async def tool_submit_report(request: RunRequest, bridge: AgenticEventBridge, re
             "instructions": (
                 "Submit the complete markdown report itself, not a status update. "
                 "Use the required sections, synthesize the evidence, cite searched studies as [n], "
-                "and include numbered references."
+                "include numbered references in strict [1], [2], [3] order, and organize evidence levels from Level I to Level V."
             ),
         }
     bridge._intermediate["submitted_report"] = report_markdown
@@ -943,6 +1049,8 @@ Do NOT repeat searches. One call per database, then move forward.
 - Use these markdown sections: Executive Summary, Background, Methods, Results/Findings, Discussion, Conclusions, References.
 - Synthesize across studies; compare findings, study designs, populations, agreement, contradictions, and evidence quality.
 - Cite only searched studies as [1], [2], etc. Do not cite unsearched sources.
+- In Results/Findings, order evidence levels from Level I to Level V. Never put Level IV/V evidence before Level I/II evidence.
+- Number References sequentially as [1], [2], [3] with no gaps. In-text citations must use only those reference numbers.
 - Never write phrases like "the full report is above/below" or "I have completed the report" in `submit_report`.
 
 ## Anti-Hallucination Rules (CRITICAL)
@@ -951,7 +1059,7 @@ Do NOT repeat searches. One call per database, then move forward.
 - ONLY state what abstracts EXPLICITLY say.
 - If a conclusion says "no significant difference", report that — NEVER reverse or contradict findings.
 - If findings are mixed or inconclusive, report that accurately.
-- Cite studies as [1], [2], etc. throughout the text.
+- Cite studies as [1], [2], etc. throughout the text and keep citation numbers synchronized with the References section.
 
 ## Query
 
@@ -1019,6 +1127,7 @@ Organize by evidence level, with [n] citations throughout:
 - Level III–V evidence
 - Compare and contrast findings across studies
 - Note agreements, contradictions, and effect sizes
+Do not present Level IV/V evidence before Level I/II evidence.
 
 ### 5. Discussion
 - Address population-specific considerations
@@ -1031,6 +1140,7 @@ Clear clinical takeaways. What the evidence supports, what remains uncertain.
 
 ### 7. References
 Vancouver format with PMIDs/DOIs: [n] Authors. Title. Journal. Year;Vol(Issue):Pages. DOI/PMID.
+Number references sequentially from [1] with no gaps, and do not cite numbers that are absent here.
 
 Write in {request.language} language. If you write the prose in a non-English language, keep numbered \
 citations [n], PMID, DOI, journal names, and reference formatting intact."""
@@ -1098,6 +1208,7 @@ What should be done next? Where are the gaps in knowledge?
 
 ### 7. References
 Vancouver format with DOIs: [n] Authors. Title. Journal. Year;Vol(Issue):Pages. DOI.
+Number references sequentially from [1] with no gaps, and do not cite numbers that are absent here.
 
 Write in {request.language} language. If you write the prose in a non-English language, keep numbered \
 citations [n], DOI, journal names, and reference formatting intact."""

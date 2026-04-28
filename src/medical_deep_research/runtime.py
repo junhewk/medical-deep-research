@@ -503,6 +503,10 @@ def _langchain_final_text(result: Any) -> str | None:
     return None
 
 
+class _ReportSubmitted(BaseException):
+    """Internal control-flow sentinel used to stop LangChain after accepted submit_report."""
+
+
 class DeterministicRuntime(ResearchRuntime):
     planner_name: str = "Planner"
     search_agent_name: str = "Search Agent"
@@ -1616,6 +1620,10 @@ def _agentic_final_events(
         completion_extra["fallback_reason"] = fallback_reason
     completion_extra.update(_agentic_failure_diagnostics(bridge))
     completion_extra.update(_translation_diagnostics(bridge))
+    post_submit_error = bridge._intermediate.get("post_submit_error_message")
+    if post_submit_error:
+        completion_extra["post_submit_error_message"] = str(post_submit_error)
+        completion_extra["post_submit_error_type"] = bridge._intermediate.get("post_submit_error_type")
 
     return [
         RuntimeEventPayload(
@@ -2527,7 +2535,108 @@ class GoogleRuntime(NativeSDKRuntime):
 # LangChain Local LLM — agentic runtime (Ollama / LM Studio)
 # ---------------------------------------------------------------------------
 
-def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> list[Any]:
+def _truncate_tool_text(value: Any, max_chars: int) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.replace("\r\n", "\n").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
+def _compact_study_dict(study: Any, *, abstract_chars: int = 240) -> dict[str, Any]:
+    if not isinstance(study, dict):
+        return {"value": _truncate_tool_text(str(study), abstract_chars)}
+    keys = (
+        "idx",
+        "rank",
+        "source_id",
+        "title",
+        "year",
+        "publication_year",
+        "journal",
+        "evidence_level",
+        "citation_count",
+        "pmid",
+        "doi",
+        "sources",
+        "source",
+        "pre_score",
+        "score",
+    )
+    compact = {key: study.get(key) for key in keys if study.get(key) not in (None, "", [])}
+    abstract = study.get("abstract")
+    if abstract:
+        compact["abstract"] = _truncate_tool_text(str(abstract).replace("\n", " "), abstract_chars)
+    authors = study.get("authors")
+    if isinstance(authors, list) and authors:
+        compact["authors"] = authors[:3]
+    return compact
+
+
+def _compact_tool_result(tool_name: str, result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+
+    if tool_name.startswith("search_"):
+        studies = result.get("studies") if isinstance(result.get("studies"), list) else []
+        return {
+            "source": result.get("source"),
+            "count": result.get("count", len(studies)),
+            "error": result.get("error"),
+            "skipped": result.get("skipped"),
+            "studies": [_compact_study_dict(study, abstract_chars=220) for study in studies[:6]],
+            "truncated_studies": max(0, len(studies) - 6),
+        }
+
+    if tool_name == "get_studies":
+        studies = result.get("studies") if isinstance(result.get("studies"), list) else []
+        payload = {key: result.get(key) for key in ("error", "total", "context") if result.get(key) is not None}
+        payload["studies"] = [_compact_study_dict(study, abstract_chars=240) for study in studies[:20]]
+        payload["truncated_studies"] = max(0, len(studies) - 20)
+        return payload
+
+    if tool_name == "verify_studies":
+        return {
+            "verified": result.get("verified"),
+            "missing": result.get("missing"),
+            "notes": result.get("notes", [])[:5] if isinstance(result.get("notes"), list) else result.get("notes"),
+        }
+
+    if tool_name == "synthesize_report":
+        compact = dict(result)
+        studies = compact.get("studies") if isinstance(compact.get("studies"), list) else []
+        compact["studies"] = [_compact_study_dict(study, abstract_chars=320) for study in studies[:12]]
+        compact["truncated_studies"] = max(0, len(studies) - 12)
+        return compact
+
+    if tool_name == "fetch_fulltext":
+        compact = dict(result)
+        for key in ("fulltext", "markdown", "text"):
+            if key in compact:
+                compact[key] = _truncate_tool_text(compact[key], 1200)
+        return compact
+
+    if tool_name == "parse_pdf":
+        compact = dict(result)
+        for key in ("fulltext", "markdown", "text"):
+            if key in compact:
+                compact[key] = _truncate_tool_text(compact[key], 3500)
+        return compact
+
+    return result
+
+
+def _langchain_tool_json(tool_name: str, result: Any) -> str:
+    return json.dumps(_compact_tool_result(tool_name, result), default=str)
+
+
+def _build_langchain_tools(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    *,
+    stop_after_submit: bool = False,
+) -> list[Any]:
     """Build LangChain ``StructuredTool`` instances wrapping shared tool functions.
 
     Each tool has a properly typed async function so LangChain infers correct
@@ -2541,7 +2650,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("plan_search", {"query": query})
         result = await tool_plan_search(request, bridge, query, query_type)
         await bridge.on_tool_end("plan_search", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("plan_search", result)
 
     @lc_tool
     async def suggest_databases(query: str) -> str:
@@ -2549,7 +2658,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("suggest_databases", {"query": query})
         result = await tool_suggest_databases(request, bridge, query)
         await bridge.on_tool_end("suggest_databases", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("suggest_databases", result)
 
     @lc_tool
     async def write_todos(items: list[str]) -> str:
@@ -2557,7 +2666,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("write_todos", {})
         result = await tool_write_todos(request, bridge, items)
         await bridge.on_tool_end("write_todos", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("write_todos", result)
 
     @lc_tool
     async def update_progress(phase: str, message: str) -> str:
@@ -2565,16 +2674,16 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("update_progress", {"phase": phase})
         result = await tool_update_progress(request, bridge, phase, message)
         await bridge.on_tool_end("update_progress", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("update_progress", result)
 
     def _make_search(tool_name: str, source: str) -> Any:
         @lc_tool(tool_name)
         async def _search(query: str, max_results: int = 8) -> str:
             """Search a medical literature database."""
             await bridge.on_tool_start(tool_name, {"query": query})
-            result = await tool_search(request, bridge, source, query, max_results)
+            result = await tool_search(request, bridge, source, query, min(max(int(max_results or 1), 1), 6))
             await bridge.on_tool_end(tool_name, result)
-            return json.dumps(result, default=str)
+            return _langchain_tool_json(tool_name, result)
         _search.description = TOOL_DESCRIPTIONS[tool_name]
         return _search
 
@@ -2586,7 +2695,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("get_studies", {"context": context})
         result = await tool_get_studies(request, bridge, context)
         await bridge.on_tool_end("get_studies", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("get_studies", result)
 
     @lc_tool
     async def finalize_ranking(ranked_indices: list[int], rationale: str = "") -> str:
@@ -2594,7 +2703,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("finalize_ranking", {"count": len(ranked_indices)})
         result = await tool_finalize_ranking(request, bridge, ranked_indices, rationale)
         await bridge.on_tool_end("finalize_ranking", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("finalize_ranking", result)
 
     @lc_tool
     async def verify_studies() -> str:
@@ -2602,7 +2711,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("verify_studies", {})
         result = await tool_verify_studies(request, bridge)
         await bridge.on_tool_end("verify_studies", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("verify_studies", result)
 
     @lc_tool
     async def synthesize_report() -> str:
@@ -2610,7 +2719,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("synthesize_report", {})
         result = await tool_synthesize_report(request, bridge)
         await bridge.on_tool_end("synthesize_report", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("synthesize_report", result)
 
     @lc_tool
     async def submit_report(report_markdown: str) -> str:
@@ -2618,7 +2727,9 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("submit_report", {"length": len(report_markdown)})
         result = await tool_submit_report(request, bridge, report_markdown)
         await bridge.on_tool_end("submit_report", result)
-        return json.dumps(result, default=str)
+        if stop_after_submit and result.get("status") == "ok":
+            raise _ReportSubmitted()
+        return _langchain_tool_json("submit_report", result)
 
     @lc_tool
     async def fetch_fulltext() -> str:
@@ -2626,7 +2737,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("fetch_fulltext", {})
         result = await tool_fetch_fulltext(request, bridge)
         await bridge.on_tool_end("fetch_fulltext", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("fetch_fulltext", result)
 
     @lc_tool
     async def parse_pdf(rank: int) -> str:
@@ -2634,7 +2745,7 @@ def _build_langchain_tools(request: RunRequest, bridge: AgenticEventBridge) -> l
         await bridge.on_tool_start("parse_pdf", {"rank": rank})
         result = await tool_parse_pdf(request, bridge, rank)
         await bridge.on_tool_end("parse_pdf", result)
-        return json.dumps(result, default=str)
+        return _langchain_tool_json("parse_pdf", result)
 
     return [
         plan_search, suggest_databases, write_todos, update_progress,
@@ -2672,7 +2783,7 @@ class AnthropicRuntime(NativeSDKRuntime):
             return
 
         bridge = AgenticEventBridge()
-        tools = _build_langchain_tools(request, bridge)
+        tools = _build_langchain_tools(request, bridge, stop_after_submit=True)
 
         yield _agentic_run_started(self, request)
         yield _agentic_agent_started(self.native_agent_name)
@@ -2790,12 +2901,23 @@ class AnthropicRuntime(NativeSDKRuntime):
                 bridge._intermediate["agent_final_message"] = final_text
             else:
                 bridge.set_result(final_text)
+        except _ReportSubmitted:
+            bridge._intermediate["agent_final_message"] = "Report accepted by submit_report."
         except asyncio.TimeoutError:
             _log.warning("Anthropic LangChain agent timed out after %ss", self.agentic_timeout_seconds)
-            bridge.set_error(TimeoutError(f"Agent timed out after {self.agentic_timeout_seconds}s"))
+            exc = TimeoutError(f"Agent timed out after {self.agentic_timeout_seconds}s")
+            if "submitted_report" in bridge._intermediate:
+                bridge._intermediate["post_submit_error_message"] = _format_exception(exc)
+                bridge._intermediate["post_submit_error_type"] = type(exc).__name__
+            else:
+                bridge.set_error(exc)
         except Exception as exc:
             _log.warning("Anthropic LangChain agent failed: %s", exc)
-            bridge.set_error(exc)
+            if "submitted_report" in bridge._intermediate:
+                bridge._intermediate["post_submit_error_message"] = _format_exception(exc)
+                bridge._intermediate["post_submit_error_type"] = type(exc).__name__
+            else:
+                bridge.set_error(exc)
         finally:
             await bridge.queue.put(None)
 

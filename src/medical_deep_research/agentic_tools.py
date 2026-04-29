@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -32,6 +33,51 @@ from .research.search import POLITE_EMAIL
 from .models import RunRequest
 
 _log = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _debug_jsonable(value: Any, *, _depth: int = 0) -> Any:
+    """Convert SDK/tool objects into JSON-compatible debug payloads."""
+    if _depth > 8:
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _debug_jsonable(v, _depth=_depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_debug_jsonable(item, _depth=_depth + 1) for item in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return _debug_jsonable(value.model_dump(), _depth=_depth + 1)
+        except Exception:
+            pass
+
+    message_payload: dict[str, Any] = {"_class": type(value).__name__}
+    for attr in (
+        "type",
+        "role",
+        "name",
+        "content",
+        "tool_call_id",
+        "tool_calls",
+        "additional_kwargs",
+        "response_metadata",
+    ):
+        if hasattr(value, attr):
+            try:
+                message_payload[attr] = _debug_jsonable(getattr(value, attr), _depth=_depth + 1)
+            except Exception:
+                message_payload[attr] = "<unserializable>"
+    if len(message_payload) > 1:
+        return message_payload
+
+    return str(value)
 
 # ---------------------------------------------------------------------------
 # Event bridge — provider-agnostic shared state + event queue
@@ -76,6 +122,7 @@ class AgenticEventBridge:
         self._tool_call_count = 0
         self._result: str | None = None
         self._error: Exception | None = None
+        self.full_trace_enabled = _env_flag("MDR_SAVE_FULL_TRACE", default=True)
 
         # Shared state written by tools, read by evidence tools
         self.search_results: list[SearchProviderResult] = []
@@ -120,6 +167,9 @@ class AgenticEventBridge:
         if tool_input:
             input_summary = {k: (str(v)[:120] + "..." if len(str(v)) > 120 else v) for k, v in tool_input.items()}
         _log.info("[AGENT CALL #%d] %s  input=%s", self._tool_call_count, tool_name, json.dumps(input_summary, default=str))
+        extra: dict[str, Any] = {"tool_input": input_summary}
+        if self.full_trace_enabled and tool_input is not None:
+            extra["full_tool_input"] = _debug_jsonable(tool_input)
         await self.queue.put(
             RuntimeEventPayload(
                 event_type=EventType.TOOL_CALLED,
@@ -127,7 +177,7 @@ class AgenticEventBridge:
                 progress=min(progress + self._tool_call_count, 97),
                 message=f"Agent calling {tool_name}",
                 tool_name=tool_name,
-                extra={"tool_input": input_summary},
+                extra=extra,
             )
         )
 
@@ -139,6 +189,9 @@ class AgenticEventBridge:
         bare = self._bare_name(tool_name)
         if bare in ("get_studies", "finalize_ranking", "verify_studies", "synthesize_report", "plan_search", "fetch_fulltext"):
             self._intermediate[bare] = response
+        extra: dict[str, Any] = {"response_length": len(resp_str)}
+        if self.full_trace_enabled:
+            extra["full_tool_output"] = _debug_jsonable(response)
         await self.queue.put(
             RuntimeEventPayload(
                 event_type=EventType.TOOL_RESULT,
@@ -146,9 +199,27 @@ class AgenticEventBridge:
                 progress=min(progress + self._tool_call_count + 1, 97),
                 message=f"Agent received result from {tool_name}",
                 tool_name=tool_name,
-                extra={"response_length": len(resp_str)},
+                extra=extra,
             )
         )
+
+    def capture_agent_result(self, result: Any) -> None:
+        if self.full_trace_enabled:
+            self._intermediate["agent_result_payload"] = _debug_jsonable(result)
+
+    def debug_trace_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "tool_call_count": self._tool_call_count,
+            "had_error": self._error is not None,
+            "error": str(self._error) if self._error is not None else None,
+            "intermediate": _debug_jsonable(self._intermediate),
+            "todos": list(self._todos),
+            "search_results": _debug_jsonable([result.model_dump() for result in self.search_results]),
+            "ranked_studies": _debug_jsonable([study.model_dump() for study in self.ranked_studies]),
+            "verification": _debug_jsonable(self.verification.model_dump()) if self.verification else None,
+            "plan": _debug_jsonable(self.plan.model_dump()) if self.plan else None,
+        }
+        return payload
 
     # -- Direct calls from workspace tools -----------------------------------
 

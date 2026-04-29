@@ -52,6 +52,7 @@ class ArtifactType(StrEnum):
     RANKED_RESULTS = "ranked_results"
     VERIFICATION_REPORT = "verification_report"
     FINAL_REPORT = "final_report"
+    DEBUG_TRACE = "debug_trace"
 
 
 class ApprovalStatus(StrEnum):

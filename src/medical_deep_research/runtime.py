@@ -1608,6 +1608,25 @@ def _translation_diagnostics(bridge: AgenticEventBridge) -> dict[str, Any]:
     return diagnostics
 
 
+def _agentic_debug_trace_event(
+    bridge: AgenticEventBridge,
+    *,
+    phase: str = "diagnostics",
+    progress: int = 96,
+) -> RuntimeEventPayload | None:
+    if not bridge.full_trace_enabled:
+        return None
+    return RuntimeEventPayload(
+        event_type=EventType.ARTIFACT_CREATED,
+        phase=phase,
+        progress=progress,
+        message="Saved full agentic debug trace",
+        artifact_type=ArtifactType.DEBUG_TRACE,
+        artifact_name="Agentic Debug Trace",
+        artifact_json=bridge.debug_trace_payload(),
+    )
+
+
 def _agentic_final_events(
     runtime: ResearchRuntime,
     request: RunRequest,
@@ -2754,7 +2773,10 @@ def _build_langchain_tools(
     @lc_tool
     async def submit_report(report_markdown: str) -> str:
         """Submit your completed research report (full markdown). MUST be called as the last step."""
-        await bridge.on_tool_start("submit_report", {"length": len(report_markdown)})
+        tool_input: dict[str, Any] = {"length": len(report_markdown)}
+        if bridge.full_trace_enabled:
+            tool_input["report_markdown"] = report_markdown
+        await bridge.on_tool_start("submit_report", tool_input)
         result = await tool_submit_report(request, bridge, report_markdown)
         await bridge.on_tool_end("submit_report", result)
         if stop_after_submit and result.get("status") == "ok":
@@ -2853,6 +2875,10 @@ class AnthropicRuntime(NativeSDKRuntime):
             bridge.set_error(exc)
         finally:
             _env_ctx.__exit__(None, None, None)
+
+        debug_event = _agentic_debug_trace_event(bridge)
+        if debug_event:
+            yield debug_event
 
         fallback_reason = self._agentic_fallback_reason(bridge)
         if fallback_reason:
@@ -2953,6 +2979,7 @@ class AnthropicRuntime(NativeSDKRuntime):
                 result = await agent.ainvoke(
                     {"messages": [{"role": "user", "content": _agentic_user_prompt(request)}]},
                 )
+                bridge.capture_agent_result(result)
                 final_text = _langchain_final_text(result)
 
             await asyncio.wait_for(_inner(), timeout=self.agentic_timeout_seconds)

@@ -10,7 +10,7 @@ from typing import Any
 from unittest.mock import patch
 
 from medical_deep_research.agentic_tools import AgenticEventBridge, tool_submit_report
-from medical_deep_research.models import EventType, RunRequest
+from medical_deep_research.models import ArtifactType, EventType, RunRequest
 from medical_deep_research.research.models import EvidenceStudy, ScoredStudy, SearchProviderResult, VerificationSummary
 from medical_deep_research.runtime import AnthropicRuntime
 
@@ -207,6 +207,39 @@ limited evidence retrieved in this run.
 ## References
 [1] Test AB. Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia.
 2024. PMID: 12345678.
+"""
+
+
+def make_out_of_order_evidence_report() -> str:
+    synthesis = " ".join(
+        "The evidence summary compares study designs, outcomes, limitations, and clinical applicability [1] [2]."
+        for _ in range(90)
+    )
+    return f"""# Research Report
+
+## Executive Summary
+ESPB may reduce pain after cardiac surgery, but certainty varies by study design [1].
+
+## Background
+The clinical question compares regional analgesia with PCA-only strategies.
+
+## Methods
+The search reviewed PubMed and ranked evidence by relevance and study quality.
+
+## Results
+Level IV evidence suggested a possible signal from observational studies [1].
+{synthesis}
+Level I evidence synthesized randomized evidence and should have appeared before lower-level evidence [2].
+
+## Discussion
+The interpretation should be proportional to the evidence base and its limitations [1] [2].
+
+## Conclusions
+Higher-level evidence should be presented before lower-level evidence.
+
+## References
+[1] Test AB. Observational ESPB study. Journal. 2023.
+[2] Test CD. Systematic review of ESPB. Journal. 2024.
 """
 
 
@@ -424,6 +457,43 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.extra["translation_status"], "ok")
         self.assertTrue(any(event.artifact_name == "Report (English)" for event in artifacts))
 
+    async def test_rejected_submit_report_is_saved_in_full_trace(self) -> None:
+        report = make_out_of_order_evidence_report()
+
+        async def rejecting_agent(tools: list[object], _inputs: dict[str, object]) -> object:
+            await call_fake_tool(tools, "search_pubmed", query="cardiac surgery ESPB PCA pain", max_results=3)
+            await call_fake_tool(tools, "get_studies", context="clinical")
+            await call_fake_tool(tools, "finalize_ranking", ranked_indices=[1], rationale="Most relevant RCT.")
+            await call_fake_tool(tools, "submit_report", report_markdown=report)
+            return {"messages": [{"role": "assistant", "content": "submitted candidate report"}]}
+
+        events = await self.collect_events(rejecting_agent)
+        submit_call = next(
+            event
+            for event in events
+            if event.event_type == EventType.TOOL_CALLED and event.tool_name == "submit_report"
+        )
+        submit_result = next(
+            event
+            for event in events
+            if event.event_type == EventType.TOOL_RESULT and event.tool_name == "submit_report"
+        )
+        debug_artifact = next(
+            event
+            for event in events
+            if event.event_type == EventType.ARTIFACT_CREATED and event.artifact_type == ArtifactType.DEBUG_TRACE
+        )
+
+        self.assertEqual(submit_call.extra["full_tool_input"]["report_markdown"], report)
+        self.assertTrue(
+            any("Level I to Level V" in issue for issue in submit_result.extra["full_tool_output"]["issues"])
+        )
+        self.assertEqual(debug_artifact.artifact_json["intermediate"]["rejected_report"], report.strip())
+        self.assertEqual(
+            debug_artifact.artifact_json["intermediate"]["agent_result_payload"]["messages"][0]["content"],
+            "submitted candidate report",
+        )
+
     async def test_submit_report_rejects_short_status_summary(self) -> None:
         bridge = AgenticEventBridge()
         bridge.search_results.append(
@@ -456,36 +526,7 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         bridge.ranked_studies = [make_ranked_study()]
-        synthesis = " ".join(
-            "The evidence summary compares study designs, outcomes, limitations, and clinical applicability [1] [2]."
-            for _ in range(90)
-        )
-        report = f"""# Research Report
-
-## Executive Summary
-ESPB may reduce pain after cardiac surgery, but certainty varies by study design [1].
-
-## Background
-The clinical question compares regional analgesia with PCA-only strategies.
-
-## Methods
-The search reviewed PubMed and ranked evidence by relevance and study quality.
-
-## Results
-Level IV evidence suggested a possible signal from observational studies [1].
-{synthesis}
-Level I evidence synthesized randomized evidence and should have appeared before lower-level evidence [2].
-
-## Discussion
-The interpretation should be proportional to the evidence base and its limitations [1] [2].
-
-## Conclusions
-Higher-level evidence should be presented before lower-level evidence.
-
-## References
-[1] Test AB. Observational ESPB study. Journal. 2023.
-[2] Test CD. Systematic review of ESPB. Journal. 2024.
-"""
+        report = make_out_of_order_evidence_report()
 
         result = await tool_submit_report(make_request(), bridge, report)
 

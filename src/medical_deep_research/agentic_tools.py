@@ -190,6 +190,10 @@ class AgenticEventBridge:
         if bare in ("get_studies", "finalize_ranking", "verify_studies", "synthesize_report", "plan_search", "fetch_fulltext"):
             self._intermediate[bare] = response
         extra: dict[str, Any] = {"response_length": len(resp_str)}
+        if isinstance(response, dict):
+            for key in ("error", "issues", "warnings", "fatal", "fallback_reason", "rejection_count"):
+                if key in response:
+                    extra[key] = _debug_jsonable(response[key])
         if self.full_trace_enabled:
             extra["full_tool_output"] = _debug_jsonable(response)
         await self.queue.put(
@@ -603,8 +607,15 @@ def _reference_number_issues(report_markdown: str) -> list[str]:
     return issues
 
 
+EVIDENCE_LEVEL_ORDER_ISSUE = (
+    "Results/Findings must present evidence levels from Level I to Level V, "
+    "not lower levels before higher levels."
+)
+MAX_SUBMIT_REPORT_REJECTIONS = 3
+
 _EVIDENCE_LEVEL_RE = re.compile(r"\bLevel\s+(IV|III|II|I|V)\b", re.IGNORECASE)
 _EVIDENCE_LEVEL_ORDER = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
+_SOFT_REPORT_QUALITY_ISSUES = {EVIDENCE_LEVEL_ORDER_ISSUE}
 
 
 def _evidence_level_order_issues(report_markdown: str) -> list[str]:
@@ -623,19 +634,48 @@ def _evidence_level_order_issues(report_markdown: str) -> list[str]:
     if not findings:
         return []
 
-    ordered_levels = [
-        _EVIDENCE_LEVEL_ORDER[match.group(1).upper()]
-        for match in _EVIDENCE_LEVEL_RE.finditer(findings)
-    ]
+    ordered_levels: list[int] = []
+    for line in findings.splitlines():
+        if not re.match(r"^\s*#{1,6}\s+", line):
+            continue
+        match = _EVIDENCE_LEVEL_RE.search(line)
+        if match:
+            ordered_levels.append(_EVIDENCE_LEVEL_ORDER[match.group(1).upper()])
     if len(set(ordered_levels)) < 2:
         return []
 
     highest_seen = ordered_levels[0]
     for level in ordered_levels[1:]:
         if level < highest_seen:
-            return ["Results/Findings must present evidence levels from Level I to Level V, not lower levels before higher levels."]
+            return [EVIDENCE_LEVEL_ORDER_ISSUE]
         highest_seen = max(highest_seen, level)
     return []
+
+
+def _only_soft_report_quality_issues(issues: list[str]) -> bool:
+    return bool(issues) and all(issue in _SOFT_REPORT_QUALITY_ISSUES for issue in issues)
+
+
+def _record_submit_report_rejection(
+    bridge: AgenticEventBridge,
+    report_markdown: str,
+    quality_issues: list[str],
+) -> int:
+    history = bridge._intermediate.setdefault("submit_report_rejection_history", [])
+    if not isinstance(history, list):
+        history = []
+        bridge._intermediate["submit_report_rejection_history"] = history
+
+    record = {
+        "attempt": len(history) + 1,
+        "report_length": len(report_markdown),
+        "issues": list(quality_issues),
+    }
+    history.append(record)
+    bridge._intermediate["submit_report_rejection_count"] = len(history)
+    bridge._intermediate["rejected_report"] = report_markdown
+    bridge._intermediate["rejected_report_issues"] = list(quality_issues)
+    return len(history)
 
 
 def report_quality_issues(report_markdown: str, ranked_count: int = 0, search_count: int = 0) -> list[str]:
@@ -691,11 +731,40 @@ async def tool_submit_report(request: RunRequest, bridge: AgenticEventBridge, re
         search_count=sum(len(result.studies) for result in bridge.search_results),
     )
     if quality_issues:
-        bridge._intermediate["rejected_report"] = report_markdown
-        bridge._intermediate["rejected_report_issues"] = quality_issues
+        rejection_count = _record_submit_report_rejection(bridge, report_markdown, quality_issues)
+        if rejection_count >= MAX_SUBMIT_REPORT_REJECTIONS:
+            if _only_soft_report_quality_issues(quality_issues):
+                bridge._intermediate["submitted_report"] = report_markdown
+                bridge._intermediate["submitted_report_warnings"] = list(quality_issues)
+                bridge._intermediate["submitted_report_accepted_after_rejections"] = rejection_count
+                bridge.set_result(report_markdown)
+                return {
+                    "status": "ok",
+                    "length": len(report_markdown),
+                    "warnings": quality_issues,
+                    "accepted_after_rejections": rejection_count,
+                }
+
+            fallback_reason = (
+                f"submit_report failed {rejection_count} times with blocking quality issues; "
+                "running deterministic fallback."
+            )
+            bridge._intermediate["submit_report_fatal_rejection"] = {
+                "rejection_count": rejection_count,
+                "issues": list(quality_issues),
+                "fallback_reason": fallback_reason,
+            }
+            return {
+                "error": "Report quality gate failed repeatedly. Falling back instead of retrying indefinitely.",
+                "issues": quality_issues,
+                "rejection_count": rejection_count,
+                "fatal": True,
+                "fallback_reason": fallback_reason,
+            }
         return {
             "error": "Report quality gate failed. Rewrite and submit the full report.",
             "issues": quality_issues,
+            "rejection_count": rejection_count,
             "instructions": (
                 "Submit the complete markdown report itself, not a status update. "
                 "Use the required sections, synthesize the evidence, cite searched studies as [n], "
@@ -1019,7 +1088,7 @@ async def tool_parse_pdf(request: RunRequest, bridge: AgenticEventBridge, rank: 
         else:
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True,
-                                             headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/1.0; academic-research)"}) as client:
+                                             headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.8.8; academic-research)"}) as client:
                     resp = await client.get(url)
                     resp.raise_for_status()
                     if resp.content[:5] == b"%PDF-":

@@ -67,6 +67,13 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
+### v2.8.8 — Agentic Report Loop Diagnostics & Guardrails
+
+- **Report submit loop fix:** evidence-level ordering validation now checks evidence-level headings inside Results/Findings instead of every prose mention of "Level I/II/III/IV/V", avoiding false rejections when a later paragraph references higher-level evidence.
+- **Repeated rejection guard:** repeated `submit_report` quality failures are tracked; repeated evidence-order-only failures are accepted with warnings after a small retry cap, while blocking quality failures stop the agent loop and fall back deterministically instead of running until timeout.
+- **Full trace diagnostics:** tool inputs/outputs, rejected report candidates, rejection issues, and agent result payloads are saved in SQLite debug trace artifacts for reproducible cross-machine comparison.
+- **Windows build script:** `scripts/build-windows.ps1` builds the PyInstaller onedir app and optional release zip from Windows PowerShell.
+
 ### v2.8.7 — Search Reliability & Configurable Lookback
 
 - **Scopus 500 fix:** the `date=YYYY-YYYY` URL parameter triggered an XSL transform error in the Scopus Search API. Replaced with inline `PUBYEAR > A AND PUBYEAR < B` in the query, so Scopus actually returns results again.
@@ -102,6 +109,10 @@ Open http://127.0.0.1:18515
 # macOS
 ./scripts/build-macos.sh          # builds dist/Medical Deep Research.app
 ./scripts/build-macos.sh --dmg    # also creates a .dmg installer
+
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Zip
 
 # Requires: Python 3.12+, uv
 ```

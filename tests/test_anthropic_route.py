@@ -227,9 +227,12 @@ The clinical question compares regional analgesia with PCA-only strategies.
 The search reviewed PubMed and ranked evidence by relevance and study quality.
 
 ## Results
-Level IV evidence suggested a possible signal from observational studies [1].
+### Level IV Evidence
+Observational evidence suggested a possible signal from lower-certainty studies [1].
 {synthesis}
-Level I evidence synthesized randomized evidence and should have appeared before lower-level evidence [2].
+
+### Level I Evidence
+Systematic review evidence should have appeared before lower-level evidence [2].
 
 ## Discussion
 The interpretation should be proportional to the evidence base and its limitations [1] [2].
@@ -240,6 +243,46 @@ Higher-level evidence should be presented before lower-level evidence.
 ## References
 [1] Test AB. Observational ESPB study. Journal. 2023.
 [2] Test CD. Systematic review of ESPB. Journal. 2024.
+"""
+
+
+def make_ordered_evidence_report_with_late_prose_reference() -> str:
+    synthesis = " ".join(
+        "The synthesis compares outcomes, populations, perioperative context, and clinical applicability [1] [2]."
+        for _ in range(90)
+    )
+    return f"""# Research Report
+
+## Executive Summary
+ESPB may reduce pain after cardiac surgery, with certainty varying by design [1].
+
+## Background
+The review compares regional analgesia with PCA-only strategies for cardiac surgery pain.
+
+## Methods
+The search reviewed PubMed and ranked evidence by relevance and study quality.
+
+## Results
+### Level I Evidence
+Systematic review evidence provides the highest-level context for ESPB and regional analgesia [1].
+
+### Level II Evidence
+Randomized trial evidence directly informs postoperative pain outcomes [2].
+{synthesis}
+
+### Level IV Evidence
+Observational evidence provides lower-certainty supportive context [1].
+The Level I systematic review remains important context even when discussing lower-level evidence later in the section [1].
+
+## Discussion
+The interpretation should be proportional to the evidence base and its limitations [1] [2].
+
+## Conclusions
+ESPB may reduce pain, but confidence depends on study design and directness.
+
+## References
+[1] Test AB. Systematic review of ESPB. Journal. 2024.
+[2] Test CD. Randomized ESPB trial. Journal. 2024.
 """
 
 
@@ -494,6 +537,54 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
             "submitted candidate report",
         )
 
+    async def test_rejected_submit_report_issues_saved_without_full_trace(self) -> None:
+        bridge = AgenticEventBridge()
+        bridge.full_trace_enabled = False
+
+        await bridge.on_tool_end(
+            "submit_report",
+            {
+                "error": "Report quality gate failed.",
+                "issues": ["Example issue"],
+                "rejection_count": 1,
+            },
+        )
+        event = await bridge.queue.get()
+
+        self.assertEqual(event.extra["error"], "Report quality gate failed.")
+        self.assertEqual(event.extra["issues"], ["Example issue"])
+        self.assertEqual(event.extra["rejection_count"], 1)
+        self.assertNotIn("full_tool_output", event.extra)
+
+    async def test_repeated_soft_submit_report_rejections_accept_latest_report(self) -> None:
+        report = make_out_of_order_evidence_report()
+
+        async def repeated_rejection_agent(tools: list[object], _inputs: dict[str, object]) -> object:
+            await call_fake_tool(tools, "search_pubmed", query="cardiac surgery ESPB PCA pain", max_results=3)
+            await call_fake_tool(tools, "get_studies", context="clinical")
+            await call_fake_tool(tools, "finalize_ranking", ranked_indices=[1], rationale="Most relevant RCT.")
+            await call_fake_tool(tools, "submit_report", report_markdown=report)
+            await call_fake_tool(tools, "submit_report", report_markdown=report)
+            await call_fake_tool(tools, "submit_report", report_markdown=report)
+            return {"messages": [{"role": "assistant", "content": "should stop after third submit"}]}
+
+        events = await self.collect_events(repeated_rejection_agent)
+        submit_results = [
+            event for event in events
+            if event.event_type == EventType.TOOL_RESULT and event.tool_name == "submit_report"
+        ]
+        completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
+
+        self.assertEqual(len(submit_results), 3)
+        self.assertIn("error", submit_results[0].extra["full_tool_output"])
+        self.assertIn("error", submit_results[1].extra["full_tool_output"])
+        self.assertEqual(submit_results[2].extra["full_tool_output"]["status"], "ok")
+        self.assertEqual(submit_results[2].extra["full_tool_output"]["accepted_after_rejections"], 3)
+        self.assertTrue(submit_results[2].extra["full_tool_output"]["warnings"])
+        self.assertEqual(completed[-1].extra["execution_mode"], "native_sdk_agentic")
+        self.assertEqual(completed[-1].extra["report_source"], "submitted_report")
+        self.assertEqual(completed[-1].report_markdown, report.strip())
+
     async def test_submit_report_rejects_short_status_summary(self) -> None:
         bridge = AgenticEventBridge()
         bridge.search_results.append(
@@ -533,6 +624,23 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("error", result)
         self.assertTrue(any("Level I to Level V" in issue for issue in result["issues"]))
         self.assertNotIn("submitted_report", bridge._intermediate)
+
+    async def test_submit_report_accepts_late_prose_evidence_level_reference(self) -> None:
+        bridge = AgenticEventBridge()
+        bridge.search_results.append(
+            SearchProviderResult(
+                source="PubMed",
+                query="cardiac surgery ESPB PCA pain",
+                studies=[make_ranked_study()],
+            )
+        )
+        bridge.ranked_studies = [make_ranked_study()]
+        report = make_ordered_evidence_report_with_late_prose_reference()
+
+        result = await tool_submit_report(make_request(), bridge, report)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("submitted_report", bridge._intermediate)
 
     async def test_submit_report_rejects_reference_number_gaps(self) -> None:
         bridge = AgenticEventBridge()

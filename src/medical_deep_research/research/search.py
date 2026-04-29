@@ -19,7 +19,7 @@ SEMANTIC_SCHOLAR_FIELDS = (
 )
 HTTP_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 POLITE_EMAIL = "medical-deep-research@users.noreply.github.com"
-USER_AGENT = f"MedicalDeepResearch/2.8.7 (mailto:{POLITE_EMAIL})"
+USER_AGENT = f"MedicalDeepResearch/2.8.8 (mailto:{POLITE_EMAIL})"
 LANDMARK_JOURNALS = {
     "new england journal of medicine",
     "nejm",
@@ -276,7 +276,7 @@ async def search_openalex(
         "mailto": POLITE_EMAIL,
     }
     headers = {
-        "User-Agent": f"MedicalDeepResearch/1.0 (mailto:{POLITE_EMAIL})",
+        "User-Agent": f"MedicalDeepResearch/2.8.8 (mailto:{POLITE_EMAIL})",
         "Accept": "application/json",
     }
     try:

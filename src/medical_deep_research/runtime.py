@@ -518,6 +518,10 @@ class _ReportSubmitted(BaseException):
     """Internal control-flow sentinel used to stop LangChain after accepted submit_report."""
 
 
+class _ReportRejected(Exception):
+    """Raised when repeated report quality failures should stop the agent loop."""
+
+
 def _anthropic_cached_system_prompt(system_prompt: str) -> Any:
     """Wrap the stable Anthropic system prompt in an ephemeral cache block."""
     from langchain_core.messages import SystemMessage
@@ -2779,6 +2783,8 @@ def _build_langchain_tools(
         await bridge.on_tool_start("submit_report", tool_input)
         result = await tool_submit_report(request, bridge, report_markdown)
         await bridge.on_tool_end("submit_report", result)
+        if result.get("fatal"):
+            raise _ReportRejected(str(result.get("fallback_reason") or result.get("error")))
         if stop_after_submit and result.get("status") == "ok":
             raise _ReportSubmitted()
         return _langchain_tool_json("submit_report", result)
@@ -2989,6 +2995,9 @@ class AnthropicRuntime(NativeSDKRuntime):
                 bridge.set_result(final_text)
         except _ReportSubmitted:
             bridge._intermediate["agent_final_message"] = "Report accepted by submit_report."
+        except _ReportRejected as exc:
+            _log.warning("Anthropic LangChain agent stopped after repeated report rejection: %s", exc)
+            bridge.set_error(exc)
         except asyncio.TimeoutError:
             _log.warning("Anthropic LangChain agent timed out after %ss", self.agentic_timeout_seconds)
             exc = TimeoutError(f"Agent timed out after {self.agentic_timeout_seconds}s")

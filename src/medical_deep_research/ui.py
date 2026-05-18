@@ -12,32 +12,38 @@ from .service import DEFAULT_MODELS, ResearchService
 
 
 _CUSTOM_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700;900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
-
 html, body, .q-page { overflow: hidden !important; }
 
 :root {
-    --bg-deep: #0a0f14;
-    --bg-surface: #111921;
-    --bg-card: #161f2a;
-    --bg-card-hover: #1c2735;
-    --border-dim: #1e2a38;
-    --border-active: #2dd4a8;
-    --text-primary: #e8edf3;
-    --text-secondary: #7a8da3;
-    --text-muted: #4a5d73;
-    --accent: #2dd4a8;
-    --accent-dim: rgba(45, 212, 168, 0.12);
-    --accent-glow: rgba(45, 212, 168, 0.25);
-    --warn: #f5a623;
-    --error: #f45b69;
-    --success: #2dd4a8;
+    --font-ui: Inter, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "SFMono-Regular", "Cascadia Mono", "Roboto Mono", "IBM Plex Mono", Consolas, monospace;
+    --bg-deep: #f4f7fb;
+    --bg-surface: #eef4f8;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f7fbff;
+    --border-dim: #d6e1ea;
+    --border-active: #1479a6;
+    --text-primary: #132033;
+    --text-secondary: #3f5268;
+    --text-muted: #6e7f91;
+    --accent: #1769aa;
+    --accent-dim: rgba(23, 105, 170, 0.10);
+    --accent-glow: rgba(23, 105, 170, 0.16);
+    --warn: #b45309;
+    --error: #b42318;
+    --success: #13795b;
+    --shadow-soft: 0 12px 30px rgba(20, 44, 68, 0.08);
 }
 
 body {
     background: var(--bg-deep) !important;
     color: var(--text-primary) !important;
-    font-family: 'IBM Plex Sans', sans-serif !important;
+    font-family: var(--font-ui) !important;
+    font-size: 16px !important;
+}
+
+.q-btn, .q-field, .q-tab, .q-item, .q-card, .q-menu, .q-notification {
+    font-family: var(--font-ui) !important;
 }
 
 .nicegui-content {
@@ -46,56 +52,90 @@ body {
 
 /* Header bar */
 .mdr-header {
-    background: linear-gradient(180deg, #0d1420 0%, var(--bg-deep) 100%) !important;
+    background: rgba(255, 255, 255, 0.96) !important;
     border-bottom: 1px solid var(--border-dim) !important;
-    padding: 0.75rem 1.5rem !important;
+    padding: 0.85rem 1.35rem !important;
+    box-shadow: 0 1px 0 rgba(20, 44, 68, 0.03) !important;
 }
 .mdr-header .mdr-title {
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-ui);
     font-weight: 700;
-    font-size: 1.35rem;
-    letter-spacing: 0.02em;
+    font-size: 1.18rem;
+    letter-spacing: 0;
     color: var(--text-primary);
 }
 .mdr-header .mdr-subtitle {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.7rem;
+    font-family: var(--font-ui);
+    font-size: 0.82rem;
+    font-weight: 500;
     color: var(--text-muted);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    letter-spacing: 0;
+    text-transform: none;
+}
+.mdr-menu-btn {
+    display: none !important;
+}
+
+/* Workspace */
+.mdr-workspace {
+    height: calc(100vh - 4rem);
+    overflow: hidden;
+    display: flex !important;
+    flex-wrap: nowrap;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    background: var(--bg-deep);
+}
+.mdr-side-panel {
+    width: min(27rem, 34vw);
+    min-width: 20rem;
+    max-width: 27rem;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 0 0 auto;
+    padding-right: 0.2rem;
+}
+.mdr-main-panel {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    overflow-y: auto;
+    padding-right: 0.15rem;
 }
 
 /* Cards */
 .mdr-card {
     background: var(--bg-card) !important;
     border: 1px solid var(--border-dim) !important;
-    border-radius: 6px !important;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 2px rgba(20, 44, 68, 0.04) !important;
     color: var(--text-primary) !important;
 }
 .mdr-card:hover {
-    border-color: #263445 !important;
+    border-color: #bed0dc !important;
 }
 .mdr-card-active {
     border-color: var(--border-active) !important;
-    box-shadow: 0 0 0 1px var(--accent-dim), 0 2px 12px rgba(0,0,0,0.3) !important;
+    box-shadow: 0 0 0 2px var(--accent-dim), var(--shadow-soft) !important;
 }
 
 /* Section titles */
 .mdr-section-title {
-    font-family: 'Playfair Display', serif;
-    font-weight: 500;
-    font-size: 1.05rem;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 1rem;
     color: var(--text-primary);
-    letter-spacing: 0.01em;
+    letter-spacing: 0;
 }
 .mdr-section-desc {
-    font-size: 0.78rem;
+    font-size: 0.88rem;
     color: var(--text-muted);
-    font-weight: 300;
+    font-weight: 400;
+    line-height: 1.45;
 }
 
-/* Form elements dark theme */
+/* Form elements */
 .mdr-card .q-field__label,
 .mdr-card .q-field__native,
 .mdr-card .q-field__prefix,
@@ -104,82 +144,87 @@ body {
 .mdr-card textarea,
 .mdr-card input {
     color: var(--text-primary) !important;
+    font-family: var(--font-ui) !important;
+    font-size: 0.95rem !important;
+}
+.mdr-card .q-field__control {
+    background: #ffffff !important;
+    border-radius: 7px !important;
 }
 .mdr-card .q-field--outlined .q-field__control:before {
     border-color: var(--border-dim) !important;
 }
 .mdr-card .q-field--outlined .q-field__control:hover:before {
-    border-color: var(--text-muted) !important;
+    border-color: #9fb5c7 !important;
 }
 .mdr-card .q-field--focused .q-field__control:after {
     border-color: var(--accent) !important;
+    border-width: 2px !important;
 }
 .mdr-card .q-field__label {
     color: var(--text-secondary) !important;
+    font-weight: 500 !important;
 }
 
 /* Primary button */
 .mdr-btn-primary {
-    background: linear-gradient(135deg, #1a9e80 0%, #2dd4a8 100%) !important;
-    color: #0a0f14 !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.03em !important;
-    border-radius: 4px !important;
+    background: var(--accent) !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    letter-spacing: 0 !important;
+    border-radius: 7px !important;
     text-transform: none !important;
-    font-size: 0.85rem !important;
-    box-shadow: 0 2px 8px rgba(45, 212, 168, 0.2) !important;
+    font-size: 0.96rem !important;
+    min-height: 2.6rem !important;
+    box-shadow: 0 8px 20px rgba(23, 105, 170, 0.18) !important;
     transition: box-shadow 0.2s, transform 0.15s !important;
 }
 .mdr-btn-primary:hover {
-    box-shadow: 0 4px 16px rgba(45, 212, 168, 0.35) !important;
+    box-shadow: 0 10px 24px rgba(23, 105, 170, 0.24) !important;
     transform: translateY(-1px) !important;
 }
 
 /* Badges */
 .mdr-badge {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.65rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    padding: 2px 8px;
-    border-radius: 3px;
+    font-family: var(--font-ui);
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+    padding: 0.16rem 0.55rem;
+    border-radius: 999px;
+    white-space: nowrap;
 }
 .mdr-badge-success {
-    background: rgba(45, 212, 168, 0.15);
-    color: #2dd4a8;
-    border: 1px solid rgba(45, 212, 168, 0.3);
+    background: #e7f6ef;
+    color: #0f684c;
+    border: 1px solid #bfe5d2;
 }
 .mdr-badge-warn {
-    background: rgba(245, 166, 35, 0.15);
-    color: #f5a623;
-    border: 1px solid rgba(245, 166, 35, 0.3);
+    background: #fff4de;
+    color: #8a4d08;
+    border: 1px solid #f5d39a;
 }
 .mdr-badge-error {
-    background: rgba(244, 91, 105, 0.15);
-    color: #f45b69;
-    border: 1px solid rgba(244, 91, 105, 0.3);
+    background: #fff0ef;
+    color: #9f2018;
+    border: 1px solid #f4c7c3;
 }
 .mdr-badge-neutral {
-    background: rgba(122, 141, 163, 0.12);
+    background: #f1f5f9;
     color: var(--text-secondary);
-    border: 1px solid rgba(122, 141, 163, 0.2);
+    border: 1px solid #d9e4ec;
 }
 .mdr-badge-active {
-    background: rgba(45, 212, 168, 0.12);
+    background: #e8f4fb;
     color: var(--accent);
-    border: 1px solid rgba(45, 212, 168, 0.35);
-    animation: pulse-glow 2s ease-in-out infinite;
-}
-
-@keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(45, 212, 168, 0); }
-    50% { box-shadow: 0 0 8px 2px rgba(45, 212, 168, 0.15); }
+    border: 1px solid #b9daed;
 }
 
 /* Run list items */
 .mdr-run-item {
-    padding: 0.6rem 0.75rem;
-    border-radius: 4px;
+    padding: 0.72rem 0.8rem;
+    border-radius: 7px;
     cursor: pointer;
     transition: background 0.15s;
     border: 1px solid transparent;
@@ -194,17 +239,17 @@ body {
 
 /* Progress bar */
 .mdr-progress .q-linear-progress__track {
-    background: var(--border-dim) !important;
+    background: #dce7ee !important;
     opacity: 1 !important;
 }
 .mdr-progress .q-linear-progress__model {
-    background: linear-gradient(90deg, #1a9e80, #2dd4a8, #4aedc4) !important;
+    background: linear-gradient(90deg, #1769aa, #0f8a9d) !important;
 }
 
 /* Trace timeline */
 .mdr-trace-item {
     border-left: 2px solid var(--border-dim);
-    padding: 0.35rem 0 0.35rem 1rem;
+    padding: 0.55rem 0 0.55rem 1rem;
     margin-left: 0.5rem;
     transition: border-color 0.2s;
 }
@@ -212,31 +257,33 @@ body {
     border-left-color: var(--accent);
 }
 .mdr-trace-seq {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
     color: var(--accent);
     min-width: 1.8rem;
     text-align: right;
     font-weight: 500;
 }
 .mdr-trace-msg {
-    font-size: 0.8rem;
+    font-size: 0.92rem;
     color: var(--text-primary);
-    line-height: 1.35;
+    line-height: 1.45;
 }
 .mdr-trace-meta {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
     color: var(--text-muted);
 }
 
 /* Tab styling */
 .mdr-tabs .q-tab {
     color: var(--text-secondary) !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-size: 0.75rem !important;
-    letter-spacing: 0.04em !important;
-    text-transform: uppercase !important;
+    font-family: var(--font-ui) !important;
+    font-size: 0.92rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0 !important;
+    text-transform: none !important;
+    min-height: 2.75rem !important;
 }
 .mdr-tabs .q-tab--active {
     color: var(--accent) !important;
@@ -250,20 +297,21 @@ body {
 
 /* Query type segmented control */
 .mdr-query-toggle .q-btn {
-    background: var(--bg-surface) !important;
+    background: #ffffff !important;
     color: var(--text-secondary) !important;
     border: 1px solid var(--border-dim) !important;
-    min-height: 2.5rem !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-size: 0.72rem !important;
-    letter-spacing: 0.04em !important;
-    text-transform: uppercase !important;
+    min-height: 2.65rem !important;
+    font-family: var(--font-ui) !important;
+    font-size: 0.9rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0 !important;
+    text-transform: none !important;
 }
 .mdr-query-toggle .q-btn.q-btn--active {
     background: var(--accent-dim) !important;
     color: var(--accent) !important;
     border-color: var(--border-active) !important;
-    box-shadow: inset 0 0 0 1px rgba(45, 212, 168, 0.16) !important;
+    box-shadow: inset 0 0 0 1px rgba(23, 105, 170, 0.16) !important;
 }
 .mdr-query-toggle .q-btn:before,
 .mdr-query-toggle .q-btn:after {
@@ -272,27 +320,27 @@ body {
 
 /* Report markdown styling */
 .mdr-report h1, .mdr-report h2, .mdr-report h3 {
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-ui);
     color: var(--text-primary);
     border-bottom: 1px solid var(--border-dim);
-    padding-bottom: 0.4rem;
-    margin-bottom: 0.8rem;
+    padding-bottom: 0.55rem;
+    margin-bottom: 1rem;
 }
-.mdr-report h1 { font-size: 1.4rem; font-weight: 700; }
-.mdr-report h2 { font-size: 1.15rem; font-weight: 500; }
-.mdr-report h3 { font-size: 0.95rem; font-weight: 500; border: none; }
+.mdr-report h1 { font-size: 1.62rem; font-weight: 800; }
+.mdr-report h2 { font-size: 1.28rem; font-weight: 750; }
+.mdr-report h3 { font-size: 1.08rem; font-weight: 750; border: none; }
 .mdr-report p, .mdr-report li {
-    font-size: 0.85rem;
+    font-size: 0.98rem;
     color: var(--text-secondary);
-    line-height: 1.6;
+    line-height: 1.7;
 }
 .mdr-report strong { color: var(--text-primary); }
 .mdr-report code {
-    font-family: 'IBM Plex Mono', monospace;
-    background: var(--bg-deep);
-    padding: 0.1rem 0.35rem;
-    border-radius: 2px;
-    font-size: 0.78rem;
+    font-family: var(--font-mono);
+    background: #eef4f8;
+    padding: 0.12rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.88rem;
     color: var(--accent);
 }
 .mdr-report ul { padding-left: 1.2rem; }
@@ -304,25 +352,25 @@ body {
 
 /* Code blocks */
 .mdr-card pre, .mdr-card code {
-    background: var(--bg-deep) !important;
+    background: #eef4f8 !important;
     color: var(--text-secondary) !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-size: 0.72rem !important;
-    border-radius: 4px !important;
+    font-family: var(--font-mono) !important;
+    font-size: 0.84rem !important;
+    border-radius: 7px !important;
 }
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: var(--bg-deep); }
-::-webkit-scrollbar-thumb { background: var(--border-dim); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #b9c8d4; border-radius: 999px; border: 2px solid var(--bg-deep); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* Provider diagnostic cards */
 .mdr-diag-card {
     background: var(--bg-surface) !important;
     border: 1px solid var(--border-dim) !important;
-    border-radius: 4px !important;
-    padding: 0.65rem !important;
+    border-radius: 7px !important;
+    padding: 0.75rem !important;
     box-shadow: none !important;
 }
 .mdr-diag-card-selected {
@@ -333,7 +381,7 @@ body {
 /* Expansion panels */
 .mdr-card .q-expansion-item__container {
     border: 1px solid var(--border-dim);
-    border-radius: 4px;
+    border-radius: 7px;
     margin-bottom: 0.35rem;
 }
 .mdr-card .q-expansion-item__toggle {
@@ -341,47 +389,55 @@ body {
 }
 .mdr-card .q-item__label {
     color: var(--text-primary) !important;
-    font-size: 0.8rem !important;
+    font-size: 0.94rem !important;
 }
 /* Collapsible section panels */
 .mdr-card.q-expansion-item {
     background: var(--bg-card) !important;
     border: 1px solid var(--border-dim) !important;
-    border-radius: 6px !important;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 2px rgba(20, 44, 68, 0.04) !important;
 }
 .mdr-card.q-expansion-item .q-expansion-item__toggle {
-    padding: 0.5rem 1rem !important;
+    padding: 0.7rem 1rem !important;
 }
 .mdr-card.q-expansion-item .q-item__section--avatar {
     color: var(--text-muted) !important;
     min-width: 32px !important;
 }
 .mdr-card.q-expansion-item .q-item__label {
-    font-family: 'Playfair Display', serif !important;
-    font-weight: 500 !important;
-    font-size: 1.05rem !important;
+    font-family: var(--font-ui) !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
     color: var(--text-primary) !important;
 }
-.mdr-card.q-expansion-item .q-expansion-item__content {
+.mdr-card.q-expansion-item .q-expansion-item__content,
+.mdr-panel-section .q-expansion-item__content {
     padding: 0 1rem 1rem !important;
+}
+.mdr-panel-section {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-dim) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 2px rgba(20, 44, 68, 0.04) !important;
+    color: var(--text-primary) !important;
 }
 
 /* Study cards */
 .mdr-study-card {
     background: var(--bg-surface) !important;
     border: 1px solid var(--border-dim) !important;
-    border-radius: 6px !important;
-    padding: 0.7rem 0.9rem !important;
-    min-width: 13rem;
-    max-width: 15rem;
+    border-radius: 8px !important;
+    padding: 0.85rem 0.95rem !important;
+    min-width: 15rem;
+    max-width: 17rem;
     cursor: pointer;
     transition: border-color 0.15s, background 0.15s;
     box-shadow: none !important;
     flex-shrink: 0;
 }
 .mdr-study-card:hover {
-    border-color: var(--text-muted) !important;
+    border-color: #9fb5c7 !important;
     background: var(--bg-card) !important;
 }
 .mdr-study-card-selected {
@@ -389,11 +445,11 @@ body {
     background: var(--accent-dim) !important;
 }
 .mdr-study-title {
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-weight: 600;
-    font-size: 0.78rem;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 0.9rem;
     color: var(--text-primary);
-    line-height: 1.35;
+    line-height: 1.4;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -401,19 +457,19 @@ body {
 }
 .mdr-evidence-badge {
     display: inline-block;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.65rem;
-    font-weight: 500;
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
+    font-family: var(--font-ui);
+    font-size: 0.75rem;
+    font-weight: 800;
+    padding: 0.14rem 0.45rem;
+    border-radius: 999px;
     color: var(--text-primary);
 }
-.mdr-evidence-I   { background: #1a3d2a; color: #4ade80; }
-.mdr-evidence-II  { background: #1a2d3d; color: #60a5fa; }
-.mdr-evidence-III { background: #3d3a1a; color: #facc15; }
-.mdr-evidence-IV  { background: #3d2a1a; color: #fb923c; }
-.mdr-evidence-V   { background: #2a2a2a; color: #9ca3af; }
-.mdr-evidence-NA  { background: #1e1e1e; color: #6b7280; }
+.mdr-evidence-I   { background: #e7f6ef; color: #0f684c; border: 1px solid #bfe5d2; }
+.mdr-evidence-II  { background: #e8f4fb; color: #1769aa; border: 1px solid #b9daed; }
+.mdr-evidence-III { background: #fff4de; color: #8a4d08; border: 1px solid #f5d39a; }
+.mdr-evidence-IV  { background: #fff0e6; color: #9a4315; border: 1px solid #f5c7a8; }
+.mdr-evidence-V   { background: #f1f5f9; color: #536579; border: 1px solid #d9e4ec; }
+.mdr-evidence-NA  { background: #f1f5f9; color: #6e7f91; border: 1px solid #d9e4ec; }
 
 /* Chat */
 .mdr-chat-panel-wrapper {
@@ -434,11 +490,11 @@ body {
     padding-bottom: 0.5rem;
 }
 .mdr-chat-msg {
-    padding: 0.65rem 0.85rem;
-    border-radius: 6px;
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.82rem;
-    line-height: 1.55;
+    padding: 0.78rem 0.95rem;
+    border-radius: 8px;
+    font-family: var(--font-ui);
+    font-size: 0.94rem;
+    line-height: 1.6;
     color: var(--text-secondary);
     max-width: 92%;
 }
@@ -470,36 +526,37 @@ body {
     background: var(--bg-card);
     border: 1px solid var(--border-dim);
     border-left: 2px solid var(--accent);
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 0.75rem 0.9rem;
     max-width: 370px;
     min-width: 220px;
-    box-shadow: 0 8px 28px rgba(0,0,0,0.55);
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.76rem;
+    box-shadow: var(--shadow-soft);
+    font-family: var(--font-ui);
+    font-size: 0.86rem;
     color: var(--text-secondary);
     line-height: 1.5;
     display: none;
 }
 .mdr-ref-popover-title {
     color: var(--text-primary);
-    font-weight: 600;
-    font-size: 0.8rem;
+    font-weight: 700;
+    font-size: 0.92rem;
     margin-bottom: 0.3rem;
     line-height: 1.4;
 }
 .mdr-ref-popover-meta {
     color: var(--text-muted);
-    font-size: 0.7rem;
+    font-size: 0.78rem;
     margin-top: 0.1rem;
 }
 .mdr-scope-indicator {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.68rem;
+    font-family: var(--font-ui);
+    font-size: 0.8rem;
+    font-weight: 700;
     color: var(--accent);
-    padding: 0.15rem 0.5rem;
+    padding: 0.18rem 0.55rem;
     background: var(--accent-dim);
-    border-radius: 3px;
+    border-radius: 999px;
 }
 
 /* Side-by-side reading layout — fills available viewport */
@@ -513,10 +570,11 @@ body {
 .mdr-status-bar {
     background: var(--bg-card) !important;
     border: 1px solid var(--border-dim) !important;
-    border-radius: 5px !important;
-    padding: 0.55rem 0.9rem !important;
+    border-radius: 8px !important;
+    padding: 0.72rem 0.95rem !important;
     position: relative;
     overflow: visible;
+    box-shadow: 0 1px 2px rgba(20, 44, 68, 0.04) !important;
 }
 .mdr-status-bar .q-btn {
     min-height: 0 !important;
@@ -529,13 +587,13 @@ body {
     left: 0;
     height: 2px;
     width: var(--mdr-progress, 0%);
-    background: linear-gradient(90deg, var(--accent), rgba(45, 212, 168, 0.3));
+    background: linear-gradient(90deg, var(--accent), #0f8a9d);
     transition: width 0.5s ease;
 }
 .mdr-status-query {
-    font-family: 'Playfair Display', serif;
-    font-size: 0.82rem;
-    font-weight: 600;
+    font-family: var(--font-ui);
+    font-size: 0.95rem;
+    font-weight: 700;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
@@ -544,8 +602,8 @@ body {
     min-width: 0;
 }
 .mdr-tool-btn {
-    font-size: 0.7rem !important;
-    padding: 0.25rem 0.6rem !important;
+    font-size: 0.82rem !important;
+    padding: 0.32rem 0.65rem !important;
     text-transform: none !important;
     letter-spacing: 0 !important;
 }
@@ -555,9 +613,9 @@ body {
     background: var(--bg-surface);
     border: 1px solid var(--border-dim);
     border-left: 2px solid var(--warn);
-    border-radius: 4px;
-    padding: 0.4rem 0.6rem;
-    font-size: 0.75rem;
+    border-radius: 7px;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.86rem;
     color: var(--text-secondary);
     line-height: 1.4;
     cursor: pointer;
@@ -581,16 +639,16 @@ body {
     z-index: 10001;
     background: var(--bg-card);
     border: 1px solid var(--accent);
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 0.25rem 0.3rem;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    box-shadow: var(--shadow-soft);
     gap: 0.2rem;
 }
 #mdr-sel-toolbar.visible { display: flex; }
 #mdr-sel-toolbar button {
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.7rem;
-    font-weight: 500;
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+    font-weight: 700;
     padding: 0.25rem 0.55rem;
     border: none;
     border-radius: 4px;
@@ -599,7 +657,7 @@ body {
 }
 #mdr-sel-toolbar .sel-ask {
     background: var(--accent);
-    color: var(--bg-deep);
+    color: #ffffff;
 }
 #mdr-sel-toolbar .sel-save {
     background: transparent;
@@ -607,6 +665,50 @@ body {
     border: 1px solid var(--warn);
 }
 #mdr-sel-toolbar button:hover { opacity: 0.85; }
+
+@media (max-width: 900px) {
+    .mdr-menu-btn {
+        display: inline-flex !important;
+    }
+    .mdr-header {
+        padding: 0.75rem 1rem !important;
+    }
+    .mdr-header .mdr-title {
+        font-size: 1.05rem;
+    }
+    .mdr-header .mdr-subtitle {
+        display: none;
+    }
+    .mdr-workspace {
+        position: relative;
+        padding: 0.75rem;
+        gap: 0;
+    }
+    .mdr-side-panel {
+        position: absolute;
+        z-index: 40;
+        left: 0.75rem;
+        top: 0.75rem;
+        bottom: 0.75rem;
+        width: min(24rem, calc(100vw - 1.5rem));
+        max-width: none;
+        min-width: 0;
+        height: auto;
+        transform: translateX(calc(-100% - 1rem));
+        transition: transform 0.2s ease;
+        background: var(--bg-deep);
+        border: 1px solid var(--border-dim);
+        border-radius: 10px;
+        padding: 0.75rem;
+        box-shadow: 0 20px 44px rgba(20, 44, 68, 0.18);
+    }
+    body.mdr-sidebar-open .mdr-side-panel {
+        transform: translateX(0);
+    }
+    .mdr-main-panel {
+        width: 100%;
+    }
+}
 """
 
 
@@ -941,9 +1043,9 @@ def _build_studies_panel(
                     ui.html(f'<div class="mdr-study-title">#{ref} {study.title}</div>')
                     with ui.row().classes("items-center gap-1 mt-1"):
                         ui.html(f'<span class="mdr-evidence-badge {ev_class}">{ev_level}</span>')
-                        ui.html(f'<span style="font-family: IBM Plex Mono, monospace; font-size: 0.65rem; color: var(--text-muted)">{score_pct}%</span>')
+                        ui.html(f'<span style="font-size: 0.78rem; font-weight: 700; color: var(--text-muted)">{score_pct}%</span>')
                         if has_ft:
-                            ui.html('<span style="font-size: 0.6rem; color: var(--accent)">PDF</span>')
+                            ui.html('<span style="font-size: 0.78rem; font-weight: 700; color: var(--accent)">PDF</span>')
 
                     def _on_card_click(e: Any, r: int = ref) -> None:  # type: ignore[assignment]
                         reading_state["selected_refs"] = [r]
@@ -982,8 +1084,8 @@ def _build_studies_panel(
                     with ui.card().classes("mdr-card w-full p-4"):
                         # Title
                         ui.label(study.title).style(
-                            "font-family: 'Playfair Display', serif; font-size: 1.05rem; "
-                            "font-weight: 700; color: var(--text-primary); line-height: 1.35"
+                            "font-family: var(--font-ui); font-size: 1.08rem; "
+                            "font-weight: 800; color: var(--text-primary); line-height: 1.4"
                         )
                         authors_str = ", ".join(study.authors[:5])
                         if len(study.authors) > 5:
@@ -1001,7 +1103,7 @@ def _build_studies_panel(
                             if study.doi:
                                 doi_url = f"https://doi.org/{study.doi}"
                                 ui.link("DOI", doi_url, new_tab=True).style(
-                                    "font-size: 0.65rem; color: var(--accent)"
+                                    "font-size: 0.82rem; color: var(--accent)"
                                 )
                             if study.pmid:
                                 ui.html(f'<span class="mdr-badge mdr-badge-neutral">PMID {study.pmid}</span>')
@@ -1418,7 +1520,7 @@ def _build_studies_panel(
 
                 with ui.row().classes("w-full items-end gap-2 pt-2").style("flex-shrink: 0"):
                     msg_input = ui.input(placeholder="...").classes("flex-1").props("dense outlined")
-                    msg_input.style("font-family: 'IBM Plex Sans', sans-serif; font-size: 0.8rem; color: var(--text-primary)")
+                    msg_input.style("font-family: var(--font-ui); font-size: 0.95rem; color: var(--text-primary)")
 
                     async def _stream_response(chunks: Any) -> None:
                         """Stream chunks into the chat, handling scroll and cleanup."""
@@ -1605,33 +1707,27 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                 detail_panel.refresh()
                 run_list.refresh()
 
+        def _toggle_sidebar() -> None:
+            ui.run_javascript("document.body.classList.toggle('mdr-sidebar-open')")
+
+        def _hide_mobile_sidebar() -> None:
+            ui.run_javascript(
+                "if (window.innerWidth <= 900) document.body.classList.remove('mdr-sidebar-open')"
+            )
+
         # -- Header --
-        drawer: Any = None
         with ui.header().classes("mdr-header items-center justify-between"):
             with ui.row().classes("items-center gap-3"):
                 ui.button(
-                    icon="menu", on_click=lambda: drawer.toggle(),
-                ).props("flat dense round").style("color: var(--text-secondary)")
+                    icon="menu", on_click=_toggle_sidebar,
+                ).classes("mdr-menu-btn").props("flat dense round").style("color: var(--text-secondary)")
                 ui.html(f'<span class="mdr-title">{t("app_title")}</span>')
-            with ui.row().classes("items-center gap-1"):
-                _font_size = {"val": 100}
-
-                def _adjust_font(delta: int) -> None:
-                    _font_size["val"] = max(70, min(150, _font_size["val"] + delta))
-                    ui.run_javascript(
-                        f"document.documentElement.style.fontSize='{_font_size['val']}%'"
-                    )
-
-                _font_btn_style = "color: var(--text-muted); font-size: 0.75rem; min-width: 1.8rem; font-family: 'IBM Plex Sans', sans-serif"
-                ui.button("A-", on_click=lambda: _adjust_font(-10)).props("flat dense size=sm").style(_font_btn_style)
-                ui.button("A+", on_click=lambda: _adjust_font(10)).props("flat dense size=sm").style(_font_btn_style)
+            with ui.row().classes("items-center gap-2"):
                 ui.html(f'<span class="mdr-subtitle">{t("app_subtitle")}</span>')
 
-        # -- Sidebar drawer --
-        with ui.left_drawer(value=True).props("bordered overlay width=420").style(
-            "background: var(--bg-deep) !important; border-right: 1px solid var(--border-dim) !important; "
-            "padding: 0.75rem"
-        ) as drawer:  # noqa: F811
+        # -- Workspace: persistent research panel + main content --
+        with ui.row().classes("mdr-workspace w-full"):
+            with ui.column().classes("mdr-side-panel gap-3"):
 
                 # New Research form (collapsible)
                 with ui.expansion(t("new_research"), icon="add_circle_outline").classes("mdr-card w-full").props("dense default-opened"):
@@ -1655,7 +1751,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                             label=t("provider"),
                             value=form_state["provider"],
                             on_change=lambda e: on_provider_change(e.value),
-                        ).props("outlined dark dense").classes("flex-1")
+                        ).props("outlined dense").classes("flex-1")
                         provider_select.bind_value(form_state, "provider")
 
                         def on_language_change(e: Any) -> None:
@@ -1667,7 +1763,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                             label=t("language"),
                             value=form_state["language"],
                             on_change=on_language_change,
-                        ).props("outlined dark dense").classes("w-24")
+                        ).props("outlined dense").classes("w-24")
 
                     @ui.refreshable
                     def structured_input() -> None:
@@ -1675,7 +1771,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
 
                         def _field(label_key: str, placeholder: str, state_key: str) -> None:
                             ui.input(label=t(label_key), placeholder=placeholder).props(
-                                "outlined dark dense"
+                                "outlined dense"
                             ).classes("w-full").bind_value(form_state, state_key)
 
                         if qt == "pico":
@@ -1692,7 +1788,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                 label=t("research_question"),
                                 placeholder="e.g. What is the evidence for SGLT2 inhibitors in heart failure with preserved ejection fraction?",
                                 value=form_state["query"],
-                            ).props("autogrow outlined dark").classes("w-full")
+                            ).props("autogrow outlined").classes("w-full")
                             query_input.bind_value(form_state, "query")
 
                     structured_input()
@@ -1708,19 +1804,19 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                 models,
                                 label="Model",
                                 value=form_state["model"],
-                            ).props("outlined dark dense").classes("w-full")
+                            ).props("outlined dense").classes("w-full")
                             sel.bind_value(form_state, "model")
                             if not has_key and provider != "local":
                                 sel.props("disable")
                                 ui.html(
-                                    f'<span style="font-size:0.7rem; color: var(--error)">'
+                                    f'<span style="font-size:0.82rem; color: var(--error)">'
                                     f'{t("set_api_key")}</span>'
                                 )
                         else:
                             # Local / unknown provider: free-form input
                             local_input = ui.input(
                                 label="Model", value=form_state["model"],
-                            ).props("outlined dark dense").classes("w-full")
+                            ).props("outlined dense").classes("w-full")
                             local_input.bind_value(form_state, "model")
 
                     model_selector()
@@ -1738,14 +1834,14 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                             with ui.column().classes(f"{card_cls} w-full gap-1 mt-2"):
                                 with ui.row().classes("w-full items-center justify-between"):
                                     ui.label(entry["provider"].title()).style(
-                                        "font-weight:600; font-size:0.85rem; color: var(--text-primary)"
+                                        "font-weight:700; font-size:0.94rem; color: var(--text-primary)"
                                     )
                                     ui.html(
                                         f'<span class="mdr-badge {_exec_badge_class(entry["active_execution_path"])}">'
                                         f'{_exec_label(entry["active_execution_path"])}</span>'
                                     )
                                 ui.label(entry["runtime_name"]).style(
-                                    "font-size:0.72rem; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace"
+                                    "font-size:0.78rem; color: var(--text-muted); font-family: var(--font-mono)"
                                 )
                                 with ui.row().classes("flex-wrap gap-1 mt-1"):
                                     _text_badge("Engine", entry.get("runtime_engine"))
@@ -1756,7 +1852,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                     _bool_badge("Scopus", search_keys.get("scopus"))
                                 if entry.get("fallback_reason"):
                                     ui.label(entry["fallback_reason"]).style(
-                                        "font-size:0.7rem; color: var(--warn); margin-top:0.25rem"
+                                        "font-size:0.82rem; color: var(--warn); margin-top:0.25rem"
                                     )
 
                 provider_diagnostics()
@@ -1779,7 +1875,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                             value=stored_keys.get(svc, ""),
                             password=True,
                             password_toggle_button=True,
-                        ).props("outlined dark dense").classes("w-full")
+                        ).props("outlined dense").classes("w-full")
 
                     def save_keys() -> None:
                         for svc, field in key_fields.items():
@@ -1802,7 +1898,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                         label=t("years_lookback"),
                         value=service.get_recent_years_lookback(),
                         min=1, max=50, step=1, format="%d",
-                    ).props("outlined dark dense").classes("w-full")
+                    ).props("outlined dense").classes("w-full")
 
                     ui.html(
                         f'<div class="mdr-section-desc" style="margin-top:0.75rem; margin-bottom:0.5rem">{t("scopus_view_desc")}</div>'
@@ -1811,7 +1907,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                         {"STANDARD": "STANDARD", "COMPLETE": "COMPLETE"},
                         label=t("scopus_view"),
                         value=service.get_scopus_view(),
-                    ).props("outlined dark dense").classes("w-full")
+                    ).props("outlined dense").classes("w-full")
 
                     def save_research_settings() -> None:
                         try:
@@ -1867,7 +1963,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                         )
                                         ui.label(
                                             f"{run.provider} / {run.model}"
-                                        ).style("font-size: 0.65rem; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace")
+                                        ).style("font-size: 0.76rem; color: var(--text-muted); font-family: var(--font-mono)")
                                     ui.html(f'<span class="mdr-badge {_status_badge_class(run.status)}">{run.status}</span>')
                         if total > 0:
                             total_pages = max(1, (total + pp - 1) // pp)
@@ -1877,7 +1973,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                     "flat dense round" + (" disable" if page_state["page"] == 0 else "")
                                 ).style("color: var(--text-secondary)")
                                 ui.html(
-                                    f'<span style="font-family: IBM Plex Mono, monospace; font-size: 0.7rem; '
+                                    f'<span style="font-family: var(--font-mono); font-size: 0.78rem; '
                                     f'color: var(--text-muted)">{current_page}/{total_pages}</span>'
                                 )
                                 ui.button(icon="chevron_right", on_click=next_page).props(
@@ -1893,15 +1989,13 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                     {5: "5", 8: "8", 15: "15", 30: "30"},
                                     value=pp, on_change=_set_per_page,
                                 ).props("dense borderless").style(
-                                    "width: 3.5rem; font-size: 0.65rem; color: var(--text-muted)"
+                                    "width: 3.5rem; font-size: 0.82rem; color: var(--text-muted)"
                                 )
 
                 run_list()
 
-        # ===== MAIN CONTENT (full width) =====
-        with ui.column().classes("w-full gap-3").style(
-            "padding: 0.75rem 1.25rem; height: calc(100vh - 3.5rem); overflow-y: auto"
-        ).on("click", lambda: drawer.hide()):
+            # ===== MAIN CONTENT =====
+            with ui.column().classes("mdr-main-panel gap-3").on("click", _hide_mobile_sidebar):
 
                 @ui.refreshable
                 def detail_panel() -> None:
@@ -1913,7 +2007,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                         with ui.card().classes("mdr-card w-full p-8"):
                             with ui.column().classes("items-center gap-3"):
                                 ui.html(
-                                    '<div style="font-family: Playfair Display, serif; font-size: 1.3rem; '
+                                    '<div style="font-family: var(--font-ui); font-size: 1.35rem; '
                                     f'color: var(--text-muted); font-weight: 500">{t("select_run")}</div>'
                                 )
                                 ui.html(
@@ -1939,15 +2033,15 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                         ui.html(f'<span class="mdr-badge {_status_badge_class(run.status)}" style="flex-shrink:0">{run.status}</span>')
                         ui.html(f'<span class="mdr-badge mdr-badge-neutral" style="flex-shrink:0">{run.runtime_name}</span>')
                         ui.html(
-                            f'<span style="font-family: IBM Plex Mono, monospace; font-size: 0.68rem; '
+                            f'<span style="font-family: var(--font-mono); font-size: 0.78rem; '
                             f'color: var(--text-muted); flex-shrink: 0">{run.progress}%</span>'
                         )
                         ui.button(t("interrupt"), on_click=interrupt_selected).props(
                             "outline size=xs dense"
-                        ).style("color: var(--text-secondary); border-color: var(--border-dim); font-size: 0.68rem")
+                        ).style("color: var(--text-secondary); border-color: var(--border-dim); font-size: 0.82rem")
                         ui.button(t("cancel"), on_click=cancel_selected).props(
                             "outline size=xs dense"
-                        ).style("color: var(--error); border-color: var(--error); font-size: 0.68rem")
+                        ).style("color: var(--error); border-color: var(--error); font-size: 0.82rem")
 
                     # JS: dynamically calc reading panel height based on available space
                     ui.timer(0.2, lambda: ui.run_javascript("""
@@ -1995,16 +2089,16 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                         value=_active_tab_name,  # type: ignore[arg-type]
                         on_change=on_tab_change,
                     ).classes("mdr-tabs w-full") as tabs:
-                        trace_tab = ui.tab("trace")
-                        artifacts_tab = ui.tab("artifacts")
-                        report_tab = ui.tab("report")
+                        trace_tab = ui.tab("trace", label="Trace")
+                        artifacts_tab = ui.tab("artifacts", label="Artifacts")
+                        report_tab = ui.tab("report", label="Report")
                         if _has_studies:
-                            studies_tab = ui.tab(t("studies"))
-                        diag_tab = ui.tab("diagnostics")
+                            studies_tab = ui.tab("studies", label=t("studies"))
+                        diag_tab = ui.tab("diagnostics", label="Diagnostics")
 
                     _tab_map: dict[str, Any] = {"trace": trace_tab, "artifacts": artifacts_tab, "report": report_tab, "diagnostics": diag_tab}
                     if _has_studies:
-                        _tab_map[t("studies")] = studies_tab  # type: ignore[possibly-undefined]
+                        _tab_map["studies"] = studies_tab  # type: ignore[possibly-undefined]
                     _active = _tab_map.get(_active_tab_name, trace_tab)
 
                     with ui.tab_panels(tabs, value=_active).classes("w-full").style("background: transparent !important"):
@@ -2126,7 +2220,7 @@ def build_ui(service: ResearchService, reading_service: ReadingService | None = 
                                         _bool_badge("Scopus", search_keys.get("scopus"))
                                     ui.label(
                                         f"{run_diag.get('runtime_name', '')} · {run_diag.get('model', '')}"
-                                    ).style("font-size: 0.75rem; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace; margin-top: 0.5rem")
+                                    ).style("font-size: 0.82rem; color: var(--text-muted); font-family: var(--font-mono); margin-top: 0.5rem")
                                     if run_diag.get("ranked_results") is not None:
                                         ui.label(f"Ranked results: {run_diag['ranked_results']}").style(
                                             "font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem"

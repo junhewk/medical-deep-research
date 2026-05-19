@@ -16,13 +16,13 @@ dependencies = [
   "anyio",
   "httpx",
   "mcp[cli]",
-  "nicegui",
+  "PySide6>=6.6",
+  "qasync>=0.27",
   "pydantic-settings",
   "sqlmodel",
 ]
 
 [project.optional-dependencies]
-desktop = ["pywebview"]
 openai = ["openai-agents"]
 anthropic = ["anthropic", "deepagents", "langchain", "langchain-anthropic", "langgraph"]
 claude-sdk = ["claude-agent-sdk"]

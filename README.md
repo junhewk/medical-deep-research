@@ -13,7 +13,7 @@ Evidence-Based Medical Research Assistant
 
 Medical Deep Research is a **desktop research assistant** for healthcare professionals and medical researchers. It uses **autonomous AI agents** to search medical literature across multiple databases, classify evidence levels, retrieve open-access full-text PDFs, and synthesize findings into comprehensive reports.
 
-Built with Python and NiceGUI, packaged as a native desktop app for macOS and Windows.
+Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS and Windows.
 
 ### Key Features
 
@@ -28,7 +28,7 @@ Built with Python and NiceGUI, packaged as a native desktop app for macOS and Wi
 | **Evidence** | Level I–V classification, PMID verification against PubMed |
 | **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
 | **i18n** | English / Korean UI, LLM-powered report translation |
-| **Desktop** | Native window (pywebview), PyInstaller packaging, push-based UI, drawer-based sidebar |
+| **Desktop** | Native PySide6 (Qt) window, PyInstaller packaging, push-based UI, splitter-based layout |
 
 ## Download
 
@@ -97,11 +97,9 @@ uv sync --extra google      # Google ADK
 uv sync --extra langchain   # Local LLMs (Ollama, LM Studio)
 uv sync --extra pdf         # Full-text PDF parsing
 
-# Run the app
+# Run the app (opens a native Qt window — no browser, no local web port)
 uv run medical-deep-research
 ```
-
-Open http://127.0.0.1:18515
 
 ### Build Desktop App
 
@@ -195,8 +193,8 @@ After ranking, the agent retrieves open-access full-text for Level I & II studie
 
 ```
 src/medical_deep_research/
-├── main.py                 # NiceGUI app entry point
-├── ui.py                   # Dark-theme web UI with i18n, drawer layout, study reader
+├── main.py                 # PySide6 + qasync app entry point
+├── qtui/                   # Native Qt UI package (sidebar, tabs, widgets)
 ├── reading_service.py      # Reading session management, fulltext chat, highlights
 ├── config.py               # Settings (pydantic-settings)
 ├── models.py               # SQLModel data models + RunRequest
@@ -215,7 +213,7 @@ src/medical_deep_research/
     └── servers.py          # FastMCP servers (literature, evidence, workspace)
 
 scripts/
-├── desktop_entry.py        # PyInstaller entry point (pywebview + NiceGUI)
+├── desktop_entry.py        # PyInstaller entry point (PySide6)
 ├── build-macos.sh          # macOS build script
 └── eval_anthropic_route.py # Opt-in Anthropic route smoke eval
 ```
@@ -253,7 +251,7 @@ MIT License — see [LICENSE](LICENSE)
 - Open access: [Unpaywall](https://unpaywall.org/), [PubMed Central](https://pmc.ncbi.nlm.nih.gov/)
 - PDF parsing: [markitdown](https://github.com/microsoft/markitdown), [opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf)
 - Agent SDKs: [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code/sdk), [OpenAI Agents](https://openai.github.io/openai-agents-python/), [Google ADK](https://google.github.io/adk-docs/), [LangChain](https://python.langchain.com/)
-- UI framework: [NiceGUI](https://nicegui.io/)
+- UI framework: [PySide6 (Qt for Python)](https://doc.qt.io/qtforpython-6/), [qasync](https://github.com/CabbageDevelopment/qasync)
 
 ## Citation
 

@@ -1,38 +1,13 @@
 from __future__ import annotations
 
-from nicegui import ui
+import sys
 
-from .config import load_settings
-from .persistence import AppDatabase
-from .reading_service import ReadingService
-from .service import ResearchService
-from .ui import build_ui
+from .qtui import run_app
 
 
-def main() -> None:
-    settings = load_settings()
-    database = AppDatabase(settings)
-    database.create_all()
-    database.bootstrap_defaults()
-    database.import_legacy_data(settings.legacy_db_path)
-    service = ResearchService(database)
-    reading_service = ReadingService(database)
-
-    port = settings.port
-    if settings.native_window:
-        from nicegui import native
-        port = native.find_open_port()
-
-    ui.run(
-        root=lambda: build_ui(service, reading_service),
-        title=settings.app_name,
-        host=settings.host,
-        port=port,
-        native=settings.native_window,
-        storage_secret=settings.storage_secret,
-        reload=False,
-    )
+def main() -> int:
+    return run_app()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

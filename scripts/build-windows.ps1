@@ -21,32 +21,13 @@ $AppName = "Medical Deep Research"
 
 Write-Host "--- Installing dependencies ---"
 uv sync --all-extras
-uv pip install pyinstaller pywebview
+uv pip install pyinstaller
 
 $Version = uv run python -c "import tomllib, pathlib; p = tomllib.loads(pathlib.Path('pyproject.toml').read_text()); print(p['project']['version'])"
 Write-Host "=== Building $AppName v$Version for Windows ==="
 
 Write-Host "--- Running PyInstaller ---"
 uv run python -m PyInstaller --noconfirm --clean "Medical Deep Research.spec"
-
-Write-Host "--- Stripping unused NiceGUI element JS bundles ---"
-$ElementRoots = @(
-    "dist\$AppName\runtime\nicegui\elements",
-    "dist\$AppName\nicegui\elements"
-)
-$UnusedElements = @(
-    "plotly", "echart", "mermaid", "codemirror", "json_editor",
-    "aggrid", "scene", "leaflet", "xterm", "joystick"
-)
-foreach ($Root in $ElementRoots) {
-    if (-not (Test-Path $Root)) {
-        continue
-    }
-    foreach ($Element in $UnusedElements) {
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "$Element\dist")
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "$Element\src")
-    }
-}
 
 $ExePath = "dist\$AppName\$AppName.exe"
 Write-Host "--- Build complete ---"

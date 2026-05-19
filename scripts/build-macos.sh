@@ -22,7 +22,7 @@ BUNDLE_ID="com.junhewk.medical-deep-research"
 # ---------------------------------------------------------------------------
 echo "--- Installing dependencies ---"
 uv sync --all-extras
-uv pip install pyinstaller pywebview
+uv pip install pyinstaller
 
 # Use uv run for all Python commands so they use the venv
 VERSION=$(uv run python -c "
@@ -42,15 +42,8 @@ uv run python -m PyInstaller \
     "Medical Deep Research.spec"
 
 # ---------------------------------------------------------------------------
-# 3. Strip unused NiceGUI element bundles to reduce size and startup time
+# 3. Ad-hoc sign
 # ---------------------------------------------------------------------------
-echo "--- Stripping unused NiceGUI element JS bundles ---"
-for elem in plotly echart mermaid codemirror json_editor aggrid scene leaflet xterm joystick; do
-    # Remove heavy JS dist bundles only — keep .py and __init__.py so nicegui imports work
-    rm -rf "dist/${APP_NAME}.app/Contents/Resources/nicegui/elements/${elem}/dist"
-    rm -rf "dist/${APP_NAME}.app/Contents/Resources/nicegui/elements/${elem}/src"
-done
-
 echo "--- Ad-hoc signing app bundle ---"
 codesign --force --deep --sign - "dist/${APP_NAME}.app"
 codesign --verify --deep --strict --verbose=2 "dist/${APP_NAME}.app"

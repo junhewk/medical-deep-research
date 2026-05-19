@@ -44,26 +44,26 @@ class DiagnosticsTab(QWidget):
         layout.addWidget(self._badges_holder)
 
         self._summary_label = QLabel("")
-        self._summary_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; font-family: monospace;")
+        self._summary_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; font-family: monospace;")
         self._summary_label.setWordWrap(True)
         layout.addWidget(self._summary_label)
 
         self._details_label = QLabel("")
         self._details_label.setWordWrap(True)
-        self._details_label.setStyleSheet(f"font-size: 12px; color: {TEXT_SECONDARY};")
+        self._details_label.setStyleSheet(f"font-size: 13px; color: {TEXT_SECONDARY};")
         layout.addWidget(self._details_label)
 
         self._raw_json = QPlainTextEdit()
         self._raw_json.setReadOnly(True)
         self._raw_json.setStyleSheet(
-            "QPlainTextEdit { font-family: monospace; font-size: 11px; "
+            "QPlainTextEdit { font-family: monospace; font-size: 12px; "
             f"background: {SURFACE_SOFT}; border: 1px solid {BORDER_DIM}; }}"
         )
         layout.addWidget(self._raw_json, 1)
 
         self._empty = QLabel(self._t("no_diagnostics"))
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
         layout.addWidget(self._empty)
 
     def set_diagnostics(self, diag: dict[str, Any] | None) -> None:

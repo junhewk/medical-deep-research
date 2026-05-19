@@ -59,7 +59,7 @@ class _RunHeader(QWidget):
         row.setSpacing(8)
 
         self._query_label = QLabel("")
-        self._query_label.setStyleSheet("font-weight: 700; font-size: 13px;")
+        self._query_label.setStyleSheet("font-weight: 700; font-size: 14px;")
         self._query_label.setSizePolicy(self._query_label.sizePolicy().horizontalPolicy(),
                                        self._query_label.sizePolicy().verticalPolicy())
         self._query_label.setWordWrap(False)
@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
         desc = QLabel(self._t("select_run_desc"))
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
-        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
         desc.setMaximumWidth(480)
         layout.addWidget(desc)
 

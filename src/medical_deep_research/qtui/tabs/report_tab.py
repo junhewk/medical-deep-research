@@ -76,7 +76,7 @@ class ReportTab(QWidget):
         title_block.addWidget(self._title)
 
         self._stats = QLabel("")
-        self._stats.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        self._stats.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         title_block.addWidget(self._stats)
         header.addLayout(title_block)
         header.addStretch(1)

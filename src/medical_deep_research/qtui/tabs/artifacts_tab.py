@@ -32,7 +32,7 @@ class ArtifactsTab(QWidget):
         layout.addWidget(self._title)
 
         self._count_label = QLabel("")
-        self._count_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        self._count_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         layout.addWidget(self._count_label)
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -44,7 +44,7 @@ class ArtifactsTab(QWidget):
         self._preview = QPlainTextEdit()
         self._preview.setReadOnly(True)
         self._preview.setStyleSheet(
-            f"QPlainTextEdit {{ font-family: monospace; font-size: 11px; background: {SURFACE_SOFT}; }}"
+            f"QPlainTextEdit {{ font-family: monospace; font-size: 12px; background: {SURFACE_SOFT}; }}"
         )
         self._splitter.addWidget(self._preview)
         self._splitter.setStretchFactor(0, 1)
@@ -53,7 +53,7 @@ class ArtifactsTab(QWidget):
 
         self._empty = QLabel(self._t("no_artifacts"))
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
         layout.addWidget(self._empty)
 
         self._artifacts: list = []

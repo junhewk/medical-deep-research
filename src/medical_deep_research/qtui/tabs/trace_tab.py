@@ -30,7 +30,7 @@ class TraceTab(QWidget):
         layout.addWidget(self._title)
 
         self._count_label = QLabel("")
-        self._count_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        self._count_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         layout.addWidget(self._count_label)
 
         self._list = QListWidget()
@@ -42,7 +42,7 @@ class TraceTab(QWidget):
         layout.addWidget(self._list, 1)
 
         self._empty = QLabel(self._t("waiting_events"))
-        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; padding: 8px;")
+        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 8px;")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._empty)
 

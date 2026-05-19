@@ -25,7 +25,7 @@ SUCCESS = "#027a48"
 WARNING = "#b54708"
 ERROR = "#b42318"
 
-_FONT_FAMILY = "Inter"
+_FONT_FAMILY = "Pretendard"
 
 
 def load_embedded_fonts() -> list[str]:
@@ -34,7 +34,7 @@ def load_embedded_fonts() -> list[str]:
 
     try:
         font_ref = resources.files("medical_deep_research").joinpath(
-            "assets/fonts/InterVariable.ttf"
+            "assets/fonts/PretendardVariable.ttf"
         )
         with resources.as_file(font_ref) as font_path:
             font_id = QFontDatabase.addApplicationFont(str(font_path))
@@ -54,7 +54,7 @@ def load_embedded_fonts() -> list[str]:
 # visual system. The app font is applied through QApplication.setFont().
 APP_QSS = f"""
 QMainWindow, QWidget {{
-    font-size: 13px;
+    font-size: 14px;
     color: {TEXT_PRIMARY};
 }}
 
@@ -175,11 +175,11 @@ QLabel[role="muted"] {{
 }}
 QLabel[role="section-title"] {{
     font-weight: 700;
-    font-size: 14px;
+    font-size: 15px;
 }}
 QLabel[role="section-desc"] {{
     color: {TEXT_MUTED};
-    font-size: 12px;
+    font-size: 13px;
 }}
 
 QListWidget {{
@@ -230,14 +230,14 @@ def default_font() -> QFont:
     """Pick the bundled UI font, with platform CJK fallback for Korean text."""
     f = QFont(_FONT_FAMILY)
     f.setStyleHint(QFont.StyleHint.SansSerif)
-    f.setPointSizeF(10.0)
+    f.setPointSizeF(11.0)
     return f
 
 
 def report_font() -> QFont:
     f = QFont(_FONT_FAMILY)
     f.setStyleHint(QFont.StyleHint.SansSerif)
-    f.setPointSizeF(11.0)
+    f.setPointSizeF(12.0)
     return f
 
 

@@ -34,7 +34,7 @@ class BadgePill(QLabel):
         self.setStyleSheet(
             "QLabel { "
             f"{style} "
-            "font-weight: 700; font-size: 11px; "
+            "font-weight: 700; font-size: 12px; "
             "padding: 2px 8px; border-radius: 9px; "
             "}"
         )
@@ -54,7 +54,7 @@ class EvidenceBadge(QLabel):
         self.setStyleSheet(
             "QLabel { "
             f"{style} "
-            "font-weight: 800; font-size: 11px; "
+            "font-weight: 800; font-size: 12px; "
             "padding: 2px 8px; border-radius: 9px; "
             "}"
         )

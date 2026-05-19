@@ -29,16 +29,15 @@ from .i18n import API_KEY_SERVICES, PROVIDER_LABELS, PROVIDER_MODELS
 from .run_list import RunListPanel
 from .theme import (
     ACCENT,
-    ACCENT_SOFT,
     BORDER_DIM,
     ERROR,
+    SURFACE,
     SURFACE_SOFT,
     TEXT_MUTED,
-    WARNING,
+    TEXT_SECONDARY,
 )
 from .widgets.badge import (
     BadgePill,
-    bool_badge,
     exec_badge_kind,
     exec_label,
     text_badge,
@@ -46,6 +45,14 @@ from .widgets.badge import (
 
 
 _PLAIN_CONFIG_FIELDS = {"local_base_url", "ollama_base_url"}
+
+
+def _provider_flag_badge(label: str, value: object) -> BadgePill:
+    if value is True:
+        return BadgePill(f"{label}: ready", "active")
+    if value is False:
+        return BadgePill(f"{label}: missing", "warn")
+    return BadgePill(f"{label}: n/a", "neutral")
 
 
 class WorkspaceTabs(QTabWidget):
@@ -69,7 +76,7 @@ class WorkspaceTabs(QTabWidget):
         self._lang = service.get_language()
 
         # form state
-        self._query_type = "free"
+        self._query_type = "pico"
         self._provider = "anthropic"
         self._model_by_provider = dict(DEFAULT_MODELS)
         self._model = self._model_by_provider["anthropic"]
@@ -168,18 +175,18 @@ class WorkspaceTabs(QTabWidget):
 
         desc = QLabel(self._t("new_research_desc"))
         desc.setProperty("role", "section-desc")
-        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
         desc.setWordWrap(True)
         v.addWidget(desc)
 
         # Query type radio group
         qt_row = QHBoxLayout()
         self._qt_group = QButtonGroup(self)
-        self._qt_free = QRadioButton(self._t("free_form"))
         self._qt_pico = QRadioButton("PICO")
         self._qt_pcc  = QRadioButton("PCC")
-        self._qt_free.setChecked(True)
-        for rb, name in [(self._qt_free, "free"), (self._qt_pico, "pico"), (self._qt_pcc, "pcc")]:
+        self._qt_free = QRadioButton(self._t("free_form"))
+        self._qt_pico.setChecked(True)
+        for rb, name in [(self._qt_pico, "pico"), (self._qt_pcc, "pcc"), (self._qt_free, "free")]:
             self._qt_group.addButton(rb)
             rb.toggled.connect(lambda checked, n=name: checked and self._set_query_type(n))
             qt_row.addWidget(rb)
@@ -245,7 +252,7 @@ class WorkspaceTabs(QTabWidget):
         v.addLayout(model_row)
 
         self._model_warning = QLabel("")
-        self._model_warning.setStyleSheet(f"color: {ERROR}; font-size: 11px;")
+        self._model_warning.setStyleSheet(f"color: {ERROR}; font-size: 12px;")
         self._model_warning.setVisible(False)
         v.addWidget(self._model_warning)
         self._refresh_model_combo()
@@ -423,10 +430,11 @@ class WorkspaceTabs(QTabWidget):
         for entry in diagnostics:
             is_selected = entry["provider"] == self._provider
             card = QWidget()
+            card.setObjectName("providerCard")
             border = ACCENT if is_selected else BORDER_DIM
-            bg = ACCENT_SOFT if is_selected else SURFACE_SOFT
+            bg = SURFACE if is_selected else SURFACE_SOFT
             card.setStyleSheet(
-                "QWidget { "
+                "QWidget#providerCard { "
                 f"background: {bg}; border: 1px solid {border}; "
                 "border-radius: 6px; padding: 6px; "
                 "}"
@@ -443,23 +451,23 @@ class WorkspaceTabs(QTabWidget):
             cl.addLayout(head)
 
             sub = QLabel(entry["runtime_name"])
-            sub.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+            sub.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
             cl.addWidget(sub)
 
             badge_row = QHBoxLayout(); badge_row.setSpacing(4)
             engine_b = text_badge("Engine", entry.get("runtime_engine"))
             if engine_b: badge_row.addWidget(engine_b)
-            badge_row.addWidget(bool_badge("SDK", entry["sdk_available"]))
-            badge_row.addWidget(bool_badge("Key", entry["provider_credentials_present"]))
-            badge_row.addWidget(bool_badge("Online", not entry["offline_mode"]))
+            badge_row.addWidget(_provider_flag_badge("SDK", entry["sdk_available"]))
+            badge_row.addWidget(_provider_flag_badge("Key", entry["provider_credentials_present"]))
+            badge_row.addWidget(_provider_flag_badge("Online", not entry["offline_mode"]))
             search_keys = entry.get("search_credentials_present") or {}
-            badge_row.addWidget(bool_badge("Scopus", search_keys.get("scopus")))
+            badge_row.addWidget(_provider_flag_badge("Scopus", search_keys.get("scopus")))
             badge_row.addStretch(1)
             cl.addLayout(badge_row)
 
             if entry.get("fallback_reason"):
                 fb = QLabel(entry["fallback_reason"])
-                fb.setStyleSheet(f"color: {WARNING}; font-size: 11px;")
+                fb.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
                 fb.setWordWrap(True)
                 cl.addWidget(fb)
 
@@ -471,7 +479,7 @@ class WorkspaceTabs(QTabWidget):
         group = QGroupBox(self._t("api_keys"))
         v = QVBoxLayout(group); v.setSpacing(6)
         desc = QLabel(self._t("api_keys_desc"))
-        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         desc.setWordWrap(True)
         v.addWidget(desc)
 
@@ -510,7 +518,7 @@ class WorkspaceTabs(QTabWidget):
         v = QVBoxLayout(group); v.setSpacing(6)
 
         desc = QLabel(self._t("years_lookback_desc"))
-        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         desc.setWordWrap(True)
         v.addWidget(desc)
 
@@ -522,7 +530,7 @@ class WorkspaceTabs(QTabWidget):
         v.addLayout(years_row)
 
         scopus_desc = QLabel(self._t("scopus_view_desc"))
-        scopus_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        scopus_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         scopus_desc.setWordWrap(True)
         v.addWidget(scopus_desc)
 

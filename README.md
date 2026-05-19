@@ -29,6 +29,7 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 | **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
 | **i18n** | English / Korean UI, LLM-powered report translation |
 | **Desktop** | Native PySide6 (Qt) window, PyInstaller packaging, push-based UI, splitter-based layout |
+| **UI polish** | Bundled Pretendard sans font, PICO/PCC-first research form, report outline/search reader |
 
 ## Download
 
@@ -195,6 +196,7 @@ After ranking, the agent retrieves open-access full-text for Level I & II studie
 src/medical_deep_research/
 ├── main.py                 # PySide6 + qasync app entry point
 ├── qtui/                   # Native Qt UI package (sidebar, tabs, widgets)
+├── assets/fonts/           # Bundled Pretendard font + license for consistent desktop rendering
 ├── reading_service.py      # Reading session management, fulltext chat, highlights
 ├── config.py               # Settings (pydantic-settings)
 ├── models.py               # SQLModel data models + RunRequest
@@ -252,6 +254,7 @@ MIT License — see [LICENSE](LICENSE)
 - PDF parsing: [markitdown](https://github.com/microsoft/markitdown), [opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf)
 - Agent SDKs: [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code/sdk), [OpenAI Agents](https://openai.github.io/openai-agents-python/), [Google ADK](https://google.github.io/adk-docs/), [LangChain](https://python.langchain.com/)
 - UI framework: [PySide6 (Qt for Python)](https://doc.qt.io/qtforpython-6/), [qasync](https://github.com/CabbageDevelopment/qasync)
+- UI font: [Pretendard](https://github.com/orioncactus/pretendard), bundled under its included license
 
 ## Citation
 

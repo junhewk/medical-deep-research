@@ -132,7 +132,7 @@ class RunListPanel(QWidget):
         header.addWidget(self._title)
         header.addStretch(1)
         self._range_label = QLabel("")
-        self._range_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        self._range_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         header.addWidget(self._range_label)
         layout.addLayout(header)
 
@@ -146,7 +146,7 @@ class RunListPanel(QWidget):
 
         # Empty state
         self._empty_label = QLabel(self._t("no_runs"))
-        self._empty_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; padding: 8px;")
+        self._empty_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 8px;")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setVisible(False)
         layout.addWidget(self._empty_label)
@@ -160,7 +160,7 @@ class RunListPanel(QWidget):
         nav.addWidget(self._prev_btn)
         self._page_label = QLabel("1/1")
         self._page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._page_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        self._page_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         nav.addWidget(self._page_label, 1)
         self._next_btn = QPushButton("›")
         self._next_btn.setFixedWidth(28)

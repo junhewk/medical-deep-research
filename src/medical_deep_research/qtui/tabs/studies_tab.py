@@ -102,7 +102,7 @@ class StudiesTab(QWidget):
         # Empty-state label
         self._empty = QLabel(self._t("studies_not_available"))
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 32px;")
+        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 14px; padding: 32px;")
         layout.addWidget(self._empty)
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -149,7 +149,7 @@ class StudiesTab(QWidget):
 
         # Scope label
         self._scope_label = QLabel("")
-        self._scope_label.setStyleSheet(f"color: {ACCENT}; font-size: 11px; font-weight: 700;")
+        self._scope_label.setStyleSheet(f"color: {ACCENT}; font-size: 12px; font-weight: 700;")
         chat_layout.addWidget(self._scope_label)
 
         # Chat scroll area
@@ -290,12 +290,12 @@ class StudiesTab(QWidget):
         if len(study.authors) > 5:
             authors += " et al."
         authors_lbl = QLabel(authors)
-        authors_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        authors_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
         authors_lbl.setWordWrap(True)
         self._detail_layout.addWidget(authors_lbl)
 
         journal_lbl = QLabel(f"{study.journal or 'N/A'}, {study.publication_year or 'N/A'}")
-        journal_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; font-style: italic;")
+        journal_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; font-style: italic;")
         self._detail_layout.addWidget(journal_lbl)
 
         # Badge row
@@ -321,7 +321,7 @@ class StudiesTab(QWidget):
             self._detail_layout.addWidget(abstract_title)
             abstract_view = QLabel(study.abstract)
             abstract_view.setWordWrap(True)
-            abstract_view.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+            abstract_view.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 13px;")
             abstract_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self._detail_layout.addWidget(abstract_view)
 

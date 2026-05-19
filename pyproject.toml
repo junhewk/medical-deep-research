@@ -38,5 +38,5 @@ medical-deep-research-mcp = "medical_deep_research.mcp.servers:main"
 packages = ["src/medical_deep_research"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/medical_deep_research/assets/fonts/InterVariable.ttf" = "medical_deep_research/assets/fonts/InterVariable.ttf"
-"src/medical_deep_research/assets/fonts/Inter-LICENSE.txt" = "medical_deep_research/assets/fonts/Inter-LICENSE.txt"
+"src/medical_deep_research/assets/fonts/PretendardVariable.ttf" = "medical_deep_research/assets/fonts/PretendardVariable.ttf"
+"src/medical_deep_research/assets/fonts/Pretendard-LICENSE.txt" = "medical_deep_research/assets/fonts/Pretendard-LICENSE.txt"

@@ -3,7 +3,6 @@ from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
 import importlib.util as _importlib_util
-import re as _re
 
 datas = [('src/medical_deep_research', 'medical_deep_research')]
 binaries = []
@@ -47,11 +46,9 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules('medical_deep_research')
 
-# PySide6: collect the core + needed Qt modules.  We strip heavyweight Qt
-# subpackages further down to keep the bundle reasonable.
-tmp_ret = collect_all('PySide6')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-# Also include qasync since collect_all only collects what's listed
+# Let PyInstaller's PySide6 hooks collect only the Qt modules imported by the
+# app. collect_all('PySide6') pulls in WebEngine, QML, Designer, PDF, and other
+# unused Qt runtimes, which makes the Windows ZIP hundreds of MB larger.
 tmp_ret = collect_all('qasync')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
@@ -60,32 +57,6 @@ for _pkg in ('anthropic', 'langchain', 'langchain_anthropic', 'langgraph', 'deep
         continue
     tmp_ret = collect_all(_pkg)
     datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-# Strip heavyweight Qt subpackages we never use (saves substantial bundle size).
-_excluded_qt_modules = [
-    'Qt3DCore', 'Qt3DRender', 'Qt3DInput', 'Qt3DAnimation', 'Qt3DLogic', 'Qt3DExtras',
-    'QtCharts', 'QtDataVisualization',
-    'QtBluetooth', 'QtNfc', 'QtSerialPort', 'QtSensors',
-    'QtLocation', 'QtPositioning',
-    'QtMultimedia', 'QtMultimediaWidgets',
-    'QtWebEngineCore', 'QtWebEngineWidgets', 'QtWebEngineQuick', 'QtWebChannel',
-    'QtWebView', 'QtWebSockets',
-    'QtQuick3D', 'QtQuick3DRuntimeRender', 'QtQuick3DAssetImport',
-    'QtRemoteObjects', 'QtTextToSpeech',
-    'QtDesigner', 'QtHelp', 'QtPdf', 'QtPdfWidgets',
-    'QtOpcUa', 'QtMqtt', 'QtScxml', 'QtSpatialAudio',
-]
-_qt_excl_pat = _re.compile(
-    r'(?:^|[/\\])(?:Qt6?|PySide6[/\\])(' + '|'.join(m.replace('Qt', '') for m in _excluded_qt_modules) + r')(?:[/\\]|\.|$)',
-    _re.IGNORECASE,
-)
-# Simpler: match by full module name in the dest path
-_qt_dest_pat = _re.compile(
-    r'PySide6[/\\](?:' + '|'.join(_excluded_qt_modules) + r')',
-    _re.IGNORECASE,
-)
-datas = [(src, dst) for src, dst in datas if not _qt_dest_pat.search(dst)]
-binaries = [(src, dst) for src, dst in binaries if not _qt_dest_pat.search(dst)]
 
 a = Analysis(
     ['scripts/desktop_entry.py'],
@@ -120,6 +91,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    icon='assets/icon.ico',
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

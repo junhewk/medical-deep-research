@@ -5,7 +5,7 @@ import sys
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -32,7 +32,15 @@ from .tabs.diagnostics_tab import DiagnosticsTab
 from .tabs.report_tab import ReportTab
 from .tabs.studies_tab import StudiesTab
 from .tabs.trace_tab import TraceTab
-from .theme import APP_QSS, adjusted_point_size, default_font
+from .theme import (
+    APP_QSS,
+    BORDER_DIM,
+    SURFACE,
+    TEXT_MUTED,
+    adjusted_point_size,
+    default_font,
+    load_embedded_fonts,
+)
 from .widgets.badge import BadgePill, status_badge_kind
 
 
@@ -75,11 +83,14 @@ class _RunHeader(QWidget):
         row.addWidget(self._interrupt_btn)
 
         self._cancel_btn = QPushButton(self._t("cancel"))
-        self._cancel_btn.setStyleSheet("QPushButton { color: #b42318; }")
+        self._cancel_btn.setProperty("role", "danger")
         self._cancel_btn.clicked.connect(self.cancelClicked.emit)
         row.addWidget(self._cancel_btn)
 
-        self.setStyleSheet("_RunHeader { background: white; border: 1px solid #d6e1ea; border-radius: 6px; }")
+        self.setStyleSheet(
+            f"_RunHeader {{ background: {SURFACE}; border: 1px solid {BORDER_DIM}; "
+            "border-radius: 8px; }"
+        )
 
     def set_run(self, run) -> None:
         # Truncate query for display
@@ -123,7 +134,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(settings.app_name)
         self.resize(1280, 860)
 
-        self._build_menus()
         self._build_status_bar()
         self._build_layout()
 
@@ -142,15 +152,6 @@ class MainWindow(QMainWindow):
 
     # ---- layout ----
 
-    def _build_menus(self) -> None:
-        menubar = self.menuBar()
-        file_menu = menubar.addMenu("&File")
-
-        quit_action = QAction("Quit", self)
-        quit_action.setShortcut("Ctrl+Q")
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
-
     def _build_layout(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
@@ -163,6 +164,7 @@ class MainWindow(QMainWindow):
         self._workspace_tabs.languageChanged.connect(self._on_language_changed)
         self._workspace_tabs.runSelected.connect(self._on_run_selected_from_workspace)
         self._workspace_tabs.runsRefreshRequested.connect(self._refresh_run_list)
+        self._workspace_tabs.quitRequested.connect(self.close)
         outer.addWidget(self._workspace_tabs, 1)
 
         # Run detail tab
@@ -211,13 +213,13 @@ class MainWindow(QMainWindow):
         title = QLabel(self._t("select_run"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         f = title.font(); f.setPointSizeF(adjusted_point_size(f, 4)); title.setFont(f)
-        title.setStyleSheet("color: #6e7f91;")
+        title.setStyleSheet(f"color: {TEXT_MUTED};")
         layout.addWidget(title)
 
         desc = QLabel(self._t("select_run_desc"))
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #6e7f91; font-size: 12px;")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         desc.setMaximumWidth(480)
         layout.addWidget(desc)
 
@@ -380,6 +382,7 @@ def run_app(
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(settings.app_name)
+    load_embedded_fonts()
     app.setFont(default_font())
     app.setStyleSheet(APP_QSS)
 

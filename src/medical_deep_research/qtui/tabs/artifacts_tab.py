@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..theme import adjusted_point_size
+from ..theme import SURFACE_SOFT, TEXT_MUTED, adjusted_point_size
 
 
 class ArtifactsTab(QWidget):
@@ -32,7 +32,7 @@ class ArtifactsTab(QWidget):
         layout.addWidget(self._title)
 
         self._count_label = QLabel("")
-        self._count_label.setStyleSheet("color: #6e7f91; font-size: 11px;")
+        self._count_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         layout.addWidget(self._count_label)
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -43,7 +43,9 @@ class ArtifactsTab(QWidget):
 
         self._preview = QPlainTextEdit()
         self._preview.setReadOnly(True)
-        self._preview.setStyleSheet("QPlainTextEdit { font-family: monospace; font-size: 11px; background: #f8fafc; }")
+        self._preview.setStyleSheet(
+            f"QPlainTextEdit {{ font-family: monospace; font-size: 11px; background: {SURFACE_SOFT}; }}"
+        )
         self._splitter.addWidget(self._preview)
         self._splitter.setStretchFactor(0, 1)
         self._splitter.setStretchFactor(1, 2)
@@ -51,7 +53,7 @@ class ArtifactsTab(QWidget):
 
         self._empty = QLabel(self._t("no_artifacts"))
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty.setStyleSheet("color: #6e7f91; font-size: 12px;")
+        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         layout.addWidget(self._empty)
 
         self._artifacts: list = []

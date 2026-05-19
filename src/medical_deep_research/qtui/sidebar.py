@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -11,12 +12,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
     QScrollArea,
     QSpinBox,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +27,15 @@ from PySide6.QtWidgets import (
 from ..service import DEFAULT_MODELS, ResearchService
 from .i18n import API_KEY_SERVICES, PROVIDER_LABELS, PROVIDER_MODELS
 from .run_list import RunListPanel
+from .theme import (
+    ACCENT,
+    ACCENT_SOFT,
+    BORDER_DIM,
+    ERROR,
+    SURFACE_SOFT,
+    TEXT_MUTED,
+    WARNING,
+)
 from .widgets.badge import (
     BadgePill,
     bool_badge,
@@ -43,6 +55,7 @@ class WorkspaceTabs(QTabWidget):
     languageChanged = Signal(str)    # noqa: N815
     runSelected = Signal(str)        # noqa: N815
     runsRefreshRequested = Signal()  # noqa: N815
+    quitRequested = Signal()         # noqa: N815
 
     def __init__(
         self,
@@ -60,6 +73,8 @@ class WorkspaceTabs(QTabWidget):
         self._provider = "anthropic"
         self._model_by_provider = dict(DEFAULT_MODELS)
         self._model = self._model_by_provider["anthropic"]
+
+        self._install_corner_file_menu()
 
         # Sections
         self._new_research_group = self._build_new_research()
@@ -84,6 +99,21 @@ class WorkspaceTabs(QTabWidget):
         self._run_list.pageChanged.connect(self.runsRefreshRequested.emit)
         self._runs_page = self._wrap_page(self._run_list, scroll=False)
         self.insertTab(1, self._runs_page, self._t("research_runs"))
+
+    def _install_corner_file_menu(self) -> None:
+        self._file_button = QToolButton(self)
+        self._file_button.setProperty("role", "tab-corner")
+        self._file_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+
+        menu = QMenu(self._file_button)
+        self._quit_action = QAction(self._t("quit"), self)
+        self._quit_action.setShortcut("Ctrl+Q")
+        self._quit_action.triggered.connect(self.quitRequested.emit)
+        menu.addAction(self._quit_action)
+
+        self._file_button.setMenu(menu)
+        self._file_button.setText(self._t("file_menu"))
+        self.setCornerWidget(self._file_button, Qt.Corner.TopRightCorner)
 
     def _wrap_page(self, widget: QWidget, *, scroll: bool = True) -> QWidget:
         page = QWidget()
@@ -138,7 +168,7 @@ class WorkspaceTabs(QTabWidget):
 
         desc = QLabel(self._t("new_research_desc"))
         desc.setProperty("role", "section-desc")
-        desc.setStyleSheet("color: #6e7f91; font-size: 12px;")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         desc.setWordWrap(True)
         v.addWidget(desc)
 
@@ -215,7 +245,7 @@ class WorkspaceTabs(QTabWidget):
         v.addLayout(model_row)
 
         self._model_warning = QLabel("")
-        self._model_warning.setStyleSheet("color: #b42318; font-size: 11px;")
+        self._model_warning.setStyleSheet(f"color: {ERROR}; font-size: 11px;")
         self._model_warning.setVisible(False)
         v.addWidget(self._model_warning)
         self._refresh_model_combo()
@@ -393,8 +423,8 @@ class WorkspaceTabs(QTabWidget):
         for entry in diagnostics:
             is_selected = entry["provider"] == self._provider
             card = QWidget()
-            border = "#1769aa" if is_selected else "#d6e1ea"
-            bg = "#eaf3fb" if is_selected else "#f7fafc"
+            border = ACCENT if is_selected else BORDER_DIM
+            bg = ACCENT_SOFT if is_selected else SURFACE_SOFT
             card.setStyleSheet(
                 "QWidget { "
                 f"background: {bg}; border: 1px solid {border}; "
@@ -413,7 +443,7 @@ class WorkspaceTabs(QTabWidget):
             cl.addLayout(head)
 
             sub = QLabel(entry["runtime_name"])
-            sub.setStyleSheet("color: #6e7f91; font-size: 11px;")
+            sub.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
             cl.addWidget(sub)
 
             badge_row = QHBoxLayout(); badge_row.setSpacing(4)
@@ -429,7 +459,7 @@ class WorkspaceTabs(QTabWidget):
 
             if entry.get("fallback_reason"):
                 fb = QLabel(entry["fallback_reason"])
-                fb.setStyleSheet("color: #b45309; font-size: 11px;")
+                fb.setStyleSheet(f"color: {WARNING}; font-size: 11px;")
                 fb.setWordWrap(True)
                 cl.addWidget(fb)
 
@@ -441,7 +471,7 @@ class WorkspaceTabs(QTabWidget):
         group = QGroupBox(self._t("api_keys"))
         v = QVBoxLayout(group); v.setSpacing(6)
         desc = QLabel(self._t("api_keys_desc"))
-        desc.setStyleSheet("color: #6e7f91; font-size: 11px;")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         desc.setWordWrap(True)
         v.addWidget(desc)
 
@@ -480,7 +510,7 @@ class WorkspaceTabs(QTabWidget):
         v = QVBoxLayout(group); v.setSpacing(6)
 
         desc = QLabel(self._t("years_lookback_desc"))
-        desc.setStyleSheet("color: #6e7f91; font-size: 11px;")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         desc.setWordWrap(True)
         v.addWidget(desc)
 
@@ -492,7 +522,7 @@ class WorkspaceTabs(QTabWidget):
         v.addLayout(years_row)
 
         scopus_desc = QLabel(self._t("scopus_view_desc"))
-        scopus_desc.setStyleSheet("color: #6e7f91; font-size: 11px;")
+        scopus_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         scopus_desc.setWordWrap(True)
         v.addWidget(scopus_desc)
 
@@ -527,6 +557,8 @@ class WorkspaceTabs(QTabWidget):
         self.setTabText(self.indexOf(self._provider_status_page), self._t("provider_status"))
         self.setTabText(self.indexOf(self._api_keys_page), self._t("api_keys"))
         self.setTabText(self.indexOf(self._settings_page), self._t("research_settings"))
+        self._file_button.setText(self._t("file_menu"))
+        self._quit_action.setText(self._t("quit"))
         self._qt_free.setText(self._t("free_form"))
         self._start_btn.setText(self._t("start_run"))
         self._save_keys_btn.setText(self._t("save_keys"))

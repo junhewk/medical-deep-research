@@ -3,22 +3,23 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel
 
+from ..theme import ACCENT, ACCENT_SOFT, BORDER_DIM, ERROR, SUCCESS, TEXT_MUTED, TEXT_SECONDARY, WARNING
 
 _BADGE_STYLES = {
-    "success": "background: #e7f6ef; color: #0f684c; border: 1px solid #bfe5d2;",
-    "warn":    "background: #fff4de; color: #8a4d08; border: 1px solid #f5d39a;",
-    "error":   "background: #fff0ef; color: #9f2018; border: 1px solid #f4c7c3;",
-    "neutral": "background: #f1f5f9; color: #3f5268; border: 1px solid #d9e4ec;",
-    "active":  "background: #e8f4fb; color: #1769aa; border: 1px solid #b9daed;",
+    "success": f"background: #e7f6ef; color: {SUCCESS}; border: 1px solid #bfe5d2;",
+    "warn":    f"background: #fff4de; color: {WARNING}; border: 1px solid #f5d39a;",
+    "error":   f"background: #fff0ef; color: {ERROR}; border: 1px solid #f4c7c3;",
+    "neutral": f"background: #f2f4f7; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_DIM};",
+    "active":  f"background: {ACCENT_SOFT}; color: {ACCENT}; border: 1px solid #b7dad5;",
 }
 
 _EVIDENCE_STYLES = {
-    "I":   "background: #e7f6ef; color: #0f684c; border: 1px solid #bfe5d2;",
-    "II":  "background: #e8f4fb; color: #1769aa; border: 1px solid #b9daed;",
-    "III": "background: #fff4de; color: #8a4d08; border: 1px solid #f5d39a;",
+    "I":   f"background: #e7f6ef; color: {SUCCESS}; border: 1px solid #bfe5d2;",
+    "II":  f"background: {ACCENT_SOFT}; color: {ACCENT}; border: 1px solid #b7dad5;",
+    "III": f"background: #fff4de; color: {WARNING}; border: 1px solid #f5d39a;",
     "IV":  "background: #fff0e6; color: #9a4315; border: 1px solid #f5c7a8;",
     "V":   "background: #f1f5f9; color: #536579; border: 1px solid #d9e4ec;",
-    "NA":  "background: #f1f5f9; color: #6e7f91; border: 1px solid #d9e4ec;",
+    "NA":  f"background: #f2f4f7; color: {TEXT_MUTED}; border: 1px solid {BORDER_DIM};",
 }
 
 

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .theme import adjusted_point_size
+from .theme import ACCENT, ACCENT_SOFT, BORDER_DIM, TEXT_MUTED, adjusted_point_size
 from .widgets.badge import BadgePill, status_badge_kind
 
 
@@ -30,11 +30,11 @@ class _RunRowDelegate(QStyledItemDelegate):
     """Two-line list rows: bold query (truncated) on top, provider/model + status badge below."""
 
     BADGE_KIND_COLORS = {
-        "active":  (QColor("#e8f4fb"), QColor("#1769aa"), QColor("#b9daed")),
+        "active":  (QColor(ACCENT_SOFT), QColor(ACCENT), QColor("#b7dad5")),
         "success": (QColor("#e7f6ef"), QColor("#0f684c"), QColor("#bfe5d2")),
         "warn":    (QColor("#fff4de"), QColor("#8a4d08"), QColor("#f5d39a")),
         "error":   (QColor("#fff0ef"), QColor("#9f2018"), QColor("#f4c7c3")),
-        "neutral": (QColor("#f1f5f9"), QColor("#3f5268"), QColor("#d9e4ec")),
+        "neutral": (QColor("#f2f4f7"), QColor("#344054"), QColor(BORDER_DIM)),
     }
 
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:  # noqa: N802
@@ -45,9 +45,9 @@ class _RunRowDelegate(QStyledItemDelegate):
         rect = option.rect
         selected = bool(option.state & QStyleOptionViewItem.StateFlag.State_Selected)
         if selected:
-            painter.fillRect(rect, QColor("#e8f4fb"))
+            painter.fillRect(rect, QColor(ACCENT_SOFT))
         elif option.state & QStyleOptionViewItem.StateFlag.State_MouseOver:
-            painter.fillRect(rect, QColor("#f7fbff"))
+            painter.fillRect(rect, QColor("#f0f6f4"))
 
         query: str = index.data(_QUERY_ROLE) or ""
         meta: str = index.data(_META_ROLE) or ""
@@ -80,7 +80,7 @@ class _RunRowDelegate(QStyledItemDelegate):
         meta_font = QFont(font)
         meta_font.setPointSizeF(max(8.0, adjusted_point_size(font, -1.5)))
         painter.setFont(meta_font)
-        painter.setPen(QPen(QColor("#6e7f91")))
+        painter.setPen(QPen(QColor(TEXT_MUTED)))
         meta_metrics = painter.fontMetrics()
         elided_meta = meta_metrics.elidedText(meta, Qt.TextElideMode.ElideRight, max(40, text_right - text_left))
         painter.drawText(text_left, rect.bottom() - 8, elided_meta)
@@ -99,7 +99,7 @@ class _RunRowDelegate(QStyledItemDelegate):
         painter.drawText(badge_left, badge_y, badge_w, badge_h, Qt.AlignmentFlag.AlignCenter, badge_text)
 
         # Bottom border line
-        painter.setPen(QPen(QColor("#eef2f6")))
+        painter.setPen(QPen(QColor("#edf2ef")))
         painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
 
         painter.restore()
@@ -132,7 +132,7 @@ class RunListPanel(QWidget):
         header.addWidget(self._title)
         header.addStretch(1)
         self._range_label = QLabel("")
-        self._range_label.setStyleSheet("color: #6e7f91; font-size: 11px;")
+        self._range_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         header.addWidget(self._range_label)
         layout.addLayout(header)
 
@@ -146,7 +146,7 @@ class RunListPanel(QWidget):
 
         # Empty state
         self._empty_label = QLabel(self._t("no_runs"))
-        self._empty_label.setStyleSheet("color: #6e7f91; font-size: 12px; padding: 8px;")
+        self._empty_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; padding: 8px;")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setVisible(False)
         layout.addWidget(self._empty_label)
@@ -160,7 +160,7 @@ class RunListPanel(QWidget):
         nav.addWidget(self._prev_btn)
         self._page_label = QLabel("1/1")
         self._page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._page_label.setStyleSheet("color: #6e7f91; font-size: 11px;")
+        self._page_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         nav.addWidget(self._page_label, 1)
         self._next_btn = QPushButton("›")
         self._next_btn.setFixedWidth(28)

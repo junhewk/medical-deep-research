@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..theme import adjusted_point_size
+from ..theme import BORDER_DIM, SURFACE, TEXT_MUTED, adjusted_point_size
 
 
 class TraceTab(QWidget):
@@ -30,19 +30,19 @@ class TraceTab(QWidget):
         layout.addWidget(self._title)
 
         self._count_label = QLabel("")
-        self._count_label.setStyleSheet("color: #6e7f91; font-size: 11px;")
+        self._count_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         layout.addWidget(self._count_label)
 
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self._list.setStyleSheet(
-            "QListWidget { border: 1px solid #d6e1ea; border-radius: 4px; background: white; }"
-            "QListWidget::item { border-bottom: 1px solid #eef2f6; padding: 6px 10px; }"
+            f"QListWidget {{ border: 1px solid {BORDER_DIM}; border-radius: 7px; background: {SURFACE}; }}"
+            "QListWidget::item { border-bottom: 1px solid #edf2ef; padding: 6px 10px; }"
         )
         layout.addWidget(self._list, 1)
 
         self._empty = QLabel(self._t("waiting_events"))
-        self._empty.setStyleSheet("color: #6e7f91; font-size: 12px; padding: 8px;")
+        self._empty.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; padding: 8px;")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._empty)
 

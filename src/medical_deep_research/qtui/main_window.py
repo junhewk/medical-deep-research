@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSplitter,
     QStackedWidget,
     QStatusBar,
     QTabWidget,
@@ -27,7 +26,7 @@ from ..persistence import AppDatabase
 from ..reading_service import ReadingService
 from ..service import ResearchService
 from .i18n import t as _translate
-from .sidebar import Sidebar
+from .sidebar import WorkspaceTabs
 from .tabs.artifacts_tab import ArtifactsTab
 from .tabs.diagnostics_tab import DiagnosticsTab
 from .tabs.report_tab import ReportTab
@@ -155,29 +154,19 @@ class MainWindow(QMainWindow):
     def _build_layout(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        outer = QHBoxLayout(central)
+        outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        outer.addWidget(self._splitter)
+        self._workspace_tabs = WorkspaceTabs(self._service, self._t)
+        self._workspace_tabs.startRun.connect(self._on_start_run)
+        self._workspace_tabs.languageChanged.connect(self._on_language_changed)
+        self._workspace_tabs.runSelected.connect(self._on_run_selected_from_workspace)
+        self._workspace_tabs.runsRefreshRequested.connect(self._refresh_run_list)
+        outer.addWidget(self._workspace_tabs, 1)
 
-        # Sidebar (left)
-        self._sidebar = Sidebar(self._service, self._t)
-        self._sidebar.startRun.connect(self._on_start_run)
-        self._sidebar.languageChanged.connect(self._on_language_changed)
-        self._sidebar.runSelected.connect(self._on_run_selected_from_sidebar)
-        self._sidebar.runsRefreshRequested.connect(self._refresh_run_list)
-        self._sidebar.setMinimumWidth(320)
-        self._sidebar.setMaximumWidth(520)
-        self._splitter.addWidget(self._sidebar)
-
-        # Main content (right)
+        # Run detail tab
         self._main_holder = QStackedWidget()
-        self._splitter.addWidget(self._main_holder)
-        self._splitter.setStretchFactor(0, 0)
-        self._splitter.setStretchFactor(1, 1)
-        self._splitter.setSizes([360, 920])
 
         # Placeholder page
         self._placeholder = self._build_placeholder()
@@ -212,6 +201,7 @@ class MainWindow(QMainWindow):
 
         detail_layout.addWidget(self._tabs, 1)
         self._main_holder.addWidget(self._detail_page)
+        self._workspace_tabs.addTab(self._main_holder, self._t("run_detail"))
 
     def _build_placeholder(self) -> QWidget:
         w = QWidget()
@@ -259,11 +249,11 @@ class MainWindow(QMainWindow):
             self._refresh_detail(self._selected_run_id, keep_tab=True)
 
     def _refresh_run_list(self) -> None:
-        per_page = self._sidebar.run_list_per_page()
-        offset = self._sidebar.run_list_offset()
+        per_page = self._workspace_tabs.run_list_per_page()
+        offset = self._workspace_tabs.run_list_offset()
         runs = self._service.list_runs(limit=per_page, offset=offset)
         total = self._service.count_runs()
-        self._sidebar.set_runs(runs, total)
+        self._workspace_tabs.set_runs(runs, total)
 
     # ---- run actions ----
 
@@ -281,11 +271,11 @@ class MainWindow(QMainWindow):
             return
         self._selected_run_id = run.id
         self._refresh_run_list()
-        self._sidebar.select_run(run.id)
+        self._workspace_tabs.select_run(run.id)
         self._refresh_detail(run.id)
         self._status.showMessage(self._t("run_started").format(short_id=run.id[:8]))
 
-    def _on_run_selected_from_sidebar(self, run_id: str) -> None:
+    def _on_run_selected_from_workspace(self, run_id: str) -> None:
         if run_id == self._selected_run_id:
             return
         self._selected_run_id = run_id
@@ -332,6 +322,7 @@ class MainWindow(QMainWindow):
             self._tabs.setCurrentIndex(0)
 
         self._main_holder.setCurrentWidget(self._detail_page)
+        self._workspace_tabs.setCurrentWidget(self._main_holder)
 
     # ---- language ----
 
@@ -343,9 +334,13 @@ class MainWindow(QMainWindow):
         self._tabs.setTabText(2, self._t("report_title"))
         self._tabs.setTabText(3, self._t("diagnostics"))
         self._tabs.setTabText(4, self._t("studies"))
+        self._workspace_tabs.setTabText(
+            self._workspace_tabs.indexOf(self._main_holder),
+            self._t("run_detail"),
+        )
         self._placeholder_title.setText(self._t("select_run"))
         self._placeholder_desc.setText(self._t("select_run_desc"))
-        self._sidebar.retranslate()
+        self._workspace_tabs.retranslate()
         self._run_header.retranslate()
         self._trace_tab.retranslate()
         self._artifacts_tab.retranslate()

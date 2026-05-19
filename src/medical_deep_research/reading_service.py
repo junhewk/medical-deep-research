@@ -609,6 +609,9 @@ _FALLBACK_MODELS = {
 
 def _resolve_provider(provider: str, model: str, api_keys: dict[str, str]) -> tuple[str, str]:
     """Resolve to a provider that actually has an API key configured."""
+    if provider == "local":
+        return provider, model
+
     # Check if requested provider has a key
     key_map = {
         "openai": api_keys.get("openai") or os.getenv("OPENAI_API_KEY", ""),
@@ -649,7 +652,7 @@ async def _stream_reading_llm(
         yield_from = _stream_openai(model, api_keys, system_prompt, messages, base_url=None)
     else:
         # Local / fallback — OpenAI-compatible
-        base_url = os.getenv("MDR_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1")
+        base_url = api_keys.get("local_base_url") or os.getenv("MDR_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1")
         yield_from = _stream_openai(model, api_keys, system_prompt, messages, base_url=base_url)
 
     async for chunk in yield_from:
@@ -668,7 +671,7 @@ async def _stream_openai(
 
     api_key = api_keys.get("openai") or os.getenv("OPENAI_API_KEY", "")
     if base_url:
-        api_key = "local"
+        api_key = api_keys.get("local") or os.getenv("MDR_LOCAL_API_KEY", "local")
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     llm_messages = [{"role": "system", "content": system_prompt}, *messages]

@@ -26,9 +26,10 @@ _I18N: dict[str, dict[str, str]] = {
         "scopus_view": "Scopus response view",
         "scopus_view_desc": "STANDARD works for any Scopus key. COMPLETE adds full abstracts but requires a higher Elsevier subscription.",
         "research_runs": "Research Runs",
+        "run_detail": "Run Detail",
         "no_runs": "No runs yet.",
         "select_run": "Select a run to inspect",
-        "select_run_desc": "Create a new research run or select an existing one from the sidebar to view its execution trace, artifacts, and final report.",
+        "select_run_desc": "Create a new research run or select an existing one from the Runs tab to view its execution trace, artifacts, and final report.",
         "execution_trace": "Execution Trace",
         "events": "events",
         "waiting_events": "Waiting for events...",
@@ -190,6 +191,12 @@ PROVIDER_MODELS: dict[str, dict[str, str]] = {
         "gemini-3-flash-preview": "Gemini 3.0 Flash Preview",
         "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview",
     },
+    "local": {
+        "qwen3.5-27b": "Qwen 3.5 27B",
+        "qwen2.5:14b": "Qwen 2.5 14B",
+        "llama3.1:8b": "Llama 3.1 8B",
+        "mistral-small": "Mistral Small",
+    },
 }
 
 
@@ -197,7 +204,7 @@ PROVIDER_LABELS = {
     "openai": "OpenAI",
     "anthropic": "Anthropic",
     "google": "Google",
-    "local": "Local (Ollama)",
+    "local": "Local / OpenAI-compatible",
 }
 
 
@@ -205,6 +212,8 @@ API_KEY_SERVICES = [
     ("openai", "OpenAI"),
     ("anthropic", "Anthropic"),
     ("google", "Google"),
+    ("local_base_url", "Local OpenAI-compatible API URL"),
+    ("local", "Local API key (optional)"),
     ("ncbi", "NCBI (E-utilities)"),
     ("scopus", "Scopus / Elsevier"),
     ("semantic_scholar", "Semantic Scholar"),

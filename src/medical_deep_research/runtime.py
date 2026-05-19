@@ -249,6 +249,8 @@ def _search_credentials_present(api_keys: dict[str, str]) -> dict[str, bool]:
 
 
 def _has_native_credentials(provider: str, api_keys: dict[str, str]) -> bool:
+    if provider == "local":
+        return True
     return bool(_provider_api_env(provider, api_keys))
 
 
@@ -3055,7 +3057,8 @@ class LangChainLocalRuntime(NativeSDKRuntime):
 
     @property
     def sdk_available(self) -> bool:
-        return importlib.util.find_spec("langchain_core") is not None
+        required = ("langchain_core", "langchain_openai")
+        return all(importlib.util.find_spec(module) is not None for module in required)
 
     def _should_fallback(self, request: RunRequest) -> bool:
         if request.offline_mode:
@@ -3071,28 +3074,16 @@ class LangChainLocalRuntime(NativeSDKRuntime):
         base_url = (
             request.api_keys.get("local_base_url")
             or os.environ.get("MDR_LOCAL_BASE_URL")
-        )
-
-        # If base_url is explicitly set, use OpenAI-compatible endpoint (LM Studio, vLLM, etc.)
-        if base_url:
-            from langchain_openai import ChatOpenAI
-            return ChatOpenAI(
-                model=model,
-                base_url=base_url,
-                api_key=request.api_keys.get("local") or "not-needed",  # type: ignore[arg-type]
-                temperature=0.1,
-            )
-
-        # Default: Ollama
-        from langchain_ollama import ChatOllama
-        ollama_base = (
-            request.api_keys.get("ollama_base_url")
+            or request.api_keys.get("ollama_base_url")
             or os.environ.get("MDR_OLLAMA_BASE_URL")
-            or "http://localhost:11434"
+            or "http://127.0.0.1:11434/v1"
         )
-        return ChatOllama(
+
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
             model=model,
-            base_url=ollama_base,
+            base_url=base_url,
+            api_key=request.api_keys.get("local") or os.environ.get("MDR_LOCAL_API_KEY") or "local",
             temperature=0.1,
         )
 

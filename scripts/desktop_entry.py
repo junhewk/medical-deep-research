@@ -6,7 +6,9 @@ via the same event loop (asyncio + qasync).
 """
 import multiprocessing
 import os
+import re
 import sys
+from pathlib import Path
 
 multiprocessing.freeze_support()
 
@@ -30,6 +32,30 @@ if getattr(sys, "frozen", False):
     _log_file = open(_log_path, "a")  # noqa: SIM115
     sys.stdout = _log_file
     sys.stderr = _log_file
+
+
+def _safe_download_target(filename: str) -> Path:
+    """Return a non-conflicting path in the user's Downloads directory."""
+    downloads = Path.home() / "Downloads"
+    target_dir = downloads if downloads.exists() else Path.home()
+
+    raw_name = Path(filename or "report.txt").name
+    safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", raw_name).strip(" ._")
+    if not safe_name:
+        safe_name = "report.txt"
+
+    candidate = target_dir / safe_name
+    if not candidate.exists():
+        return candidate
+
+    stem = candidate.stem
+    suffix = candidate.suffix
+    index = 1
+    while True:
+        numbered = target_dir / f"{stem} ({index}){suffix}"
+        if not numbered.exists():
+            return numbered
+        index += 1
 
 
 def main() -> int:

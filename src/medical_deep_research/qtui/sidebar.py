@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -32,8 +33,11 @@ from .widgets.badge import (
 )
 
 
-class Sidebar(QWidget):
-    """Left-pane container: New Research form, Provider Status, API Keys, Settings, Runs list."""
+_PLAIN_CONFIG_FIELDS = {"local_base_url", "ollama_base_url"}
+
+
+class WorkspaceTabs(QTabWidget):
+    """Top-level workspace tabs for setup, run navigation, and app settings."""
 
     startRun = Signal(dict)          # noqa: N815 — emits form payload
     languageChanged = Signal(str)    # noqa: N815
@@ -54,42 +58,56 @@ class Sidebar(QWidget):
         # form state
         self._query_type = "free"
         self._provider = "anthropic"
-        self._model = DEFAULT_MODELS["anthropic"]
+        self._model_by_provider = dict(DEFAULT_MODELS)
+        self._model = self._model_by_provider["anthropic"]
 
-        # Outer scroll area
-        outer = QVBoxLayout(self)
+        # Sections
+        self._new_research_group = self._build_new_research()
+        self._new_research_page = self._wrap_page(self._new_research_group)
+        self.addTab(self._new_research_page, self._t("new_research"))
+
+        self._provider_status_group = self._build_provider_status()
+        self._provider_status_page = self._wrap_page(self._provider_status_group)
+        self.addTab(self._provider_status_page, self._t("provider_status"))
+
+        self._api_keys_group = self._build_api_keys()
+        self._api_keys_page = self._wrap_page(self._api_keys_group)
+        self.addTab(self._api_keys_page, self._t("api_keys"))
+
+        self._settings_group = self._build_research_settings()
+        self._settings_page = self._wrap_page(self._settings_group)
+        self.addTab(self._settings_page, self._t("research_settings"))
+
+        # Run list (not in a group box — it's the primary navigation list)
+        self._run_list = RunListPanel(self._t)
+        self._run_list.runSelected.connect(self.runSelected.emit)
+        self._run_list.pageChanged.connect(self.runsRefreshRequested.emit)
+        self._runs_page = self._wrap_page(self._run_list, scroll=False)
+        self.insertTab(1, self._runs_page, self._t("research_runs"))
+
+    def _wrap_page(self, widget: QWidget, *, scroll: bool = True) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(8)
+
+        if not scroll:
+            outer.addWidget(widget, 1)
+            return page
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         outer.addWidget(scroll, 1)
 
-        scrolled = QWidget()
-        scroll.setWidget(scrolled)
-        layout = QVBoxLayout(scrolled)
+        content = QWidget()
+        scroll.setWidget(content)
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-
-        # Sections
-        self._new_research_group = self._build_new_research()
-        layout.addWidget(self._new_research_group)
-
-        self._provider_status_group = self._build_provider_status()
-        layout.addWidget(self._provider_status_group)
-
-        self._api_keys_group = self._build_api_keys()
-        layout.addWidget(self._api_keys_group)
-
-        self._settings_group = self._build_research_settings()
-        layout.addWidget(self._settings_group)
-
-        # Run list (not in a group box — it's the primary navigation list)
-        self._run_list = RunListPanel(self._t)
-        self._run_list.runSelected.connect(self.runSelected.emit)
-        self._run_list.pageChanged.connect(self.runsRefreshRequested.emit)
-        layout.addWidget(self._run_list, 1)
+        layout.addWidget(widget)
+        layout.addStretch(1)
+        return page
 
     # ---- public API ----
 
@@ -187,8 +205,9 @@ class Sidebar(QWidget):
 
         # Model selector + warning
         self._model_combo = QComboBox()
-        self._model_combo.setEditable(False)
+        self._model_combo.setEditable(True)
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self._model_combo.editTextChanged.connect(self._on_model_text_changed)
         self._model_label = QLabel(self._t("model"))
         model_row = QHBoxLayout()
         model_row.addWidget(self._model_label)
@@ -253,7 +272,12 @@ class Sidebar(QWidget):
         self._rebuild_structured()
 
     def _on_provider_changed(self, _index: int) -> None:
+        self._remember_current_model()
         self._provider = self._provider_combo.currentData() or "anthropic"
+        self._model = self._model_by_provider.get(
+            self._provider,
+            DEFAULT_MODELS.get(self._provider, self._model),
+        )
         self._refresh_model_combo()
         self._refresh_provider_status_cards()
 
@@ -266,39 +290,46 @@ class Sidebar(QWidget):
         self.languageChanged.emit(new_lang)
 
     def _on_model_changed(self, _index: int) -> None:
-        data = self._model_combo.currentData()
-        if data:
-            self._model = data
+        self._remember_current_model()
+
+    def _on_model_text_changed(self, _text: str) -> None:
+        self._remember_current_model()
+
+    def _remember_current_model(self) -> None:
+        if not hasattr(self, "_model_combo"):
+            return
+        model = self._model_combo.currentText().strip() or self._model
+        if model:
+            self._model = model
+            self._model_by_provider[self._provider] = model
 
     def _refresh_model_combo(self) -> None:
         self._model_combo.blockSignals(True)
         self._model_combo.clear()
-        models = PROVIDER_MODELS.get(self._provider)
+        models = PROVIDER_MODELS.get(self._provider, {})
         api_keys = self._service.get_api_keys()
         has_key = self._provider in api_keys and bool(api_keys[self._provider].strip())
+        default = self._model_by_provider.get(self._provider) or DEFAULT_MODELS.get(self._provider, self._model)
         if models:
             for code, label in models.items():
                 self._model_combo.addItem(label, code)
-            if self._model in models:
-                idx = self._model_combo.findData(self._model)
-            else:
-                idx = 0
-                self._model = next(iter(models))
-            self._model_combo.setCurrentIndex(idx)
-            self._model_combo.setEditable(False)
-            disabled = not has_key and self._provider != "local"
-            self._model_combo.setEnabled(not disabled)
-            self._model_warning.setVisible(disabled)
-            self._model_warning.setText(self._t("set_api_key"))
+            if default not in models:
+                self._model_combo.addItem(default, default)
+            idx = self._model_combo.findData(default)
+            if idx >= 0:
+                self._model_combo.setCurrentIndex(idx)
+            self._model_combo.setCurrentText(default)
+            self._model = default
         else:
-            # Local / unknown: free-form
-            self._model_combo.setEditable(True)
-            default = DEFAULT_MODELS.get(self._provider, self._model)
             self._model_combo.addItem(default, default)
-            self._model_combo.setCurrentText(self._model or default)
-            self._model = self._model or default
-            self._model_combo.setEnabled(True)
-            self._model_warning.setVisible(False)
+            self._model_combo.setCurrentText(default)
+            self._model = default
+
+        self._model_combo.setEditable(True)
+        disabled = not has_key and self._provider != "local"
+        self._model_combo.setEnabled(not disabled)
+        self._model_warning.setVisible(disabled)
+        self._model_warning.setText(self._t("set_api_key"))
         self._model_combo.blockSignals(False)
 
     def _on_start_clicked(self) -> None:
@@ -419,8 +450,12 @@ class Sidebar(QWidget):
         form = QFormLayout(); form.setContentsMargins(0, 0, 0, 0)
         for svc, label in API_KEY_SERVICES:
             le = QLineEdit(stored.get(svc, ""))
-            le.setEchoMode(QLineEdit.EchoMode.Password)
+            le.setEchoMode(QLineEdit.EchoMode.Normal if svc in _PLAIN_CONFIG_FIELDS else QLineEdit.EchoMode.Password)
             le.setPlaceholderText("…")
+            if svc in _PLAIN_CONFIG_FIELDS:
+                le.setPlaceholderText("http://127.0.0.1:11434/v1")
+            elif svc == "local":
+                le.setPlaceholderText("optional")
             self._key_fields[svc] = le
             form.addRow(f"{label}:", le)
         wrap = QWidget(); wrap.setLayout(form)
@@ -487,9 +522,17 @@ class Sidebar(QWidget):
         self._provider_status_group.setTitle(self._t("provider_status"))
         self._api_keys_group.setTitle(self._t("api_keys"))
         self._settings_group.setTitle(self._t("research_settings"))
+        self.setTabText(self.indexOf(self._new_research_page), self._t("new_research"))
+        self.setTabText(self.indexOf(self._runs_page), self._t("research_runs"))
+        self.setTabText(self.indexOf(self._provider_status_page), self._t("provider_status"))
+        self.setTabText(self.indexOf(self._api_keys_page), self._t("api_keys"))
+        self.setTabText(self.indexOf(self._settings_page), self._t("research_settings"))
         self._qt_free.setText(self._t("free_form"))
         self._start_btn.setText(self._t("start_run"))
         self._save_keys_btn.setText(self._t("save_keys"))
         self._save_settings_btn.setText(self._t("save_settings"))
         self._rebuild_structured()
         self._run_list.retranslate()
+
+
+Sidebar = WorkspaceTabs

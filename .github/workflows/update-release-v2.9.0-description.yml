@@ -1,0 +1,55 @@
+name: Update v2.9.0 Release Description
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/update-release-v2.9.0-description.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  update-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update release body
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## Medical Deep Research v2.9.0
+
+            This release focuses on the native Qt desktop app experience, provider setup, and release packaging.
+
+            ### Highlights
+            - Replaced the left sidebar with workspace tabs for New Research, Research Runs, Provider Status, API Keys, Settings, and Run Detail.
+            - Added OpenAI-compatible local LLM configuration, including a custom API base URL and optional local API key.
+            - Added LLM/model selection with editable model choices and local model presets.
+            - Refined native UI typography and provider status presentation.
+            - Fixed the Windows executable icon so the built app uses the project icon.
+            - Reduced the Windows package size by excluding unused Qt runtimes such as WebEngine and QML tooling.
+
+            ### Downloads
+            - Windows: \`Medical-Deep-Research-2.9.0-Windows.zip\`
+            - macOS: \`Medical-Deep-Research-2.9.0-macOS.dmg\`
+
+            ### Validation
+            - Unit tests passed locally: 31 tests.
+            - Windows executable smoke-tested locally.
+            - GitHub Actions build and release passed for Windows and macOS.`;
+
+            const { owner, repo } = context.repo;
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner,
+              repo,
+              tag: "v2.9.0",
+            });
+
+            await github.rest.repos.updateRelease({
+              owner,
+              repo,
+              release_id: release.id,
+              name: "v2.9.0",
+              body,
+            });

@@ -33,6 +33,7 @@ from .tabs.report_tab import ReportTab
 from .tabs.studies_tab import StudiesTab
 from .tabs.trace_tab import TraceTab
 from .theme import (
+    APP_BG,
     APP_QSS,
     BORDER_DIM,
     SURFACE,
@@ -154,6 +155,8 @@ class MainWindow(QMainWindow):
 
     def _build_layout(self) -> None:
         central = QWidget()
+        central.setObjectName("centralRoot")
+        central.setStyleSheet(f"QWidget#centralRoot {{ background: {APP_BG}; }}")
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -176,6 +179,8 @@ class MainWindow(QMainWindow):
 
         # Run-detail page
         self._detail_page = QWidget()
+        self._detail_page.setObjectName("detailPage")
+        self._detail_page.setStyleSheet(f"QWidget#detailPage {{ background: {APP_BG}; }}")
         detail_layout = QVBoxLayout(self._detail_page)
         detail_layout.setContentsMargins(8, 8, 8, 8)
         detail_layout.setSpacing(8)
@@ -207,6 +212,8 @@ class MainWindow(QMainWindow):
 
     def _build_placeholder(self) -> QWidget:
         w = QWidget()
+        w.setObjectName("placeholderPage")
+        w.setStyleSheet(f"QWidget#placeholderPage {{ background: {APP_BG}; }}")
         layout = QVBoxLayout(w)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 

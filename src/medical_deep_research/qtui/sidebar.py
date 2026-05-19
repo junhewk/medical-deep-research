@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QToolButton,
@@ -29,6 +30,7 @@ from .i18n import API_KEY_SERVICES, PROVIDER_LABELS, PROVIDER_MODELS
 from .run_list import RunListPanel
 from .theme import (
     ACCENT,
+    APP_BG,
     BORDER_DIM,
     ERROR,
     SURFACE,
@@ -144,6 +146,9 @@ class WorkspaceTabs(QTabWidget):
 
     def _wrap_page(self, widget: QWidget, *, scroll: bool = True) -> QWidget:
         page = QWidget()
+        page.setObjectName("workspacePage")
+        page.setAutoFillBackground(True)
+        page.setStyleSheet(f"QWidget#workspacePage {{ background: {APP_BG}; }}")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(8)
@@ -153,11 +158,21 @@ class WorkspaceTabs(QTabWidget):
             return page
 
         scroll = QScrollArea()
+        scroll.setObjectName("workspaceScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea#workspaceScroll { "
+            f"background: {APP_BG}; border: none; "
+            "}"
+        )
+        scroll.viewport().setStyleSheet(f"background: {APP_BG};")
         outer.addWidget(scroll, 1)
 
         content = QWidget()
+        content.setObjectName("workspaceContent")
+        content.setAutoFillBackground(True)
+        content.setStyleSheet(f"QWidget#workspaceContent {{ background: {APP_BG}; }}")
         scroll.setWidget(content)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -223,6 +238,8 @@ class WorkspaceTabs(QTabWidget):
             self._provider_combo.setCurrentIndex(idx)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         self._provider_label = QLabel(self._t("provider"))
+        self._provider_label.setFixedWidth(120)
+        self._provider_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         pl_row.addWidget(self._provider_label)
         pl_row.addWidget(self._provider_combo, 1)
 
@@ -251,6 +268,8 @@ class WorkspaceTabs(QTabWidget):
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
         self._model_combo.editTextChanged.connect(self._on_model_text_changed)
         self._model_label = QLabel(self._t("model"))
+        self._model_label.setFixedWidth(120)
+        self._model_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         model_row = QHBoxLayout()
         model_row.addWidget(self._model_label)
         model_row.addWidget(self._model_combo, 1)
@@ -299,12 +318,7 @@ class WorkspaceTabs(QTabWidget):
                 (self._t("comparison"), self._pico_c),
                 (self._t("outcome"), self._pico_o),
             ]:
-                form = QFormLayout()
-                form.setContentsMargins(0, 0, 0, 0)
-                form.addRow(label, field)
-                wrap = QWidget()
-                wrap.setLayout(form)
-                self._structured_layout.addWidget(wrap)
+                self._add_input_row(label, field)
         elif self._query_type == "pcc":
             self._pcc_p = QLineEdit(self._pcc_values["population"])
             self._pcc_p.setPlaceholderText("Elderly patients with diabetes")
@@ -317,12 +331,7 @@ class WorkspaceTabs(QTabWidget):
                 (self._t("concept"), self._pcc_c),
                 (self._t("context"), self._pcc_ctx),
             ]:
-                form = QFormLayout()
-                form.setContentsMargins(0, 0, 0, 0)
-                form.addRow(label, field)
-                wrap = QWidget()
-                wrap.setLayout(form)
-                self._structured_layout.addWidget(wrap)
+                self._add_input_row(label, field)
         else:
             self._free_input = QPlainTextEdit()
             self._free_input.setPlaceholderText(
@@ -331,12 +340,25 @@ class WorkspaceTabs(QTabWidget):
             self._free_input.setPlainText(self._free_text)
             self._free_input.setMinimumHeight(80)
             self._free_input.setMaximumHeight(180)
-            form = QFormLayout()
-            form.setContentsMargins(0, 0, 0, 0)
-            form.addRow(self._t("research_question"), self._free_input)
-            wrap = QWidget()
-            wrap.setLayout(form)
-            self._structured_layout.addWidget(wrap)
+            self._add_input_row(self._t("research_question"), self._free_input)
+
+    def _add_input_row(self, label_text: str, field: QWidget) -> None:
+        """Add a native-looking, full-width row to the first-page form."""
+        wrap = QWidget()
+        wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        row = QHBoxLayout(wrap)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+
+        label = QLabel(label_text)
+        label.setFixedWidth(120)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        field.setSizePolicy(QSizePolicy.Policy.Expanding, field.sizePolicy().verticalPolicy())
+
+        row.addWidget(label)
+        row.addWidget(field, 1)
+        self._structured_layout.addWidget(wrap)
 
     def _safe_line_text(self, field: QLineEdit | None) -> str:
         if field is None:

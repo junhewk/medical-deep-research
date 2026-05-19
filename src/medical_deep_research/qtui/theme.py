@@ -61,6 +61,19 @@ QMainWindow, QWidget {{
 QMainWindow, QTabWidget, QScrollArea, QStackedWidget {{
     background: {APP_BG};
 }}
+QWidget#centralRoot,
+QWidget#workspacePage,
+QWidget#workspaceContent,
+QWidget#detailPage,
+QWidget#placeholderPage {{
+    background: {APP_BG};
+}}
+QScrollArea#workspaceScroll,
+QScrollArea#workspaceScroll > QWidget,
+QScrollArea#workspaceScroll > QWidget > QWidget {{
+    background: {APP_BG};
+    border: none;
+}}
 
 QGroupBox {{
     background: {SURFACE};

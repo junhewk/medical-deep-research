@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import ACCENT, ACCENT_SOFT, BORDER_DIM, TEXT_MUTED, adjusted_point_size
-from .widgets.badge import BadgePill, status_badge_kind
+from .widgets.badge import status_badge_kind
 
 
 _QUERY_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -127,8 +127,12 @@ class RunListPanel(QWidget):
         header = QHBoxLayout()
         self._title = QLabel(self._t("research_runs"))
         self._title.setProperty("role", "section-title")
-        self._title.style().unpolish(self._title); self._title.style().polish(self._title)
-        f = self._title.font(); f.setBold(True); f.setPointSizeF(adjusted_point_size(f, 1)); self._title.setFont(f)
+        self._title.style().unpolish(self._title)
+        self._title.style().polish(self._title)
+        f = self._title.font()
+        f.setBold(True)
+        f.setPointSizeF(adjusted_point_size(f, 1))
+        self._title.setFont(f)
         header.addWidget(self._title)
         header.addStretch(1)
         self._range_label = QLabel("")

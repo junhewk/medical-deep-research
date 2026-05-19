@@ -80,6 +80,26 @@ class WorkspaceTabs(QTabWidget):
         self._provider = "anthropic"
         self._model_by_provider = dict(DEFAULT_MODELS)
         self._model = self._model_by_provider["anthropic"]
+        self._free_text = ""
+        self._pico_values = {
+            "population": "",
+            "intervention": "",
+            "comparison": "",
+            "outcome": "",
+        }
+        self._pcc_values = {
+            "population": "",
+            "concept": "",
+            "context": "",
+        }
+        self._free_input: QPlainTextEdit | None = None
+        self._pico_p: QLineEdit | None = None
+        self._pico_i: QLineEdit | None = None
+        self._pico_c: QLineEdit | None = None
+        self._pico_o: QLineEdit | None = None
+        self._pcc_p: QLineEdit | None = None
+        self._pcc_c: QLineEdit | None = None
+        self._pcc_ctx: QLineEdit | None = None
 
         self._install_corner_file_menu()
 
@@ -173,11 +193,11 @@ class WorkspaceTabs(QTabWidget):
         v = QVBoxLayout(group)
         v.setSpacing(8)
 
-        desc = QLabel(self._t("new_research_desc"))
-        desc.setProperty("role", "section-desc")
-        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
-        desc.setWordWrap(True)
-        v.addWidget(desc)
+        self._new_research_desc_label = QLabel(self._t("new_research_desc"))
+        self._new_research_desc_label.setProperty("role", "section-desc")
+        self._new_research_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
+        self._new_research_desc_label.setWordWrap(True)
+        v.addWidget(self._new_research_desc_label)
 
         # Query type radio group
         qt_row = QHBoxLayout()
@@ -202,7 +222,8 @@ class WorkspaceTabs(QTabWidget):
         if idx >= 0:
             self._provider_combo.setCurrentIndex(idx)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
-        pl_row.addWidget(QLabel(self._t("provider")))
+        self._provider_label = QLabel(self._t("provider"))
+        pl_row.addWidget(self._provider_label)
         pl_row.addWidget(self._provider_combo, 1)
 
         self._language_combo = QComboBox()
@@ -222,22 +243,6 @@ class WorkspaceTabs(QTabWidget):
         self._structured_layout.setSpacing(6)
         v.addWidget(self._structured_holder)
 
-        # Free-form textarea
-        self._free_input = QPlainTextEdit()
-        self._free_input.setPlaceholderText(
-            "e.g. What is the evidence for SGLT2 inhibitors in heart failure with preserved ejection fraction?"
-        )
-        self._free_input.setMinimumHeight(80)
-        self._free_input.setMaximumHeight(180)
-        # PICO fields
-        self._pico_p = QLineEdit(); self._pico_p.setPlaceholderText("Adults with HFpEF")
-        self._pico_i = QLineEdit(); self._pico_i.setPlaceholderText("SGLT2 inhibitors")
-        self._pico_c = QLineEdit(); self._pico_c.setPlaceholderText("Placebo or standard care")
-        self._pico_o = QLineEdit(); self._pico_o.setPlaceholderText("Hospitalisation, mortality")
-        # PCC fields
-        self._pcc_p = QLineEdit(); self._pcc_p.setPlaceholderText("Elderly patients with diabetes")
-        self._pcc_c = QLineEdit(); self._pcc_c.setPlaceholderText("Self-management strategies")
-        self._pcc_ctx = QLineEdit(); self._pcc_ctx.setPlaceholderText("Primary care settings")
         self._rebuild_structured()
 
         # Model selector + warning
@@ -267,14 +272,27 @@ class WorkspaceTabs(QTabWidget):
         return group
 
     def _rebuild_structured(self) -> None:
+        self._capture_structured_values()
+
         # clear
         while self._structured_layout.count():
             item = self._structured_layout.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
+                w.deleteLater()
+        self._free_input = None
+        self._pico_p = self._pico_i = self._pico_c = self._pico_o = None
+        self._pcc_p = self._pcc_c = self._pcc_ctx = None
 
         if self._query_type == "pico":
+            self._pico_p = QLineEdit(self._pico_values["population"])
+            self._pico_p.setPlaceholderText("Adults with HFpEF")
+            self._pico_i = QLineEdit(self._pico_values["intervention"])
+            self._pico_i.setPlaceholderText("SGLT2 inhibitors")
+            self._pico_c = QLineEdit(self._pico_values["comparison"])
+            self._pico_c.setPlaceholderText("Placebo or standard care")
+            self._pico_o = QLineEdit(self._pico_values["outcome"])
+            self._pico_o.setPlaceholderText("Hospitalisation, mortality")
             for label, field in [
                 (self._t("population"), self._pico_p),
                 (self._t("intervention"), self._pico_i),
@@ -284,9 +302,16 @@ class WorkspaceTabs(QTabWidget):
                 form = QFormLayout()
                 form.setContentsMargins(0, 0, 0, 0)
                 form.addRow(label, field)
-                wrap = QWidget(); wrap.setLayout(form)
+                wrap = QWidget()
+                wrap.setLayout(form)
                 self._structured_layout.addWidget(wrap)
         elif self._query_type == "pcc":
+            self._pcc_p = QLineEdit(self._pcc_values["population"])
+            self._pcc_p.setPlaceholderText("Elderly patients with diabetes")
+            self._pcc_c = QLineEdit(self._pcc_values["concept"])
+            self._pcc_c.setPlaceholderText("Self-management strategies")
+            self._pcc_ctx = QLineEdit(self._pcc_values["context"])
+            self._pcc_ctx.setPlaceholderText("Primary care settings")
             for label, field in [
                 (self._t("population"), self._pcc_p),
                 (self._t("concept"), self._pcc_c),
@@ -295,14 +320,56 @@ class WorkspaceTabs(QTabWidget):
                 form = QFormLayout()
                 form.setContentsMargins(0, 0, 0, 0)
                 form.addRow(label, field)
-                wrap = QWidget(); wrap.setLayout(form)
+                wrap = QWidget()
+                wrap.setLayout(form)
                 self._structured_layout.addWidget(wrap)
         else:
+            self._free_input = QPlainTextEdit()
+            self._free_input.setPlaceholderText(
+                "e.g. What is the evidence for SGLT2 inhibitors in heart failure with preserved ejection fraction?"
+            )
+            self._free_input.setPlainText(self._free_text)
+            self._free_input.setMinimumHeight(80)
+            self._free_input.setMaximumHeight(180)
             form = QFormLayout()
             form.setContentsMargins(0, 0, 0, 0)
             form.addRow(self._t("research_question"), self._free_input)
-            wrap = QWidget(); wrap.setLayout(form)
+            wrap = QWidget()
+            wrap.setLayout(form)
             self._structured_layout.addWidget(wrap)
+
+    def _safe_line_text(self, field: QLineEdit | None) -> str:
+        if field is None:
+            return ""
+        try:
+            return field.text()
+        except RuntimeError:
+            return ""
+
+    def _safe_plain_text(self, field: QPlainTextEdit | None) -> str:
+        if field is None:
+            return ""
+        try:
+            return field.toPlainText()
+        except RuntimeError:
+            return ""
+
+    def _capture_structured_values(self) -> None:
+        if self._free_input is not None:
+            self._free_text = self._safe_plain_text(self._free_input)
+        if self._pico_p is not None:
+            self._pico_values = {
+                "population": self._safe_line_text(self._pico_p),
+                "intervention": self._safe_line_text(self._pico_i),
+                "comparison": self._safe_line_text(self._pico_c),
+                "outcome": self._safe_line_text(self._pico_o),
+            }
+        if self._pcc_p is not None:
+            self._pcc_values = {
+                "population": self._safe_line_text(self._pcc_p),
+                "concept": self._safe_line_text(self._pcc_c),
+                "context": self._safe_line_text(self._pcc_ctx),
+            }
 
     def _set_query_type(self, name: str) -> None:
         self._query_type = name
@@ -373,6 +440,8 @@ class WorkspaceTabs(QTabWidget):
         qt = self._query_type
         payload: dict[str, Any] = {}
         if qt == "pico":
+            if not all((self._pico_p, self._pico_i, self._pico_c, self._pico_o)):
+                self._rebuild_structured()
             p, i, c, o = (self._pico_p.text().strip(), self._pico_i.text().strip(),
                           self._pico_c.text().strip(), self._pico_o.text().strip())
             if not p or not i:
@@ -381,6 +450,8 @@ class WorkspaceTabs(QTabWidget):
             payload = {"population": p, "intervention": i, "comparison": c, "outcome": o}
             query = f"Population: {p}; Intervention: {i}; Comparison: {c}; Outcome: {o}"
         elif qt == "pcc":
+            if not all((self._pcc_p, self._pcc_c, self._pcc_ctx)):
+                self._rebuild_structured()
             p, concept, ctx = (self._pcc_p.text().strip(), self._pcc_c.text().strip(),
                                self._pcc_ctx.text().strip())
             if not p or not concept:
@@ -389,6 +460,8 @@ class WorkspaceTabs(QTabWidget):
             payload = {"population": p, "concept": concept, "context": ctx}
             query = f"Population: {p}; Concept: {concept}; Context: {ctx}"
         else:
+            if self._free_input is None:
+                self._rebuild_structured()
             query = self._free_input.toPlainText().strip()
             if not query:
                 self._show_form_error(self._t("query_required"))
@@ -439,11 +512,15 @@ class WorkspaceTabs(QTabWidget):
                 "border-radius: 6px; padding: 6px; "
                 "}"
             )
-            cl = QVBoxLayout(card); cl.setSpacing(4); cl.setContentsMargins(8, 6, 8, 6)
+            cl = QVBoxLayout(card)
+            cl.setSpacing(4)
+            cl.setContentsMargins(8, 6, 8, 6)
 
             head = QHBoxLayout()
             title = QLabel(entry["provider"].title())
-            f = title.font(); f.setBold(True); title.setFont(f)
+            f = title.font()
+            f.setBold(True)
+            title.setFont(f)
             head.addWidget(title)
             head.addStretch(1)
             head.addWidget(BadgePill(exec_label(entry["active_execution_path"]),
@@ -454,9 +531,11 @@ class WorkspaceTabs(QTabWidget):
             sub.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
             cl.addWidget(sub)
 
-            badge_row = QHBoxLayout(); badge_row.setSpacing(4)
+            badge_row = QHBoxLayout()
+            badge_row.setSpacing(4)
             engine_b = text_badge("Engine", entry.get("runtime_engine"))
-            if engine_b: badge_row.addWidget(engine_b)
+            if engine_b:
+                badge_row.addWidget(engine_b)
             badge_row.addWidget(_provider_flag_badge("SDK", entry["sdk_available"]))
             badge_row.addWidget(_provider_flag_badge("Key", entry["provider_credentials_present"]))
             badge_row.addWidget(_provider_flag_badge("Online", not entry["offline_mode"]))
@@ -477,15 +556,17 @@ class WorkspaceTabs(QTabWidget):
 
     def _build_api_keys(self) -> QGroupBox:
         group = QGroupBox(self._t("api_keys"))
-        v = QVBoxLayout(group); v.setSpacing(6)
-        desc = QLabel(self._t("api_keys_desc"))
-        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
-        desc.setWordWrap(True)
-        v.addWidget(desc)
+        v = QVBoxLayout(group)
+        v.setSpacing(6)
+        self._api_keys_desc_label = QLabel(self._t("api_keys_desc"))
+        self._api_keys_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._api_keys_desc_label.setWordWrap(True)
+        v.addWidget(self._api_keys_desc_label)
 
         self._key_fields: dict[str, QLineEdit] = {}
         stored = self._service.get_api_keys()
-        form = QFormLayout(); form.setContentsMargins(0, 0, 0, 0)
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
         for svc, label in API_KEY_SERVICES:
             le = QLineEdit(stored.get(svc, ""))
             le.setEchoMode(QLineEdit.EchoMode.Normal if svc in _PLAIN_CONFIG_FIELDS else QLineEdit.EchoMode.Password)
@@ -496,7 +577,8 @@ class WorkspaceTabs(QTabWidget):
                 le.setPlaceholderText("optional")
             self._key_fields[svc] = le
             form.addRow(f"{label}:", le)
-        wrap = QWidget(); wrap.setLayout(form)
+        wrap = QWidget()
+        wrap.setLayout(form)
         v.addWidget(wrap)
 
         self._save_keys_btn = QPushButton(self._t("save_keys"))
@@ -515,12 +597,13 @@ class WorkspaceTabs(QTabWidget):
 
     def _build_research_settings(self) -> QGroupBox:
         group = QGroupBox(self._t("research_settings"))
-        v = QVBoxLayout(group); v.setSpacing(6)
+        v = QVBoxLayout(group)
+        v.setSpacing(6)
 
-        desc = QLabel(self._t("years_lookback_desc"))
-        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
-        desc.setWordWrap(True)
-        v.addWidget(desc)
+        self._years_desc_label = QLabel(self._t("years_lookback_desc"))
+        self._years_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._years_desc_label.setWordWrap(True)
+        v.addWidget(self._years_desc_label)
 
         years_row = QFormLayout()
         self._years_input = QSpinBox()
@@ -529,10 +612,10 @@ class WorkspaceTabs(QTabWidget):
         years_row.addRow(f"{self._t('years_lookback')}:", self._years_input)
         v.addLayout(years_row)
 
-        scopus_desc = QLabel(self._t("scopus_view_desc"))
-        scopus_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
-        scopus_desc.setWordWrap(True)
-        v.addWidget(scopus_desc)
+        self._scopus_desc_label = QLabel(self._t("scopus_view_desc"))
+        self._scopus_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._scopus_desc_label.setWordWrap(True)
+        v.addWidget(self._scopus_desc_label)
 
         scopus_row = QFormLayout()
         self._scopus_combo = QComboBox()
@@ -567,6 +650,12 @@ class WorkspaceTabs(QTabWidget):
         self.setTabText(self.indexOf(self._settings_page), self._t("research_settings"))
         self._file_button.setText(self._t("file_menu"))
         self._quit_action.setText(self._t("quit"))
+        self._new_research_desc_label.setText(self._t("new_research_desc"))
+        self._provider_label.setText(self._t("provider"))
+        self._model_label.setText(self._t("model"))
+        self._api_keys_desc_label.setText(self._t("api_keys_desc"))
+        self._years_desc_label.setText(self._t("years_lookback_desc"))
+        self._scopus_desc_label.setText(self._t("scopus_view_desc"))
         self._qt_free.setText(self._t("free_form"))
         self._start_btn.setText(self._t("start_run"))
         self._save_keys_btn.setText(self._t("save_keys"))

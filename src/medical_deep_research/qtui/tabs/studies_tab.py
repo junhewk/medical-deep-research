@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication
@@ -283,7 +283,10 @@ class StudiesTab(QWidget):
 
         title = QLabel(study.title)
         title.setWordWrap(True)
-        f = title.font(); f.setBold(True); f.setPointSizeF(adjusted_point_size(f, 2)); title.setFont(f)
+        f = title.font()
+        f.setBold(True)
+        f.setPointSizeF(adjusted_point_size(f, 2))
+        title.setFont(f)
         self._detail_layout.addWidget(title)
 
         authors = ", ".join(study.authors[:5])
@@ -299,7 +302,8 @@ class StudiesTab(QWidget):
         self._detail_layout.addWidget(journal_lbl)
 
         # Badge row
-        badge_row = QHBoxLayout(); badge_row.setSpacing(4)
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(4)
         badge_row.addWidget(EvidenceBadge(study.evidence_level))
         badge_row.addWidget(BadgePill(f"Score {study.composite_score:.2f}", "neutral"))
         badge_row.addWidget(BadgePill(f"{study.citation_count} cit.", "neutral"))
@@ -311,13 +315,16 @@ class StudiesTab(QWidget):
             doi_btn.clicked.connect(lambda _=False, url=f"https://doi.org/{study.doi}": QDesktopServices.openUrl(url))
             badge_row.addWidget(doi_btn)
         badge_row.addStretch(1)
-        wrap = QWidget(); wrap.setLayout(badge_row)
+        wrap = QWidget()
+        wrap.setLayout(badge_row)
         self._detail_layout.addWidget(wrap)
 
         # Abstract
         if study.abstract:
             abstract_title = QLabel("Abstract")
-            f = abstract_title.font(); f.setBold(True); abstract_title.setFont(f)
+            f = abstract_title.font()
+            f.setBold(True)
+            abstract_title.setFont(f)
             self._detail_layout.addWidget(abstract_title)
             abstract_view = QLabel(study.abstract)
             abstract_view.setWordWrap(True)
@@ -329,7 +336,9 @@ class StudiesTab(QWidget):
         fulltext = self._reading_service.get_fulltext(self._run.id, self._selected_ref)
         if fulltext:
             ft_title = QLabel("Full Text")
-            f = ft_title.font(); f.setBold(True); ft_title.setFont(f)
+            f = ft_title.font()
+            f.setBold(True)
+            ft_title.setFont(f)
             self._detail_layout.addWidget(ft_title)
             ft_view = MarkdownView()
             ft_view.set_markdown(fulltext)
@@ -344,7 +353,8 @@ class StudiesTab(QWidget):
             pdf_btn.clicked.connect(self._on_open_pdf)
             actions_row.addWidget(pdf_btn)
             actions_row.addStretch(1)
-            wrap2 = QWidget(); wrap2.setLayout(actions_row)
+            wrap2 = QWidget()
+            wrap2.setLayout(actions_row)
             self._detail_layout.addWidget(wrap2)
 
         self._detail_layout.addStretch(1)
@@ -417,8 +427,10 @@ class StudiesTab(QWidget):
                     text = f"[PDF parse error: {exc}]"
             finally:
                 if tmp_in:
-                    try: Path(tmp_in).unlink()
-                    except OSError: pass
+                    try:
+                        Path(tmp_in).unlink()
+                    except OSError:
+                        pass
 
             if text:
                 self._reading_service.store_fulltext(run_id, ref, text)

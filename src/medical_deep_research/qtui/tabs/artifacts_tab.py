@@ -28,7 +28,10 @@ class ArtifactsTab(QWidget):
         layout.setSpacing(6)
 
         self._title = QLabel(self._t("artifacts"))
-        f = self._title.font(); f.setBold(True); f.setPointSizeF(adjusted_point_size(f, 1)); self._title.setFont(f)
+        f = self._title.font()
+        f.setBold(True)
+        f.setPointSizeF(adjusted_point_size(f, 1))
+        self._title.setFont(f)
         layout.addWidget(self._title)
 
         self._count_label = QLabel("")

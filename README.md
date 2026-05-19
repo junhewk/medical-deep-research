@@ -68,6 +68,14 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
+### v2.9.0 — Native Qt Desktop UI
+
+- **Native PySide6 app:** replaced the NiceGUI/webview desktop shell with an in-process Qt UI powered by `qasync`; the app no longer opens a browser or binds a local web port.
+- **Polished desktop interface:** bundled Pretendard for consistent sans-serif rendering, refreshed the clinical color palette, and moved the File menu into the main tab row.
+- **Research form update:** New Research now presents PICO, PCC, and Free-form modes in that order, with stable switching and language changes.
+- **Report reader:** added report outline navigation, in-report search, word/section stats, Markdown copy, plain-text copy, and Markdown/Text save actions.
+- **Build cleanup:** removed NiceGUI/pywebview build paths and updated PyInstaller packaging for PySide6.
+
 ### v2.8.8 — Agentic Report Loop Diagnostics & Guardrails
 
 - **Report submit loop fix:** evidence-level ordering validation now checks evidence-level headings inside Results/Findings instead of every prose mention of "Level I/II/III/IV/V", avoiding false rejections when a later paragraph references higher-level evidence.
@@ -233,9 +241,8 @@ scripts/
 ## Development
 
 ```bash
-uv sync --all-extras
+uv sync --all-extras  # includes dev tools
 uv run ruff check src/
-uv run mypy src/ --ignore-missing-imports
 uv run python -m unittest discover -s tests -v
 
 # Optional live Anthropic route eval; requires ANTHROPIC_API_KEY

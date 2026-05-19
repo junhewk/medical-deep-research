@@ -212,7 +212,9 @@ class MainWindow(QMainWindow):
 
         title = QLabel(self._t("select_run"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        f = title.font(); f.setPointSizeF(adjusted_point_size(f, 4)); title.setFont(f)
+        f = title.font()
+        f.setPointSizeF(adjusted_point_size(f, 4))
+        title.setFont(f)
         title.setStyleSheet(f"color: {TEXT_MUTED};")
         layout.addWidget(title)
 

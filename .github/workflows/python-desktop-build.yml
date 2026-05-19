@@ -138,6 +138,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name || format('manual-{0}', github.run_number) }}
           name: "${{ github.ref_name || format('Build No.{0}', github.run_number) }}"
-          draft: true
+          draft: false
           files: artifacts/**/*
           generate_release_notes: true

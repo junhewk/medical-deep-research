@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..theme import ACCENT, SURFACE, TEXT_MUTED, adjusted_point_size
+from ..theme import ACCENT, BORDER_DIM, SURFACE, SURFACE_SOFT, TEXT_MUTED, adjusted_point_size
 from ..widgets.markdown_view import MarkdownView
 
 _HEADING_RE = re.compile(r"^(#{1,4})\s+(.+?)\s*#*\s*$", re.MULTILINE)
@@ -110,9 +110,16 @@ class ReportTab(QWidget):
         splitter.setChildrenCollapsible(False)
 
         outline_panel = QWidget()
+        outline_panel.setObjectName("reportOutlinePanel")
+        outline_panel.setStyleSheet(
+            "QWidget#reportOutlinePanel { "
+            f"background: {SURFACE_SOFT}; border: 1px solid {BORDER_DIM}; "
+            "border-radius: 8px; "
+            "}"
+        )
         outline_layout = QVBoxLayout(outline_panel)
-        outline_layout.setContentsMargins(0, 0, 0, 0)
-        outline_layout.setSpacing(6)
+        outline_layout.setContentsMargins(10, 10, 10, 10)
+        outline_layout.setSpacing(8)
 
         self._outline_title = QLabel(self._t("report_outline"))
         self._outline_title.setStyleSheet(f"color: {ACCENT}; font-weight: 700;")
@@ -120,20 +127,23 @@ class ReportTab(QWidget):
 
         self._outline = QListWidget()
         self._outline.setProperty("role", "report-outline")
+        self._outline.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._outline.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._outline.itemActivated.connect(self._jump_to_heading)
         self._outline.itemClicked.connect(self._jump_to_heading)
         outline_layout.addWidget(self._outline, 1)
 
-        self._view = MarkdownView()
+        self._view = MarkdownView(report_mode=True)
         self._view.setStyleSheet(
-            f"QTextBrowser {{ background: {SURFACE}; border-radius: 8px; }}"
+            f"QTextBrowser {{ background: {SURFACE}; border: 1px solid {BORDER_DIM}; "
+            "border-radius: 10px; }"
         )
 
         splitter.addWidget(outline_panel)
         splitter.addWidget(self._view)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([230, 820])
+        splitter.setSizes([280, 900])
         layout.addWidget(splitter, 1)
 
     def set_report(self, markdown: str, run_short_id: str) -> None:
@@ -175,6 +185,7 @@ class ReportTab(QWidget):
             label = f"{'  ' * max(0, level - 1)}{heading}"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, heading)
+            item.setToolTip(heading)
             self._outline.addItem(item)
 
     def _update_stats(self) -> None:

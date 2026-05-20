@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QVBoxLayout,
@@ -43,10 +44,10 @@ class _RunRowDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         painter.save()
         rect = option.rect
-        selected = bool(option.state & QStyleOptionViewItem.StateFlag.State_Selected)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
         if selected:
             painter.fillRect(rect, QColor(ACCENT_SOFT))
-        elif option.state & QStyleOptionViewItem.StateFlag.State_MouseOver:
+        elif option.state & QStyle.StateFlag.State_MouseOver:
             painter.fillRect(rect, QColor("#f0f6f4"))
 
         query: str = index.data(_QUERY_ROLE) or ""

@@ -68,6 +68,13 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
+### v2.9.1 — Native Qt UI Stability & Readability
+
+- **macOS first-page fix:** New Research now keeps the light app background on macOS instead of exposing a dark native viewport, and PICO/PCC fields stretch across the form reliably.
+- **Visible start action:** the Start Research button is now a compact, explicit primary action instead of blending into the form background.
+- **Research Runs fix:** repaired the custom Qt row delegate so saved runs render correctly in the Research Runs tab.
+- **Report readability:** widened and softened the report outline panel, added a report-specific reading mode with better line height and paragraph spacing, constrained long line lengths, and removed horizontal scrolling.
+
 ### v2.9.0 — Native Qt Desktop UI
 
 - **Native PySide6 app:** replaced the NiceGUI/webview desktop shell with an in-process Qt UI powered by `qasync`; the app no longer opens a browser or binds a local web port.

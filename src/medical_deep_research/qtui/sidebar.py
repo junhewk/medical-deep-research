@@ -30,6 +30,7 @@ from .i18n import API_KEY_SERVICES, PROVIDER_LABELS, PROVIDER_MODELS
 from .run_list import RunListPanel
 from .theme import (
     ACCENT,
+    ACCENT_HOVER,
     APP_BG,
     BORDER_DIM,
     ERROR,
@@ -283,10 +284,29 @@ class WorkspaceTabs(QTabWidget):
 
         # Start button
         self._start_btn = QPushButton(self._t("start_run"))
+        self._start_btn.setObjectName("startResearchButton")
         self._start_btn.setProperty("role", "primary")
-        self._start_btn.setMinimumHeight(36)
+        self._start_btn.setMinimumHeight(40)
+        self._start_btn.setMinimumWidth(220)
+        self._start_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._start_btn.setStyleSheet(
+            "QPushButton#startResearchButton { "
+            f"background-color: {ACCENT}; color: #ffffff; "
+            f"border: 1px solid {ACCENT_HOVER}; border-radius: 8px; "
+            "padding: 9px 18px; font-weight: 700; "
+            "}"
+            "QPushButton#startResearchButton:hover { "
+            f"background-color: {ACCENT_HOVER}; "
+            "}"
+            "QPushButton#startResearchButton:disabled { "
+            "background-color: #9db8b4; border-color: #9db8b4; color: #f8fafc; "
+            "}"
+        )
         self._start_btn.clicked.connect(self._on_start_clicked)
-        v.addWidget(self._start_btn)
+        start_row = QHBoxLayout()
+        start_row.addStretch(1)
+        start_row.addWidget(self._start_btn)
+        v.addLayout(start_row)
 
         return group
 

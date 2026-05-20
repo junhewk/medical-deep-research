@@ -147,17 +147,19 @@ QPushButton:disabled {{
     background: #f2f4f7;
 }}
 QPushButton[role="primary"] {{
-    background: {ACCENT};
+    background-color: {ACCENT};
     color: white;
-    border: none;
+    border: 1px solid {ACCENT_HOVER};
     padding: 8px 16px;
     font-weight: 650;
 }}
 QPushButton[role="primary"]:hover {{
-    background: {ACCENT_HOVER};
+    background-color: {ACCENT_HOVER};
 }}
 QPushButton[role="primary"]:disabled {{
-    background: #9db8b4;
+    background-color: #9db8b4;
+    border-color: #9db8b4;
+    color: #f8fafc;
 }}
 QPushButton[role="danger"] {{
     color: {ERROR};

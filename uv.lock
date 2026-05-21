@@ -1997,6 +1997,12 @@ anthropic = [
 claude-sdk = [
     { name = "claude-agent-sdk" },
 ]
+deepseek = [
+    { name = "langchain" },
+    { name = "langchain-core" },
+    { name = "langchain-openai" },
+    { name = "langgraph" },
+]
 dev = [
     { name = "ruff" },
 ]
@@ -2028,12 +2034,16 @@ requires-dist = [
     { name = "google-adk", marker = "extra == 'google'" },
     { name = "httpx" },
     { name = "langchain", marker = "extra == 'anthropic'" },
+    { name = "langchain", marker = "extra == 'deepseek'" },
     { name = "langchain", marker = "extra == 'langchain'" },
     { name = "langchain-anthropic", marker = "extra == 'anthropic'" },
     { name = "langchain-community", marker = "extra == 'langchain'" },
+    { name = "langchain-core", marker = "extra == 'deepseek'" },
     { name = "langchain-core", marker = "extra == 'langchain'" },
+    { name = "langchain-openai", marker = "extra == 'deepseek'" },
     { name = "langchain-openai", marker = "extra == 'langchain'" },
     { name = "langgraph", marker = "extra == 'anthropic'" },
+    { name = "langgraph", marker = "extra == 'deepseek'" },
     { name = "langgraph", marker = "extra == 'langchain'" },
     { name = "markitdown", extras = ["pdf"], marker = "extra == 'pdf'" },
     { name = "mcp", extras = ["cli"] },
@@ -2046,7 +2056,7 @@ requires-dist = [
     { name = "sqlmodel" },
     { name = "unpywall", marker = "extra == 'pdf'" },
 ]
-provides-extras = ["openai", "anthropic", "claude-sdk", "pdf", "langchain", "google", "dev"]
+provides-extras = ["openai", "anthropic", "claude-sdk", "deepseek", "pdf", "langchain", "google", "dev"]
 
 [[package]]
 name = "mmh3"

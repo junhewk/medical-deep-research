@@ -79,7 +79,7 @@ QGroupBox {{
     background: {SURFACE};
     font-weight: 650;
     border: 1px solid {BORDER_DIM};
-    border-radius: 8px;
+    border-radius: 6px;
     margin-top: 1.2ex;
     padding: 10px;
 }}
@@ -89,10 +89,21 @@ QGroupBox::title {{
     padding: 0 6px;
     color: {TEXT_SECONDARY};
 }}
+QGroupBox#researchPanel {{
+    margin-top: 0;
+    padding: 0;
+    border-radius: 6px;
+}}
+QGroupBox#researchPanel::title {{
+    color: transparent;
+    height: 0px;
+    width: 0px;
+    padding: 0px;
+}}
 
 QTabWidget::pane {{
     border: 1px solid {BORDER_DIM};
-    border-radius: 8px;
+    border-radius: 6px;
     top: -1px;
     background: {SURFACE};
 }}
@@ -118,13 +129,16 @@ QTabBar::tab:hover:!selected {{
 
 QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QTextEdit, QTextBrowser {{
     border: 1px solid {BORDER_DIM};
-    border-radius: 7px;
+    border-radius: 5px;
     background: {SURFACE};
     selection-background-color: {ACCENT_DIM};
 }}
 QLineEdit, QComboBox, QSpinBox {{
-    padding: 5px 7px;
-    min-height: 24px;
+    padding: 6px 8px;
+    min-height: 28px;
+}}
+QComboBox {{
+    padding-right: 28px;
 }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
 QPlainTextEdit:focus, QTextEdit:focus, QTextBrowser:focus {{
@@ -133,7 +147,7 @@ QPlainTextEdit:focus, QTextEdit:focus, QTextBrowser:focus {{
 
 QPushButton {{
     border: 1px solid {BORDER_DIM};
-    border-radius: 7px;
+    border-radius: 5px;
     padding: 6px 12px;
     background: {SURFACE};
     color: {TEXT_SECONDARY};
@@ -175,7 +189,7 @@ QPushButton[role="link"] {{
 
 QToolButton[role="tab-corner"] {{
     border: 1px solid {BORDER_DIM};
-    border-radius: 7px;
+    border-radius: 5px;
     padding: 5px 10px;
     margin-right: 8px;
     background: {SURFACE};
@@ -199,7 +213,7 @@ QLabel[role="section-desc"] {{
 
 QListWidget {{
     border: 1px solid {BORDER_DIM};
-    border-radius: 7px;
+    border-radius: 5px;
     background: {SURFACE};
 }}
 QListWidget::item {{

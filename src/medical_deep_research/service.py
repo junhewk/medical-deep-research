@@ -21,12 +21,14 @@ from .models import (
     utcnow,
 )
 from .persistence import AppDatabase
+from .provider_config import DEEPSEEK_DEFAULT_MODEL
 from .runtime import RunRequest, build_runtime, describe_provider_runtime
 
 
 DEFAULT_MODELS = {
     "openai": "gpt-5-mini",
     "anthropic": "claude-haiku-4-5-20251001",
+    "deepseek": DEEPSEEK_DEFAULT_MODEL,
     "google": "gemini-2.5-flash",
     "local": "qwen3.5-27b",
 }

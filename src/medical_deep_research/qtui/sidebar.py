@@ -178,7 +178,10 @@ class WorkspaceTabs(QTabWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        layout.addWidget(widget)
+        if widget.objectName() == "researchPanel":
+            layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        else:
+            layout.addWidget(widget)
         layout.addStretch(1)
         return page
 
@@ -205,9 +208,18 @@ class WorkspaceTabs(QTabWidget):
     # ---- New Research form ----
 
     def _build_new_research(self) -> QGroupBox:
-        group = QGroupBox(self._t("new_research"))
+        group = QGroupBox("")
+        group.setObjectName("researchPanel")
+        group.setMinimumWidth(760)
+        group.setMaximumWidth(980)
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         v = QVBoxLayout(group)
-        v.setSpacing(8)
+        v.setContentsMargins(22, 18, 22, 20)
+        v.setSpacing(14)
+
+        self._new_research_title_label = QLabel(self._t("new_research"))
+        self._new_research_title_label.setProperty("role", "section-title")
+        v.addWidget(self._new_research_title_label)
 
         self._new_research_desc_label = QLabel(self._t("new_research_desc"))
         self._new_research_desc_label.setProperty("role", "section-desc")
@@ -231,6 +243,7 @@ class WorkspaceTabs(QTabWidget):
 
         # Provider + language row
         pl_row = QHBoxLayout()
+        pl_row.setSpacing(10)
         self._provider_combo = QComboBox()
         for code, label in PROVIDER_LABELS.items():
             self._provider_combo.addItem(label, code)
@@ -239,7 +252,7 @@ class WorkspaceTabs(QTabWidget):
             self._provider_combo.setCurrentIndex(idx)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         self._provider_label = QLabel(self._t("provider"))
-        self._provider_label.setFixedWidth(120)
+        self._provider_label.setFixedWidth(128)
         self._provider_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         pl_row.addWidget(self._provider_label)
         pl_row.addWidget(self._provider_combo, 1)
@@ -251,14 +264,16 @@ class WorkspaceTabs(QTabWidget):
         if idx >= 0:
             self._language_combo.setCurrentIndex(idx)
         self._language_combo.currentIndexChanged.connect(self._on_language_changed)
+        self._language_combo.setMinimumWidth(128)
         pl_row.addWidget(self._language_combo)
         v.addLayout(pl_row)
 
         # Structured input area (swaps based on query type)
         self._structured_holder = QWidget()
+        self._structured_holder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._structured_layout = QVBoxLayout(self._structured_holder)
         self._structured_layout.setContentsMargins(0, 0, 0, 0)
-        self._structured_layout.setSpacing(6)
+        self._structured_layout.setSpacing(8)
         v.addWidget(self._structured_holder)
 
         self._rebuild_structured()
@@ -269,9 +284,10 @@ class WorkspaceTabs(QTabWidget):
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
         self._model_combo.editTextChanged.connect(self._on_model_text_changed)
         self._model_label = QLabel(self._t("model"))
-        self._model_label.setFixedWidth(120)
+        self._model_label.setFixedWidth(128)
         self._model_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         model_row = QHBoxLayout()
+        model_row.setSpacing(10)
         model_row.addWidget(self._model_label)
         model_row.addWidget(self._model_combo, 1)
         v.addLayout(model_row)
@@ -286,13 +302,13 @@ class WorkspaceTabs(QTabWidget):
         self._start_btn = QPushButton(self._t("start_run"))
         self._start_btn.setObjectName("startResearchButton")
         self._start_btn.setProperty("role", "primary")
-        self._start_btn.setMinimumHeight(40)
-        self._start_btn.setMinimumWidth(220)
+        self._start_btn.setMinimumHeight(38)
+        self._start_btn.setMinimumWidth(230)
         self._start_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._start_btn.setStyleSheet(
             "QPushButton#startResearchButton { "
             f"background-color: {ACCENT}; color: #ffffff; "
-            f"border: 1px solid {ACCENT_HOVER}; border-radius: 8px; "
+            f"border: 1px solid {ACCENT_HOVER}; border-radius: 6px; "
             "padding: 9px 18px; font-weight: 700; "
             "}"
             "QPushButton#startResearchButton:hover { "
@@ -366,15 +382,18 @@ class WorkspaceTabs(QTabWidget):
         """Add a native-looking, full-width row to the first-page form."""
         wrap = QWidget()
         wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        wrap.setMinimumHeight(36)
 
         row = QHBoxLayout(wrap)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
 
         label = QLabel(label_text)
-        label.setFixedWidth(120)
+        label.setFixedWidth(128)
         label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         field.setSizePolicy(QSizePolicy.Policy.Expanding, field.sizePolicy().verticalPolicy())
+        if isinstance(field, QLineEdit):
+            field.setMinimumHeight(34)
 
         row.addWidget(label)
         row.addWidget(field, 1)
@@ -559,7 +578,7 @@ class WorkspaceTabs(QTabWidget):
             cl.setContentsMargins(8, 6, 8, 6)
 
             head = QHBoxLayout()
-            title = QLabel(entry["provider"].title())
+            title = QLabel(PROVIDER_LABELS.get(entry["provider"], entry["provider"].title()))
             f = title.font()
             f.setBold(True)
             title.setFont(f)
@@ -681,7 +700,7 @@ class WorkspaceTabs(QTabWidget):
 
     def retranslate(self) -> None:
         """Re-apply labels when language changes."""
-        self._new_research_group.setTitle(self._t("new_research"))
+        self._new_research_group.setTitle("")
         self._provider_status_group.setTitle(self._t("provider_status"))
         self._api_keys_group.setTitle(self._t("api_keys"))
         self._settings_group.setTitle(self._t("research_settings"))
@@ -692,6 +711,7 @@ class WorkspaceTabs(QTabWidget):
         self.setTabText(self.indexOf(self._settings_page), self._t("research_settings"))
         self._file_button.setText(self._t("file_menu"))
         self._quit_action.setText(self._t("quit"))
+        self._new_research_title_label.setText(self._t("new_research"))
         self._new_research_desc_label.setText(self._t("new_research_desc"))
         self._provider_label.setText(self._t("provider"))
         self._model_label.setText(self._t("model"))

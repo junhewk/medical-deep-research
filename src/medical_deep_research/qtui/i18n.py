@@ -202,6 +202,10 @@ PROVIDER_MODELS: dict[str, dict[str, str]] = {
         "gpt-5": "GPT-5",
         "gpt-5.2": "GPT-5.2",
     },
+    "deepseek": {
+        "deepseek-v4-pro": "DeepSeek V4 Pro",
+        "deepseek-v4-flash": "DeepSeek V4 Flash",
+    },
     "google": {
         "gemini-2.5-flash": "Gemini 2.5 Flash",
         "gemini-2.5-pro": "Gemini 2.5 Pro",
@@ -220,6 +224,7 @@ PROVIDER_MODELS: dict[str, dict[str, str]] = {
 PROVIDER_LABELS = {
     "openai": "OpenAI",
     "anthropic": "Anthropic",
+    "deepseek": "DeepSeek",
     "google": "Google",
     "local": "Local / OpenAI-compatible",
 }
@@ -228,6 +233,7 @@ PROVIDER_LABELS = {
 API_KEY_SERVICES = [
     ("openai", "OpenAI"),
     ("anthropic", "Anthropic"),
+    ("deepseek", "DeepSeek"),
     ("google", "Google"),
     ("local_base_url", "Local OpenAI-compatible API URL"),
     ("local", "Local API key (optional)"),

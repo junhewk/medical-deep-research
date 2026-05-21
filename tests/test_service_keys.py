@@ -28,6 +28,26 @@ class ServiceKeyTests(unittest.TestCase):
                 # TemporaryDirectory cleanup or the file handle blocks deletion.
                 database.close()
 
+    def test_deepseek_key_enables_deepseek_provider_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
+            database = AppDatabase(settings)
+            try:
+                database.create_all()
+                service = ResearchService(database)
+
+                service.save_api_key("deepseek", "test-deepseek-key")
+                deepseek = next(
+                    diag for diag in service.get_provider_diagnostics()
+                    if diag["provider"] == "deepseek"
+                )
+
+                self.assertEqual(deepseek["default_model"], "deepseek-v4-pro")
+                self.assertEqual(deepseek["runtime_engine"], "langchain_deepseek")
+                self.assertTrue(deepseek["provider_credentials_present"])
+            finally:
+                database.close()
+
 
 if __name__ == "__main__":
     unittest.main()

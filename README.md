@@ -20,7 +20,7 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 | Feature | Description |
 |---------|-------------|
 | **Architecture** | Agentic loop — LLM calls 16 tools autonomously via shared-state bridge |
-| **Providers** | Anthropic (Claude), OpenAI, Google (Gemini), Local LLMs (Ollama) |
+| **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
 | **Search** | PubMed, Cochrane, OpenAlex, Semantic Scholar, Scopus |
 | **Ranking** | Agent-driven: LLM reviews abstracts and ranks by relevance and evidence quality |
@@ -109,6 +109,7 @@ uv sync --all-extras
 uv sync --extra anthropic   # Claude via LangChain/Anthropic
 uv sync --extra claude-sdk   # Optional legacy Claude SDK mode
 uv sync --extra openai      # OpenAI Agents SDK
+uv sync --extra deepseek    # DeepSeek via OpenAI-compatible Chat API
 uv sync --extra google      # Google ADK
 uv sync --extra langchain   # Local LLMs (Ollama, LM Studio)
 uv sync --extra pdf         # Full-text PDF parsing
@@ -137,6 +138,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 -Zip
 # LLM provider keys (or configure in-app)
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
+DEEPSEEK_API_KEY=sk-...
 GOOGLE_API_KEY=...
 
 # Local LLM endpoint
@@ -180,6 +182,7 @@ The system prompt adapts to the query domain:
 |----------|-----|---------------|---------|
 | Anthropic | `langchain-anthropic` | claude-haiku-4-5 | Yes |
 | OpenAI | `openai-agents` | gpt-5-mini | Yes |
+| DeepSeek | `langchain-openai` | deepseek-v4-pro | Yes |
 | Google | `google-adk` | gemini-2.5-flash | Yes |
 | Local | `langchain` + `langgraph` | qwen3.5-27b | Yes |
 

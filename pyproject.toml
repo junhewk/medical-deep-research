@@ -26,6 +26,7 @@ dependencies = [
 openai = ["openai-agents"]
 anthropic = ["anthropic", "deepagents", "langchain", "langchain-anthropic", "langgraph"]
 claude-sdk = ["claude-agent-sdk"]
+deepseek = ["langchain", "langchain-core", "langchain-openai", "langgraph"]
 pdf = ["markitdown[pdf]", "opendataloader-pdf", "unpywall"]
 langchain = ["langchain", "langchain-core", "langchain-community", "langchain-openai", "langgraph"]
 google = ["google-adk"]

@@ -17,6 +17,12 @@ from typing import Any
 import httpx
 
 from .models import ArtifactType, EventType, RuntimeEventPayload
+from .provider_config import (
+    DEEPSEEK_BASE_URL,
+    deepseek_api_key,
+    deepseek_reasoning_effort,
+    deepseek_thinking_body,
+)
 from .research import (
     build_query_plan,
     empty_verification_summary,
@@ -884,6 +890,21 @@ async def _call_llm_for_translation(
             messages=[{"role": "user", "content": f"Translate the following research report:\n\n{report}"}],
         )
         return response.content[0].text if response.content else ""
+
+    if provider == "deepseek":
+        api_key = deepseek_api_key(api_keys)
+        from openai import AsyncOpenAI
+        deepseek_client = AsyncOpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+        deepseek_resp = await deepseek_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Translate the following research report:\n\n{report}"},
+            ],
+            reasoning_effort=deepseek_reasoning_effort(),
+            extra_body=deepseek_thinking_body(),
+        )
+        return deepseek_resp.choices[0].message.content or ""
 
     if provider == "openai":
         api_key = api_keys.get("openai") or os.getenv("OPENAI_API_KEY", "")

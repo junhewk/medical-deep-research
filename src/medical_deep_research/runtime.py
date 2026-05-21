@@ -17,6 +17,12 @@ from pydantic import BaseModel
 from sqlmodel import Field
 
 from .models import ArtifactType, EventType, RunRequest, RuntimeEventPayload
+from .provider_config import (
+    DEEPSEEK_BASE_URL,
+    deepseek_api_key,
+    deepseek_reasoning_effort,
+    deepseek_thinking_body,
+)
 from .research import (
     build_query_plan,
     empty_verification_summary,
@@ -206,6 +212,9 @@ def _provider_api_env(provider: str, api_keys: dict[str, str]) -> dict[str, str]
     if provider == "anthropic":
         api_key = api_keys.get("anthropic") or os.getenv("ANTHROPIC_API_KEY")
         return {"ANTHROPIC_API_KEY": api_key} if api_key else {}
+    if provider == "deepseek":
+        api_key = deepseek_api_key(api_keys)
+        return {"DEEPSEEK_API_KEY": api_key} if api_key else {}
     if provider == "google":
         api_key = (
             api_keys.get("google")
@@ -3188,6 +3197,33 @@ class LangChainLocalRuntime(NativeSDKRuntime):
         return _coerce_model_output(result.content, output_model)
 
 
+class DeepSeekRuntime(LangChainLocalRuntime):
+    provider = "deepseek"
+    runtime_name = "DeepSeek Chat API"
+    runtime_engine = "langchain_deepseek"
+    planner_name = "DeepSeek Planner"
+    search_agent_name = "DeepSeek Search Agent"
+    synthesis_agent_name = "DeepSeek Synthesis Agent"
+    verifier_name = "DeepSeek Verification Agent"
+    native_agent_name = "DeepSeek Research Agent"
+
+    def _should_fallback(self, request: RunRequest) -> bool:
+        return provider_fallback_reason(self, request) is not None
+
+    def _resolve_chat_model(self, request: RunRequest) -> Any:
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=request.model or "deepseek-v4-pro",
+            base_url=DEEPSEEK_BASE_URL,
+            api_key=deepseek_api_key(request.api_keys),
+            temperature=0.1,
+            reasoning_effort=deepseek_reasoning_effort(),
+            extra_body=deepseek_thinking_body(),
+            disabled_params={"parallel_tool_calls": None},
+        )
+
+
 # ---------------------------------------------------------------------------
 # Runtime factory
 # ---------------------------------------------------------------------------
@@ -3199,6 +3235,8 @@ def build_runtime(provider: str) -> ResearchRuntime:
         return AnthropicRuntime()
     if provider == "google":
         return GoogleRuntime()
+    if provider == "deepseek":
+        return DeepSeekRuntime()
     if provider == "local":
         return LangChainLocalRuntime()
     return OpenAIRuntime()

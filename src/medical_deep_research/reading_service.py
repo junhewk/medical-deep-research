@@ -22,6 +22,13 @@ from .models import (
     utcnow,
 )
 from .persistence import AppDatabase
+from .provider_config import (
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_DEFAULT_MODEL,
+    deepseek_api_key,
+    deepseek_reasoning_effort,
+    deepseek_thinking_body,
+)
 from .rag import PaperIndex
 from .research.models import ScoredStudy
 
@@ -603,6 +610,7 @@ def _sanitize_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
 _FALLBACK_MODELS = {
     "openai": "gpt-5-mini",
     "anthropic": "claude-haiku-4-5-20251001",
+    "deepseek": DEEPSEEK_DEFAULT_MODEL,
     "google": "gemini-2.5-flash",
 }
 
@@ -616,6 +624,7 @@ def _resolve_provider(provider: str, model: str, api_keys: dict[str, str]) -> tu
     key_map = {
         "openai": api_keys.get("openai") or os.getenv("OPENAI_API_KEY", ""),
         "anthropic": api_keys.get("anthropic") or os.getenv("ANTHROPIC_API_KEY", ""),
+        "deepseek": deepseek_api_key(api_keys),
         "google": api_keys.get("google") or api_keys.get("gemini") or os.getenv("GOOGLE_API_KEY", ""),
     }
     if key_map.get(provider):
@@ -646,6 +655,8 @@ async def _stream_reading_llm(
 
     if provider == "anthropic":
         yield_from = _stream_anthropic(model, api_keys, system_prompt, messages)
+    elif provider == "deepseek":
+        yield_from = _stream_deepseek(model, api_keys, system_prompt, messages)
     elif provider == "google":
         yield_from = _stream_google(model, api_keys, system_prompt, messages)
     elif provider == "openai":
@@ -677,6 +688,30 @@ async def _stream_openai(
     llm_messages = [{"role": "system", "content": system_prompt}, *messages]
     stream = await client.chat.completions.create(
         model=model, messages=llm_messages, stream=True, max_tokens=4096,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+
+async def _stream_deepseek(
+    model: str,
+    api_keys: dict[str, str],
+    system_prompt: str,
+    messages: list[dict[str, str]],
+) -> AsyncIterator[str]:
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=deepseek_api_key(api_keys), base_url=DEEPSEEK_BASE_URL)
+    llm_messages = [{"role": "system", "content": system_prompt}, *messages]
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=llm_messages,
+        stream=True,
+        max_tokens=4096,
+        reasoning_effort=deepseek_reasoning_effort(),
+        extra_body=deepseek_thinking_body(),
     )
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None

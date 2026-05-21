@@ -28,6 +28,8 @@ from .provider_config import (
     deepseek_api_key,
     deepseek_reasoning_effort,
     deepseek_thinking_body,
+    local_base_url,
+    normalize_model_id,
 )
 from .rag import PaperIndex
 from .research.models import ScoredStudy
@@ -217,7 +219,7 @@ class ReadingService:
             query_type=run.query_type,
             mode=run.mode,
             provider=run.provider,
-            model=run.model,
+            model=normalize_model_id(run.provider, run.model),
             language=run.language,
             api_keys=api_keys,
         )
@@ -617,6 +619,8 @@ _FALLBACK_MODELS = {
 
 def _resolve_provider(provider: str, model: str, api_keys: dict[str, str]) -> tuple[str, str]:
     """Resolve to a provider that actually has an API key configured."""
+    provider = (provider or "openai").strip().lower()
+    model = normalize_model_id(provider, model)
     if provider == "local":
         return provider, model
 
@@ -633,7 +637,10 @@ def _resolve_provider(provider: str, model: str, api_keys: dict[str, str]) -> tu
     # Fallback to any provider with a key
     for fallback_provider, key in key_map.items():
         if key and fallback_provider != provider:
-            fallback_model = _FALLBACK_MODELS.get(fallback_provider, model)
+            fallback_model = normalize_model_id(
+                fallback_provider,
+                _FALLBACK_MODELS.get(fallback_provider, model),
+            )
             _log.info("[READING] Provider %s has no key; falling back to %s/%s", provider, fallback_provider, fallback_model)
             return fallback_provider, fallback_model
 
@@ -663,8 +670,7 @@ async def _stream_reading_llm(
         yield_from = _stream_openai(model, api_keys, system_prompt, messages, base_url=None)
     else:
         # Local / fallback — OpenAI-compatible
-        base_url = api_keys.get("local_base_url") or os.getenv("MDR_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1")
-        yield_from = _stream_openai(model, api_keys, system_prompt, messages, base_url=base_url)
+        yield_from = _stream_openai(model, api_keys, system_prompt, messages, base_url=local_base_url(api_keys))
 
     async for chunk in yield_from:
         yield chunk

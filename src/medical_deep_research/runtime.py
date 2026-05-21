@@ -22,6 +22,8 @@ from .provider_config import (
     deepseek_api_key,
     deepseek_reasoning_effort,
     deepseek_thinking_body,
+    local_base_url,
+    normalize_model_id,
 )
 from .research import (
     build_query_plan,
@@ -531,6 +533,10 @@ class _ReportSubmitted(BaseException):
 
 class _ReportRejected(Exception):
     """Raised when repeated report quality failures should stop the agent loop."""
+
+
+class _ReportRecoveryRequested(BaseException):
+    """Stop a local agent after a usable rejected draft and recover deterministically."""
 
 
 def _anthropic_cached_system_prompt(system_prompt: str) -> Any:
@@ -2700,6 +2706,7 @@ def _build_langchain_tools(
     bridge: AgenticEventBridge,
     *,
     stop_after_submit: bool = False,
+    stop_after_report_rejection: bool = False,
 ) -> list[Any]:
     """Build LangChain ``StructuredTool`` instances wrapping shared tool functions.
 
@@ -2796,6 +2803,8 @@ def _build_langchain_tools(
         await bridge.on_tool_end("submit_report", result)
         if result.get("fatal"):
             raise _ReportRejected(str(result.get("fallback_reason") or result.get("error")))
+        if stop_after_report_rejection and result.get("error") and result.get("rejection_count"):
+            raise _ReportRecoveryRequested(str(result.get("error")))
         if stop_after_submit and result.get("status") == "ok":
             raise _ReportSubmitted()
         return _langchain_tool_json("submit_report", result)
@@ -3080,13 +3089,7 @@ class LangChainLocalRuntime(NativeSDKRuntime):
     def _resolve_chat_model(self, request: RunRequest) -> Any:
         """Instantiate the appropriate LangChain chat model for local inference."""
         model = request.model or "llama3.1"
-        base_url = (
-            request.api_keys.get("local_base_url")
-            or os.environ.get("MDR_LOCAL_BASE_URL")
-            or request.api_keys.get("ollama_base_url")
-            or os.environ.get("MDR_OLLAMA_BASE_URL")
-            or "http://127.0.0.1:11434/v1"
-        )
+        base_url = local_base_url(request.api_keys)
 
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
@@ -3094,6 +3097,7 @@ class LangChainLocalRuntime(NativeSDKRuntime):
             base_url=base_url,
             api_key=request.api_keys.get("local") or os.environ.get("MDR_LOCAL_API_KEY") or "local",
             temperature=0.1,
+            disabled_params={"parallel_tool_calls": None},
         )
 
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
@@ -3104,7 +3108,12 @@ class LangChainLocalRuntime(NativeSDKRuntime):
 
 
         bridge = AgenticEventBridge()
-        tools = _build_langchain_tools(request, bridge)
+        tools = _build_langchain_tools(
+            request,
+            bridge,
+            stop_after_submit=True,
+            stop_after_report_rejection=self.provider == "local",
+        )
 
         yield _agentic_run_started(self, request)
         yield _agentic_agent_started(self.native_agent_name)
@@ -3168,6 +3177,14 @@ class LangChainLocalRuntime(NativeSDKRuntime):
                 bridge._intermediate["agent_final_message"] = final_text
             else:
                 bridge.set_result(final_text)
+        except _ReportSubmitted:
+            bridge._intermediate["agent_final_message"] = "Report accepted by submit_report."
+        except _ReportRecoveryRequested as exc:
+            bridge._intermediate["agent_final_message"] = "Stopped after submit_report rejection; recovered from shared research state."
+            bridge._intermediate["local_recovered_after_submit_rejection"] = str(exc)
+        except _ReportRejected as exc:
+            _log.warning("LangChain local agent stopped after repeated report rejection: %s", exc)
+            bridge.set_error(exc)
         except asyncio.TimeoutError:
             _log.warning("LangChain local agent timed out after %ss", LOCAL_AGENTIC_TIMEOUT_SECONDS)
             bridge.set_error(TimeoutError(f"Agent timed out after {LOCAL_AGENTIC_TIMEOUT_SECONDS}s"))
@@ -3214,7 +3231,7 @@ class DeepSeekRuntime(LangChainLocalRuntime):
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
-            model=request.model or "deepseek-v4-pro",
+            model=normalize_model_id("deepseek", request.model) or "deepseek-v4-pro",
             base_url=DEEPSEEK_BASE_URL,
             api_key=deepseek_api_key(request.api_keys),
             temperature=0.1,

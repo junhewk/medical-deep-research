@@ -22,6 +22,7 @@ from .provider_config import (
     deepseek_api_key,
     deepseek_reasoning_effort,
     deepseek_thinking_body,
+    local_base_url,
 )
 from .research import (
     build_query_plan,
@@ -920,9 +921,11 @@ async def _call_llm_for_translation(
         return oai_resp.choices[0].message.content or ""
 
     # Local / fallback — use OpenAI-compatible endpoint
-    base_url = os.getenv("MDR_LOCAL_BASE_URL", "http://127.0.0.1:11434/v1")
     from openai import AsyncOpenAI
-    local_client = AsyncOpenAI(api_key="local", base_url=base_url)
+    local_client = AsyncOpenAI(
+        api_key=api_keys.get("local") or os.getenv("MDR_LOCAL_API_KEY", "local"),
+        base_url=local_base_url(api_keys),
+    )
     local_resp = await local_client.chat.completions.create(
         model=model,
         messages=[
@@ -1109,7 +1112,7 @@ async def tool_parse_pdf(request: RunRequest, bridge: AgenticEventBridge, rank: 
         else:
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True,
-                                             headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.8.8; academic-research)"}) as client:
+                                             headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.2; academic-research)"}) as client:
                     resp = await client.get(url)
                     resp.raise_for_status()
                     if resp.content[:5] == b"%PDF-":

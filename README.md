@@ -20,7 +20,7 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 | Feature | Description |
 |---------|-------------|
 | **Architecture** | Agentic loop — LLM calls 16 tools autonomously via shared-state bridge |
-| **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama) |
+| **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
 | **Search** | PubMed, Cochrane, OpenAlex, Semantic Scholar, Scopus |
 | **Ranking** | Agent-driven: LLM reviews abstracts and ranks by relevance and evidence quality |
@@ -68,36 +68,12 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.9.1 — Native Qt UI Stability & Readability
+### v2.9.2 — Provider Route Reliability
 
-- **macOS first-page fix:** New Research now keeps the light app background on macOS instead of exposing a dark native viewport, and PICO/PCC fields stretch across the form reliably.
-- **Visible start action:** the Start Research button is now a compact, explicit primary action instead of blending into the form background.
-- **Research Runs fix:** repaired the custom Qt row delegate so saved runs render correctly in the Research Runs tab.
-- **Report readability:** widened and softened the report outline panel, added a report-specific reading mode with better line height and paragraph spacing, constrained long line lengths, and removed horizontal scrolling.
-
-### v2.9.0 — Native Qt Desktop UI
-
-- **Native PySide6 app:** replaced the NiceGUI/webview desktop shell with an in-process Qt UI powered by `qasync`; the app no longer opens a browser or binds a local web port.
-- **Polished desktop interface:** bundled Pretendard for consistent sans-serif rendering, refreshed the clinical color palette, and moved the File menu into the main tab row.
-- **Research form update:** New Research now presents PICO, PCC, and Free-form modes in that order, with stable switching and language changes.
-- **Report reader:** added report outline navigation, in-report search, word/section stats, Markdown copy, plain-text copy, and Markdown/Text save actions.
-- **Build cleanup:** removed NiceGUI/pywebview build paths and updated PyInstaller packaging for PySide6.
-
-### v2.8.8 — Agentic Report Loop Diagnostics & Guardrails
-
-- **Report submit loop fix:** evidence-level ordering validation now checks evidence-level headings inside Results/Findings instead of every prose mention of "Level I/II/III/IV/V", avoiding false rejections when a later paragraph references higher-level evidence.
-- **Repeated rejection guard:** repeated `submit_report` quality failures are tracked; repeated evidence-order-only failures are accepted with warnings after a small retry cap, while blocking quality failures stop the agent loop and fall back deterministically instead of running until timeout.
-- **Full trace diagnostics:** tool inputs/outputs, rejected report candidates, rejection issues, and agent result payloads are saved in SQLite debug trace artifacts for reproducible cross-machine comparison.
-- **Windows build script:** `scripts/build-windows.ps1` builds the PyInstaller onedir app and optional release zip from Windows PowerShell.
-
-### v2.8.7 — Search Reliability & Configurable Lookback
-
-- **Scopus 500 fix:** the `date=YYYY-YYYY` URL parameter triggered an XSL transform error in the Scopus Search API. Replaced with inline `PUBYEAR > A AND PUBYEAR < B` in the query, so Scopus actually returns results again.
-- **Configurable year lookback:** new "Years lookback" control in Sidebar → Research Settings (default 5 years). Applies uniformly to PubMed, OpenAlex, Semantic Scholar, and Scopus.
-- **Scopus response view selector:** STANDARD (works on any Scopus key) is now the default; users on a higher-tier Elsevier subscription can opt into COMPLETE for full abstracts.
-- **Semantic Scholar gating:** the public unauthenticated endpoint is unreliable, so Semantic Scholar is now skipped silently with a diagnostic when no API key is configured.
-- **PDF parsing without Java:** `markitdown[pdf]` is the primary PDF parser; `opendataloader-pdf` (Java-dependent) is the fallback.
-- **Scopus year display:** `publication_year` is now parsed from `prism:coverDate`, so Scopus results stop rendering "N/A" for the year.
+- DeepSeek model display names are normalized to API model IDs, and DeepSeek thinking payloads are disabled by default to avoid OpenAI-compatible `reasoning_content` replay failures during tool-call loops.
+- Local LLM routes normalize Ollama, LM Studio, and llama-server base URLs to the OpenAI-compatible `/v1` API shape.
+- Local agent runs recover cleanly after rejected final-report submissions instead of continuing until the 600-second app timeout.
+- Research settings now live inside **New Research** instead of a separate tab.
 
 ## Quick Start (from source)
 
@@ -111,7 +87,7 @@ uv sync --extra claude-sdk   # Optional legacy Claude SDK mode
 uv sync --extra openai      # OpenAI Agents SDK
 uv sync --extra deepseek    # DeepSeek via OpenAI-compatible Chat API
 uv sync --extra google      # Google ADK
-uv sync --extra langchain   # Local LLMs (Ollama, LM Studio)
+uv sync --extra langchain   # Local LLMs (Ollama, LM Studio, llama-server)
 uv sync --extra pdf         # Full-text PDF parsing
 
 # Run the app (opens a native Qt window — no browser, no local web port)
@@ -141,7 +117,7 @@ OPENAI_API_KEY=sk-...
 DEEPSEEK_API_KEY=sk-...
 GOOGLE_API_KEY=...
 
-# Local LLM endpoint
+# Local LLM endpoint (Ollama, LM Studio, and llama-server roots are normalized to /v1)
 MDR_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
 
 # Optional search API keys
@@ -198,7 +174,7 @@ All providers fall back to a deterministic pipeline if SDK/credentials are unava
 | Semantic Scholar | API key required | Medicine field filter; skipped without key |
 | Scopus | API key required | Citation counts, broader coverage; STANDARD/COMPLETE view toggle |
 
-The publication-year window is configurable per-app via Sidebar → Research Settings (default: last 5 years).
+The publication-year window is configurable per-app in **New Research** (default: last 5 years).
 
 ### Full-text Pipeline
 

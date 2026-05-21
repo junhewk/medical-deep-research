@@ -21,7 +21,7 @@ from .models import (
     utcnow,
 )
 from .persistence import AppDatabase
-from .provider_config import DEEPSEEK_DEFAULT_MODEL
+from .provider_config import DEEPSEEK_DEFAULT_MODEL, normalize_model_id
 from .runtime import RunRequest, build_runtime, describe_provider_runtime
 
 
@@ -252,12 +252,16 @@ class ResearchService:
         query_payload: dict[str, Any] | None = None,
     ) -> ResearchRun:
         runtime = build_runtime(provider)
+        resolved_model = normalize_model_id(
+            provider,
+            model or DEFAULT_MODELS.get(provider, DEFAULT_MODELS["openai"]),
+        )
         run = ResearchRun(
             query=query,
             query_type=query_type,
             mode=mode,
             provider=provider,
-            model=model or DEFAULT_MODELS.get(provider, DEFAULT_MODELS["openai"]),
+            model=resolved_model,
             runtime_name=runtime.runtime_name,
             language=self.get_language(),
             query_payload_json=json.dumps(query_payload or {}),
@@ -334,7 +338,7 @@ class ResearchService:
             query_type=run.query_type,
             mode=run.mode,
             provider=run.provider,
-            model=run.model,
+            model=normalize_model_id(run.provider, run.model),
             language=run.language,
             query_payload=query_payload,
             api_keys=self.get_api_keys(),

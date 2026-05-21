@@ -119,10 +119,6 @@ class WorkspaceTabs(QTabWidget):
         self._api_keys_page = self._wrap_page(self._api_keys_group)
         self.addTab(self._api_keys_page, self._t("api_keys"))
 
-        self._settings_group = self._build_research_settings()
-        self._settings_page = self._wrap_page(self._settings_group)
-        self.addTab(self._settings_page, self._t("research_settings"))
-
         # Run list (not in a group box — it's the primary navigation list)
         self._run_list = RunListPanel(self._t)
         self._run_list.runSelected.connect(self.runSelected.emit)
@@ -298,6 +294,8 @@ class WorkspaceTabs(QTabWidget):
         v.addWidget(self._model_warning)
         self._refresh_model_combo()
 
+        self._add_research_settings(v)
+
         # Start button
         self._start_btn = QPushButton(self._t("start_run"))
         self._start_btn.setObjectName("startResearchButton")
@@ -325,6 +323,49 @@ class WorkspaceTabs(QTabWidget):
         v.addLayout(start_row)
 
         return group
+
+    def _add_research_settings(self, parent: QVBoxLayout) -> None:
+        self._settings_title_label = QLabel(self._t("research_settings"))
+        self._settings_title_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-weight: 700;")
+        parent.addWidget(self._settings_title_label)
+
+        self._years_desc_label = QLabel(self._t("years_lookback_desc"))
+        self._years_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._years_desc_label.setWordWrap(True)
+        parent.addWidget(self._years_desc_label)
+
+        self._years_input = QSpinBox()
+        self._years_input.setRange(1, 50)
+        self._years_input.setValue(self._service.get_recent_years_lookback())
+        self._years_label = self._add_settings_row(parent, self._t("years_lookback"), self._years_input)
+        self._years_input.valueChanged.connect(lambda _value: self._persist_research_settings())
+
+        self._scopus_desc_label = QLabel(self._t("scopus_view_desc"))
+        self._scopus_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._scopus_desc_label.setWordWrap(True)
+        parent.addWidget(self._scopus_desc_label)
+
+        self._scopus_combo = QComboBox()
+        self._scopus_combo.addItems(["STANDARD", "COMPLETE"])
+        self._scopus_combo.setCurrentText(self._service.get_scopus_view())
+        self._scopus_label = self._add_settings_row(parent, self._t("scopus_view"), self._scopus_combo)
+        self._scopus_combo.currentTextChanged.connect(lambda _text: self._persist_research_settings())
+
+    def _add_settings_row(self, parent: QVBoxLayout, label_text: str, field: QWidget) -> QLabel:
+        wrap = QWidget()
+        wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        row = QHBoxLayout(wrap)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+
+        label = QLabel(label_text)
+        label.setFixedWidth(128)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        field.setSizePolicy(QSizePolicy.Policy.Expanding, field.sizePolicy().verticalPolicy())
+        row.addWidget(label)
+        row.addWidget(field, 1)
+        parent.addWidget(wrap)
+        return label
 
     def _rebuild_structured(self) -> None:
         self._capture_structured_values()
@@ -463,10 +504,24 @@ class WorkspaceTabs(QTabWidget):
     def _remember_current_model(self) -> None:
         if not hasattr(self, "_model_combo"):
             return
-        model = self._model_combo.currentText().strip() or self._model
+        model = self._current_model_id()
         if model:
             self._model = model
             self._model_by_provider[self._provider] = model
+
+    def _current_model_id(self) -> str:
+        text = self._model_combo.currentText().strip()
+        data = self._model_combo.currentData()
+        models = PROVIDER_MODELS.get(self._provider, {})
+
+        if isinstance(data, str) and data in models and text in {data, models[data]}:
+            return data
+        if text in models:
+            return text
+        for code, label in models.items():
+            if text == label:
+                return code
+        return text or self._model
 
     def _refresh_model_combo(self) -> None:
         self._model_combo.blockSignals(True)
@@ -528,8 +583,8 @@ class WorkspaceTabs(QTabWidget):
                 self._show_form_error(self._t("query_required"))
                 return
 
-        # Use editable text if the combo is editable (local provider)
-        model = self._model_combo.currentText() if self._model_combo.isEditable() else (self._model_combo.currentData() or self._model)
+        model = self._current_model_id()
+        self._persist_research_settings()
 
         self.startRun.emit({
             "query": query,
@@ -654,47 +709,11 @@ class WorkspaceTabs(QTabWidget):
         self._refresh_model_combo()
         self.runsRefreshRequested.emit()  # status bar message handled by MainWindow via signal? Use parent
 
-    # ---- Research Settings panel ----
+    # ---- Research Settings ----
 
-    def _build_research_settings(self) -> QGroupBox:
-        group = QGroupBox(self._t("research_settings"))
-        v = QVBoxLayout(group)
-        v.setSpacing(6)
-
-        self._years_desc_label = QLabel(self._t("years_lookback_desc"))
-        self._years_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
-        self._years_desc_label.setWordWrap(True)
-        v.addWidget(self._years_desc_label)
-
-        years_row = QFormLayout()
-        self._years_input = QSpinBox()
-        self._years_input.setRange(1, 50)
-        self._years_input.setValue(self._service.get_recent_years_lookback())
-        years_row.addRow(f"{self._t('years_lookback')}:", self._years_input)
-        v.addLayout(years_row)
-
-        self._scopus_desc_label = QLabel(self._t("scopus_view_desc"))
-        self._scopus_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
-        self._scopus_desc_label.setWordWrap(True)
-        v.addWidget(self._scopus_desc_label)
-
-        scopus_row = QFormLayout()
-        self._scopus_combo = QComboBox()
-        self._scopus_combo.addItems(["STANDARD", "COMPLETE"])
-        self._scopus_combo.setCurrentText(self._service.get_scopus_view())
-        scopus_row.addRow(f"{self._t('scopus_view')}:", self._scopus_combo)
-        v.addLayout(scopus_row)
-
-        self._save_settings_btn = QPushButton(self._t("save_settings"))
-        self._save_settings_btn.clicked.connect(self._on_save_settings)
-        v.addWidget(self._save_settings_btn, alignment=Qt.AlignmentFlag.AlignRight)
-        return group
-
-    def _on_save_settings(self) -> None:
+    def _persist_research_settings(self) -> None:
         self._service.set_recent_years_lookback(int(self._years_input.value()))
         self._service.set_scopus_view(self._scopus_combo.currentText())
-        # MainWindow handles the toast; just no-op feedback here
-        self._save_settings_btn.setText(self._t("settings_saved"))
 
     # ---- Retranslate ----
 
@@ -703,12 +722,10 @@ class WorkspaceTabs(QTabWidget):
         self._new_research_group.setTitle("")
         self._provider_status_group.setTitle(self._t("provider_status"))
         self._api_keys_group.setTitle(self._t("api_keys"))
-        self._settings_group.setTitle(self._t("research_settings"))
         self.setTabText(self.indexOf(self._new_research_page), self._t("new_research"))
         self.setTabText(self.indexOf(self._runs_page), self._t("research_runs"))
         self.setTabText(self.indexOf(self._provider_status_page), self._t("provider_status"))
         self.setTabText(self.indexOf(self._api_keys_page), self._t("api_keys"))
-        self.setTabText(self.indexOf(self._settings_page), self._t("research_settings"))
         self._file_button.setText(self._t("file_menu"))
         self._quit_action.setText(self._t("quit"))
         self._new_research_title_label.setText(self._t("new_research"))
@@ -716,12 +733,14 @@ class WorkspaceTabs(QTabWidget):
         self._provider_label.setText(self._t("provider"))
         self._model_label.setText(self._t("model"))
         self._api_keys_desc_label.setText(self._t("api_keys_desc"))
+        self._settings_title_label.setText(self._t("research_settings"))
+        self._years_label.setText(self._t("years_lookback"))
         self._years_desc_label.setText(self._t("years_lookback_desc"))
+        self._scopus_label.setText(self._t("scopus_view"))
         self._scopus_desc_label.setText(self._t("scopus_view_desc"))
         self._qt_free.setText(self._t("free_form"))
         self._start_btn.setText(self._t("start_run"))
         self._save_keys_btn.setText(self._t("save_keys"))
-        self._save_settings_btn.setText(self._t("save_settings"))
         self._rebuild_structured()
         self._run_list.retranslate()
 

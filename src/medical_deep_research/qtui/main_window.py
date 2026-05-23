@@ -104,7 +104,7 @@ class _RunHeader(QWidget):
         self._status_badge.set_kind(status_badge_kind(run.status))
         self._runtime_badge.setText(run.runtime_name)
         self._progress.setValue(int(run.progress or 0))
-        is_running = run.status == "running"
+        is_running = run.status in {"running", "waiting_for_pdfs"}
         self._interrupt_btn.setEnabled(is_running)
         self._cancel_btn.setEnabled(is_running)
 
@@ -191,7 +191,9 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(self._run_header)
 
         self._tabs = QTabWidget()
-        self._trace_tab = TraceTab(self._t)
+        self._trace_tab = TraceTab(self._t, self._reading_service, self._service)
+        self._trace_tab.statusMessage.connect(self._status.showMessage)
+        self._trace_tab.checkpointChanged.connect(lambda _run_id: self._do_refresh())
         self._artifacts_tab = ArtifactsTab(self._t)
         self._report_tab = ReportTab(self._t)
         self._report_tab.statusMessage.connect(self._status.showMessage)
@@ -313,9 +315,11 @@ class MainWindow(QMainWindow):
 
         artifacts = self._service.list_artifacts(run.id)
         events = self._service.list_events(run.id)
+        approvals = self._service.list_approvals(run.id)
         diag = self._service.get_run_diagnostics(run.id)
 
         self._run_header.set_run(run)
+        self._trace_tab.set_pdf_checkpoint(run, approvals)
         self._trace_tab.set_events(events)
         self._artifacts_tab.set_artifacts(artifacts)
         self._report_tab.set_report(run.result_markdown or "", run.id[:8])

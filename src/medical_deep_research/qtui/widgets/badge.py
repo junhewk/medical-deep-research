@@ -63,6 +63,7 @@ class EvidenceBadge(QLabel):
 def status_badge_kind(status: str) -> str:
     return {
         "running":     "active",
+        "waiting_for_pdfs": "warn",
         "completed":   "success",
         "failed":      "error",
         "cancelled":   "warn",

@@ -16,7 +16,16 @@ from typing import Any
 
 import httpx
 
-from .models import ArtifactType, EventType, RuntimeEventPayload
+from .models import (
+    ApprovalRequest,
+    ApprovalStatus,
+    ArtifactType,
+    EventType,
+    ResearchArtifact,
+    ResearchRun,
+    ResearchStatus,
+    RuntimeEventPayload,
+)
 from .provider_config import (
     DEEPSEEK_BASE_URL,
     deepseek_api_key,
@@ -40,6 +49,13 @@ from .research.search import POLITE_EMAIL
 from .models import RunRequest
 
 _log = logging.getLogger(__name__)
+
+_TERMINAL_RUN_STATUSES = {
+    ResearchStatus.CANCELLED.value,
+    ResearchStatus.INTERRUPTED.value,
+    ResearchStatus.FAILED.value,
+    ResearchStatus.COMPLETED.value,
+}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -98,7 +114,10 @@ _BARE_PHASE_MAP: dict[str, tuple[str, int]] = {
     "plan_search": ("planning", 12),
     "suggest_databases": ("planning", 14),
     "search_pubmed": ("searching", 20),
+    "search_pmc": ("searching", 24),
+    "search_europe_pmc": ("searching", 28),
     "search_openalex": ("searching", 30),
+    "search_crossref": ("searching", 34),
     "search_cochrane": ("searching", 40),
     "search_semantic_scholar": ("searching", 50),
     "search_scopus": ("searching", 58),
@@ -109,6 +128,7 @@ _BARE_PHASE_MAP: dict[str, tuple[str, int]] = {
     "write_todos": ("planning", 8),
     "update_progress": ("planning", 10),
     "fetch_fulltext": ("fulltext", 78),
+    "await_user_pdfs": ("fulltext", 79),
     "parse_pdf": ("fulltext", 80),
 }
 
@@ -139,6 +159,8 @@ class AgenticEventBridge:
         self._pre_scored: list[ScoredStudy] = []
         self._pdf_urls: dict[int, str] = {}
         self._pdf_url_alternatives: dict[int, list[str]] = {}
+        self._pdf_bytes: dict[int, bytes] = {}
+        self._pdf_sources: dict[int, str] = {}
 
         # Tool name mapping: runtime-specific name → bare name.
         # Populated by provider builder if it uses namespaced names.
@@ -194,7 +216,15 @@ class AgenticEventBridge:
         resp_preview = resp_str[:300] + "..." if len(resp_str) > 300 else resp_str
         _log.info("[AGENT RESULT #%d] %s  response_len=%d  preview=%s", self._tool_call_count, tool_name, len(resp_str), resp_preview)
         bare = self._bare_name(tool_name)
-        if bare in ("get_studies", "finalize_ranking", "verify_studies", "synthesize_report", "plan_search", "fetch_fulltext"):
+        if bare in (
+            "get_studies",
+            "finalize_ranking",
+            "verify_studies",
+            "synthesize_report",
+            "plan_search",
+            "fetch_fulltext",
+            "await_user_pdfs",
+        ):
             self._intermediate[bare] = response
         extra: dict[str, Any] = {"response_length": len(resp_str)}
         if isinstance(response, dict):
@@ -208,11 +238,66 @@ class AgenticEventBridge:
                 event_type=EventType.TOOL_RESULT,
                 phase=phase,
                 progress=min(progress + self._tool_call_count + 1, 97),
-                message=f"Agent received result from {tool_name}",
+                message=self._tool_result_message(bare, tool_name, response),
                 tool_name=tool_name,
                 extra=extra,
             )
         )
+        if bare == "fetch_fulltext" and isinstance(response, dict):
+            await self.queue.put(
+                RuntimeEventPayload(
+                    event_type=EventType.ARTIFACT_CREATED,
+                    phase="fulltext",
+                    progress=min(progress + self._tool_call_count + 2, 97),
+                    message="Saved full-text PDF status",
+                    artifact_type=ArtifactType.FULLTEXT_STATUS,
+                    artifact_name="Full Text PDF Status",
+                    artifact_json=_debug_jsonable(response),
+                )
+            )
+        if bare == "finalize_ranking" and self.ranked_studies:
+            await self.queue.put(
+                RuntimeEventPayload(
+                    event_type=EventType.ARTIFACT_CREATED,
+                    phase="ranking",
+                    progress=min(progress + self._tool_call_count + 2, 97),
+                    message="Saved ranked evidence artifact",
+                    artifact_type=ArtifactType.RANKED_RESULTS,
+                    artifact_name="Ranked Results",
+                    artifact_json={"studies": [study.model_dump() for study in self.ranked_studies[:12]]},
+                )
+            )
+
+    def _tool_result_message(self, bare: str, tool_name: str, response: Any) -> str:
+        if not isinstance(response, dict):
+            return f"Agent received result from {tool_name}"
+        if bare == "fetch_fulltext":
+            found = int(response.get("pdfs_found") or 0)
+            requested = response.get("requested_upload_ranks") or []
+            unavailable = response.get("unavailable_pdf_ranks") or response.get("missing_pdf_ranks") or []
+            checkpoint = response.get("user_pdf_checkpoint")
+            if isinstance(checkpoint, dict):
+                status = checkpoint.get("status", "resolved")
+                return (
+                    f"Full-text PDFs: {found} available; requested user uploads for "
+                    f"{len(requested)} studies; checkpoint {status}; {len(unavailable)} unavailable"
+                )
+            if response.get("error"):
+                return f"Full-text PDF lookup failed: {response['error']}"
+            return f"Full-text PDFs: {found} available; {len(unavailable)} need user upload"
+        if bare == "await_user_pdfs":
+            uploaded = response.get("uploaded_ranks") or []
+            missing = response.get("missing_ranks") or []
+            status = response.get("status", "resolved")
+            return f"User PDF checkpoint {status}: {len(uploaded)} uploaded, {len(missing)} still missing"
+        if bare == "parse_pdf":
+            rank = response.get("rank", "?")
+            if response.get("error"):
+                return f"PDF parse failed for rank {rank}: {response['error']}"
+            source = response.get("source") or "pdf"
+            length = int(response.get("text_length") or 0)
+            return f"Parsed PDF for rank {rank} from {source} ({length} characters)"
+        return f"Agent received result from {tool_name}"
 
     def capture_agent_result(self, result: Any) -> None:
         if self.full_trace_enabled:
@@ -330,6 +415,7 @@ async def tool_search(request: RunRequest, bridge: AgenticEventBridge, source: s
             "journal": s.journal,
             "year": s.publication_year,
             "pmid": s.pmid,
+            "pmcid": s.pmcid,
             "doi": s.doi,
             "evidence_level": s.evidence_level,
             "citation_count": s.citation_count,
@@ -342,7 +428,12 @@ async def tool_get_studies(request: RunRequest, bridge: AgenticEventBridge, cont
     all_studies = flatten_studies(bridge.search_results)
     if not all_studies:
         return {"error": "No studies collected yet. Run search tools first.", "studies": []}
-    pre_scored = score_and_rank_results(all_studies, context=context)
+    pre_scored = score_and_rank_results(
+        all_studies,
+        context=context,
+        query=request.query,
+        query_payload=request.query_payload,
+    )
     bridge._pre_scored = pre_scored
     studies_out = []
     for s in pre_scored:
@@ -360,7 +451,12 @@ async def tool_get_studies(request: RunRequest, bridge: AgenticEventBridge, cont
             "citation_count": s.citation_count,
             "sources": s.sources,
             "pre_score": s.composite_score,
-            "score_breakdown": {"evidence": s.evidence_level_score, "citations": s.citation_score, "recency": s.recency_score},
+            "score_breakdown": {
+                "relevance": s.relevance_score,
+                "evidence": s.evidence_level_score,
+                "citations": s.citation_score,
+                "recency": s.recency_score,
+            },
         })
     return {"total": len(studies_out), "context": context, "studies": studies_out}
 
@@ -421,6 +517,7 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
             "source": s.source,
             "doi": s.doi,
             "pmid": s.pmid,
+            "pmcid": s.pmcid,
             "evidence_level": s.evidence_level,
             "citation_count": s.citation_count,
             "score": s.composite_score,
@@ -950,13 +1047,299 @@ async def tool_update_progress(request: RunRequest, bridge: AgenticEventBridge, 
 _EBM_HIGH_EVIDENCE = {"Level I", "Level II"}
 
 
-async def tool_fetch_fulltext(request: RunRequest, bridge: AgenticEventBridge) -> dict[str, Any]:
-    candidates = [
+def _run_db_session(request: RunRequest):
+    if not request.database_path:
+        return None
+    from sqlmodel import Session, create_engine
+
+    engine = create_engine(
+        f"sqlite:///{request.database_path}",
+        connect_args={"check_same_thread": False},
+    )
+    return Session(engine)
+
+
+def _fulltext_artifact_name(rank: int) -> str:
+    return f"fulltext_study_{rank}"
+
+
+def _stored_fulltext_for_rank(request: RunRequest, rank: int) -> tuple[str, str] | None:
+    session = _run_db_session(request)
+    if session is None:
+        return None
+    from sqlmodel import select
+
+    try:
+        artifact = session.exec(
+            select(ResearchArtifact).where(
+                ResearchArtifact.run_id == request.run_id,
+                ResearchArtifact.artifact_type == ArtifactType.FULLTEXT_UPLOAD.value,
+                ResearchArtifact.name == _fulltext_artifact_name(rank),
+            ).order_by(ResearchArtifact.created_at.desc())
+        ).first()
+        if not artifact or not artifact.content_text:
+            return None
+        source = "user_upload"
+        if artifact.content_json:
+            try:
+                payload = json.loads(artifact.content_json)
+                if isinstance(payload, dict) and payload.get("source"):
+                    source = str(payload["source"])
+            except json.JSONDecodeError:
+                pass
+        return artifact.content_text, source
+    finally:
+        session.close()
+
+
+def _manual_fulltext_for_rank(request: RunRequest, rank: int) -> str | None:
+    stored = _stored_fulltext_for_rank(request, rank)
+    return stored[0] if stored else None
+
+
+def _manual_fulltext_uploaded_ranks(request: RunRequest, ranks: list[int]) -> list[int]:
+    uploaded: list[int] = []
+    for rank in ranks:
+        stored = _stored_fulltext_for_rank(request, rank)
+        if stored and stored[1] == "user_upload":
+            uploaded.append(rank)
+    return uploaded
+
+
+def _store_fulltext_for_rank(
+    request: RunRequest,
+    rank: int,
+    text: str,
+    *,
+    source: str,
+    pdf_source: str | None = None,
+    pdf_url: str | None = None,
+) -> None:
+    if not text:
+        return
+    session = _run_db_session(request)
+    if session is None:
+        return
+    from sqlmodel import select
+
+    metadata = {
+        "source": source,
+        "pdf_source": pdf_source,
+        "pdf_url": pdf_url,
+    }
+    try:
+        existing = session.exec(
+            select(ResearchArtifact).where(
+                ResearchArtifact.run_id == request.run_id,
+                ResearchArtifact.artifact_type == ArtifactType.FULLTEXT_UPLOAD.value,
+                ResearchArtifact.name == _fulltext_artifact_name(rank),
+            ).order_by(ResearchArtifact.created_at.desc())
+        ).first()
+        if existing:
+            existing.content_text = text
+            existing.content_json = json.dumps(metadata, ensure_ascii=False)
+        else:
+            session.add(
+                ResearchArtifact(
+                    run_id=request.run_id,
+                    artifact_type=ArtifactType.FULLTEXT_UPLOAD.value,
+                    name=_fulltext_artifact_name(rank),
+                    content_text=text,
+                    content_json=json.dumps(metadata, ensure_ascii=False),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+
+def _pdf_checkpoint_details(
+    studies: list[ScoredStudy],
+    *,
+    missing_ranks: list[int],
+    found_ranks: list[int],
+) -> dict[str, Any]:
+    wanted = set(missing_ranks)
+    study_rows: list[dict[str, Any]] = []
+    for study in studies:
+        rank = study.reference_number
+        if rank is None or (wanted and rank not in wanted):
+            continue
+        study_rows.append({
+            "rank": rank,
+            "title": study.title,
+            "journal": study.journal,
+            "year": study.publication_year,
+            "doi": study.doi,
+            "pmid": study.pmid,
+            "pmcid": study.pmcid,
+            "url": study.url,
+            "evidence_level": study.evidence_level,
+        })
+    return {
+        "type": "pdf_upload",
+        "ranks": missing_ranks,
+        "missing_ranks": missing_ranks,
+        "found_pdf_ranks": found_ranks,
+        "studies": study_rows,
+    }
+
+
+def _create_or_update_pdf_approval(
+    request: RunRequest,
+    studies: list[ScoredStudy],
+    *,
+    missing_ranks: list[int],
+    found_ranks: list[int],
+) -> str | None:
+    session = _run_db_session(request)
+    if session is None:
+        return None
+    from sqlmodel import select
+
+    details = _pdf_checkpoint_details(studies, missing_ranks=missing_ranks, found_ranks=found_ranks)
+    details_json = json.dumps(details)
+    try:
+        approvals = session.exec(
+            select(ApprovalRequest).where(
+                ApprovalRequest.run_id == request.run_id,
+                ApprovalRequest.status == ApprovalStatus.PENDING.value,
+            )
+        ).all()
+        for approval in approvals:
+            try:
+                existing = json.loads(approval.details_json or "{}")
+            except json.JSONDecodeError:
+                existing = {}
+            if isinstance(existing, dict) and existing.get("type") == "pdf_upload":
+                approval.summary = f"Upload PDFs for {len(missing_ranks)} ranked studies"
+                approval.details_json = details_json
+                session.add(approval)
+                session.commit()
+                return approval.id
+
+        approval = ApprovalRequest(
+            run_id=request.run_id,
+            summary=f"Upload PDFs for {len(missing_ranks)} ranked studies",
+            details_json=details_json,
+            status=ApprovalStatus.PENDING.value,
+        )
+        session.add(approval)
+        session.commit()
+        session.refresh(approval)
+        return approval.id
+    finally:
+        session.close()
+
+
+def _approval_status(request: RunRequest, approval_id: str) -> str | None:
+    session = _run_db_session(request)
+    if session is None:
+        return None
+    try:
+        approval = session.get(ApprovalRequest, approval_id)
+        return approval.status if approval else None
+    finally:
+        session.close()
+
+
+def _run_status(request: RunRequest) -> str | None:
+    session = _run_db_session(request)
+    if session is None:
+        return None
+    try:
+        run = session.get(ResearchRun, request.run_id)
+        return run.status if run else None
+    finally:
+        session.close()
+
+
+async def _download_pdf_bytes(rank: int, urls: list[str]) -> tuple[bytes | None, str]:
+    import io
+    import tarfile
+
+    for url in urls:
+        if url.endswith(".tar.gz"):
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+                    for member in tar.getmembers():
+                        if member.name.endswith(".pdf"):
+                            f = tar.extractfile(member)
+                            if f:
+                                pdf_bytes = f.read()
+                                _log.info("[PDF_DOWNLOAD] Extracted %d bytes from PMC tgz for rank %d", len(pdf_bytes), rank)
+                                return pdf_bytes, "pmc_tgz"
+                            break
+            except Exception as exc:
+                _log.info("[PDF_DOWNLOAD] PMC tgz failed for rank %d: %s", rank, exc)
+        else:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(30.0, connect=5.0),
+                    follow_redirects=True,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.3; academic-research)"},
+                ) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    if resp.content[:5] == b"%PDF-":
+                        _log.info("[PDF_DOWNLOAD] Downloaded %d bytes via direct URL for rank %d", len(resp.content), rank)
+                        return resp.content, "direct_url"
+            except Exception as exc:
+                _log.info("[PDF_DOWNLOAD] Direct URL failed for rank %d: %s", rank, exc)
+    return None, "none"
+
+
+async def _extract_pdf_text_from_bytes(rank: int, pdf_bytes: bytes, source: str) -> tuple[str, str | None]:
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        f.write(pdf_bytes)
+        pdf_path = f.name
+
+    try:
+        from .pdf_text import extract_pdf_text
+
+        text = await asyncio.to_thread(extract_pdf_text, pdf_path)
+        if text:
+            _log.info("[PARSE_PDF] Parsed %d chars for rank %d (source=%s)", len(text), rank, source)
+            return text, None
+        return "", "No text extracted from PDF"
+    except Exception as exc:
+        _log.info("[PARSE_PDF] pdfminer failed for rank %d: %s", rank, exc)
+        return "", str(exc)
+    finally:
+        try:
+            os.unlink(pdf_path)
+        except OSError:
+            pass
+
+
+async def tool_fetch_fulltext(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    *,
+    allow_user_checkpoint: bool = True,
+) -> dict[str, Any]:
+    high_evidence_candidates = [
         s for s in bridge.ranked_studies
-        if s.evidence_level in _EBM_HIGH_EVIDENCE and s.doi and s.reference_number is not None
+        if (
+            s.evidence_level in _EBM_HIGH_EVIDENCE
+            and s.reference_number is not None
+            and (s.doi or s.pmid or s.pmcid)
+        )
     ]
+    relevance_scores_present = any(s.relevance_score > 0 for s in high_evidence_candidates)
+    candidates = [
+        s for s in high_evidence_candidates
+        if not relevance_scores_present or s.relevance_score >= 0.35
+    ][:10]
     if not candidates:
-        return {"error": "No Level I/II studies with DOIs found."}
+        if high_evidence_candidates and relevance_scores_present:
+            return {"error": "No relevant Level I/II ranked studies with DOI, PMID, or PMCID found."}
+        return {"error": "No Level I/II ranked studies with DOI, PMID, or PMCID found."}
 
     try:
         from unpywall.utils import UnpywallCredentials
@@ -967,8 +1350,25 @@ async def tool_fetch_fulltext(request: RunRequest, bridge: AgenticEventBridge) -
         has_unpywall = False
 
     found_ranks: dict[int, dict[str, Any]] = {}
+    manual_ranks: set[int] = set()
     unpywall_hits = 0
     pmc_hits = 0
+
+    for s in candidates:
+        rank = s.reference_number
+        stored = _stored_fulltext_for_rank(request, rank) if rank is not None else None
+        if rank is not None and stored:
+            if stored[1] == "user_upload":
+                manual_ranks.add(rank)
+            found_ranks[rank] = {
+                "rank": rank,
+                "title": s.title,
+                "doi": s.doi,
+                "pmid": s.pmid,
+                "pmcid": s.pmcid,
+                "evidence_level": s.evidence_level,
+                "source": stored[1],
+            }
 
     # Pass 1: Parallel Unpaywall (10 concurrent)
     if has_unpywall:
@@ -977,14 +1377,14 @@ async def tool_fetch_fulltext(request: RunRequest, bridge: AgenticEventBridge) -
         async def _lookup(s: ScoredStudy) -> None:
             nonlocal unpywall_hits
             rank = s.reference_number
-            if rank is None:
+            if rank is None or not s.doi or rank in found_ranks:
                 return
             async with sem:
                 try:
                     pdf_link = await asyncio.to_thread(Unpywall.get_pdf_link, s.doi)
                     if pdf_link:
                         found_ranks[rank] = {
-                            "rank": rank, "title": s.title, "doi": s.doi, "pmid": s.pmid,
+                            "rank": rank, "title": s.title, "doi": s.doi, "pmid": s.pmid, "pmcid": s.pmcid,
                             "evidence_level": s.evidence_level, "pdf_url": pdf_link, "source": "unpaywall",
                         }
                         unpywall_hits += 1
@@ -995,31 +1395,35 @@ async def tool_fetch_fulltext(request: RunRequest, bridge: AgenticEventBridge) -
 
     # Pass 2: PMC for ALL candidates with PMIDs (PMC tgz downloads are more
     # reliable than Unpaywall URLs which often return 403 from publishers)
-    remaining = [s for s in candidates if s.pmid and s.reference_number is not None]
+    remaining = [
+        s for s in candidates
+        if s.reference_number is not None and (s.pmid or s.pmcid)
+    ]
     if remaining:
         ids_param = ",".join(s.pmid for s in remaining if s.pmid)
         pmid_to_pmcid: dict[str, str] = {}
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
-                resp = await client.get(
-                    "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
-                    params={"ids": ids_param, "format": "json", "tool": "medical-deep-research", "email": POLITE_EMAIL},
-                )
-                resp.raise_for_status()
-            for r in resp.json().get("records", []):
-                if r.get("pmcid") and r.get("pmid"):
-                    pmid_to_pmcid[r["pmid"]] = r["pmcid"]
-        except Exception as exc:
-            _log.info("[FULLTEXT] PMC ID converter failed: %s", exc)
+        if ids_param:
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
+                    resp = await client.get(
+                        "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+                        params={"ids": ids_param, "format": "json", "tool": "medical-deep-research", "email": POLITE_EMAIL},
+                    )
+                    resp.raise_for_status()
+                for r in resp.json().get("records", []):
+                    if r.get("pmcid") and r.get("pmid"):
+                        pmid_to_pmcid[r["pmid"]] = r["pmcid"]
+            except Exception as exc:
+                _log.info("[FULLTEXT] PMC ID converter failed: %s", exc)
 
         sem_pmc = asyncio.Semaphore(5)
 
         async def _pmc_lookup(s: ScoredStudy) -> None:
             nonlocal pmc_hits
             rank = s.reference_number
-            if rank is None or not s.pmid:
+            if rank is None:
                 return
-            pmcid = pmid_to_pmcid.get(s.pmid)
+            pmcid = s.pmcid or (pmid_to_pmcid.get(s.pmid) if s.pmid else None)
             if not pmcid or rank in found_ranks:
                 return
             async with sem_pmc:
@@ -1055,6 +1459,8 @@ async def tool_fetch_fulltext(request: RunRequest, bridge: AgenticEventBridge) -
     # Store list of URLs per rank so parse_pdf can try multiple.
     _url_map: dict[int, list[str]] = {}
     for r in found_ranks.values():
+        if not r.get("pdf_url"):
+            continue
         rank_id = r["rank"]
         url = r["pdf_url"]
         if rank_id not in _url_map:
@@ -1064,114 +1470,350 @@ async def tool_fetch_fulltext(request: RunRequest, bridge: AgenticEventBridge) -
             _url_map[rank_id].insert(0, url)
         else:
             _url_map[rank_id].append(url)
-    bridge._pdf_urls = {k: v[0] for k, v in _url_map.items()}
-    bridge._pdf_url_alternatives = _url_map
+
+    bridge._pdf_bytes = {}
+    bridge._pdf_sources = {}
+    download_failed_ranks: list[int] = []
+    parse_failed_ranks: list[int] = []
+    if _url_map:
+        sem_download = asyncio.Semaphore(4)
+
+        async def _validate_pdf(rank: int, urls: list[str]) -> None:
+            async with sem_download:
+                pdf_bytes, source = await _download_pdf_bytes(rank, urls)
+            if not pdf_bytes:
+                download_failed_ranks.append(rank)
+                return
+            text, parse_error = await _extract_pdf_text_from_bytes(rank, pdf_bytes, source)
+            if not text:
+                parse_failed_ranks.append(rank)
+                _log.info("[FULLTEXT] Downloaded PDF for rank %d but parse validation failed: %s", rank, parse_error)
+                return
+            bridge._pdf_bytes[rank] = pdf_bytes
+            bridge._pdf_sources[rank] = source
+            _store_fulltext_for_rank(
+                request,
+                rank,
+                text,
+                source="downloaded_pdf",
+                pdf_source=source,
+                pdf_url=urls[0] if urls else None,
+            )
+
+        await asyncio.gather(*[_validate_pdf(rank, urls) for rank, urls in _url_map.items()])
+
+    downloadable_url_map = {rank: urls for rank, urls in _url_map.items() if rank in bridge._pdf_bytes}
+    bridge._pdf_urls = {k: v[0] for k, v in downloadable_url_map.items()}
+    bridge._pdf_url_alternatives = downloadable_url_map
+    for rank in list(found_ranks):
+        row = found_ranks[rank]
+        if row.get("pdf_url") and rank not in bridge._pdf_bytes:
+            found_ranks.pop(rank)
+        elif row.get("pdf_url"):
+            row["downloadable"] = True
+            row["download_source"] = bridge._pdf_sources.get(rank)
+
     available = sorted(found_ranks.values(), key=lambda r: r["rank"])
-    _log.info("[FULLTEXT] %d PDFs found (unpaywall=%d, pmc=%d) from %d Level I/II studies",
-              len(available), unpywall_hits, pmc_hits, len(candidates))
-    return {"level_I_II_studies": len(candidates), "pdfs_found": len(available), "unpaywall_hits": unpywall_hits, "pmc_hits": pmc_hits, "available": available}
+    candidate_ranks = [int(s.reference_number) for s in candidates if s.reference_number is not None]
+    found_rank_ids = {int(r["rank"]) for r in available}
+    missing_pdf_ranks = [rank for rank in candidate_ranks if rank not in found_rank_ids]
+    _log.info(
+        "[FULLTEXT] %d parseable PDFs found (unpaywall=%d, pmc=%d, failed_download=%d, failed_parse=%d) from %d Level I/II studies",
+        len(available), unpywall_hits, pmc_hits, len(download_failed_ranks), len(parse_failed_ranks), len(candidates),
+    )
+    result = {
+        "level_I_II_studies": len(candidates),
+        "pdfs_found": len(available),
+        "discovered_pdf_ranks": sorted(_url_map),
+        "validated_pdf_ranks": sorted(bridge._pdf_bytes),
+        "download_failed_ranks": sorted(download_failed_ranks),
+        "parse_failed_ranks": sorted(parse_failed_ranks),
+        "unpywall_hits": unpywall_hits,
+        "pmc_hits": pmc_hits,
+        "user_upload_hits": len(manual_ranks),
+        "available": available,
+        "missing_pdf_ranks": missing_pdf_ranks,
+        "manual_upload_needed": bool(missing_pdf_ranks),
+    }
+    if not allow_user_checkpoint or not missing_pdf_ranks:
+        return result
+
+    requested_upload_ranks = list(missing_pdf_ranks)
+    await bridge.on_tool_start(
+        "await_user_pdfs",
+        {"ranks": requested_upload_ranks, "reason": "missing_pdfs_after_fetch_fulltext"},
+    )
+    checkpoint = await tool_await_user_pdfs(request, bridge, requested_upload_ranks)
+    await bridge.on_tool_end("await_user_pdfs", checkpoint)
+    bridge._intermediate["await_user_pdfs"] = checkpoint
+
+    uploaded_after = set(_manual_fulltext_uploaded_ranks(request, candidate_ranks))
+    for s in candidates:
+        rank = s.reference_number
+        if rank is None or not _stored_fulltext_for_rank(request, rank):
+            continue
+        stored = _stored_fulltext_for_rank(request, rank)
+        found_ranks[rank] = {
+            "rank": rank,
+            "title": s.title,
+            "doi": s.doi,
+            "pmid": s.pmid,
+            "pmcid": s.pmcid,
+            "evidence_level": s.evidence_level,
+            "source": stored[1] if stored else "user_upload",
+        }
+
+    available_after = sorted(found_ranks.values(), key=lambda r: r["rank"])
+    found_after_ids = {int(r["rank"]) for r in available_after}
+    unavailable_pdf_ranks = [rank for rank in candidate_ranks if rank not in found_after_ids]
+    result.update({
+        "pdfs_found": len(available_after),
+        "user_upload_hits": len(uploaded_after),
+        "available": available_after,
+        "requested_upload_ranks": requested_upload_ranks,
+        "missing_pdf_ranks": [],
+        "unavailable_pdf_ranks": unavailable_pdf_ranks,
+        "manual_upload_needed": False,
+        "user_pdf_checkpoint": checkpoint,
+    })
+    return result
 
 
-async def tool_parse_pdf(request: RunRequest, bridge: AgenticEventBridge, rank: int) -> dict[str, Any]:
-    import io
-    import tarfile
-    import tempfile
+async def tool_await_user_pdfs(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    ranks: list[int] | None = None,
+    timeout_seconds: int = 900,
+) -> dict[str, Any]:
+    """Pause the agent while the UI lets the user upload PDFs for missing ranks."""
+    ranked_by_ref = {
+        int(s.reference_number): s
+        for s in bridge.ranked_studies
+        if s.reference_number is not None
+    }
+    requested_ranks = [int(rank) for rank in (ranks or []) if int(rank) in ranked_by_ref]
+    if not requested_ranks:
+        fetch_result = bridge._intermediate.get("fetch_fulltext")
+        if isinstance(fetch_result, dict):
+            requested_ranks = [
+                int(rank)
+                for rank in fetch_result.get("missing_pdf_ranks", [])
+                if int(rank) in ranked_by_ref
+            ]
+    if not requested_ranks:
+        requested_ranks = [
+            int(s.reference_number)
+            for s in bridge.ranked_studies
+            if s.reference_number is not None and s.evidence_level in _EBM_HIGH_EVIDENCE
+        ][:5]
+    requested_ranks = list(dict.fromkeys(requested_ranks))
+    if not requested_ranks:
+        return {"status": "skipped", "reason": "No ranked studies are waiting for user PDFs."}
 
+    uploaded_before = _manual_fulltext_uploaded_ranks(request, requested_ranks)
+    missing = [rank for rank in requested_ranks if rank not in uploaded_before]
+    if not missing:
+        return {
+            "status": "ok",
+            "uploaded_ranks": uploaded_before,
+            "missing_ranks": [],
+            "continued": True,
+        }
+
+    found_ranks = sorted(set(getattr(bridge, "_pdf_urls", {}).keys()))
+    approval_id = _create_or_update_pdf_approval(
+        request,
+        bridge.ranked_studies,
+        missing_ranks=missing,
+        found_ranks=found_ranks,
+    )
+    await bridge.queue.put(
+        RuntimeEventPayload(
+            event_type=EventType.APPROVAL_REQUESTED,
+            phase="fulltext",
+            progress=79,
+            message=f"Waiting for user PDFs for {len(missing)} studies",
+            tool_name="await_user_pdfs",
+            extra={
+                "type": "pdf_upload",
+                "approval_id": approval_id,
+                "missing_pdf_ranks": missing,
+                "found_pdf_ranks": found_ranks,
+            },
+        )
+    )
+    if not approval_id:
+        return {
+            "status": "unavailable",
+            "reason": "No run database path was available for a PDF checkpoint.",
+            "uploaded_ranks": uploaded_before,
+            "missing_ranks": missing,
+        }
+
+    status: str | None = ApprovalStatus.PENDING.value
+    while status == ApprovalStatus.PENDING.value:
+        await asyncio.sleep(1.0)
+        status = _approval_status(request, approval_id)
+        if status is None:
+            return {
+                "status": "unavailable",
+                "approval_id": approval_id,
+                "reason": "The PDF checkpoint could not be found.",
+                "uploaded_ranks": _manual_fulltext_uploaded_ranks(request, requested_ranks),
+                "missing_ranks": requested_ranks,
+                "continued": False,
+            }
+        run_status = _run_status(request)
+        if run_status in _TERMINAL_RUN_STATUSES:
+            uploaded_now = _manual_fulltext_uploaded_ranks(request, requested_ranks)
+            return {
+                "status": "cancelled" if run_status in {ResearchStatus.CANCELLED.value, ResearchStatus.INTERRUPTED.value} else "stale",
+                "approval_id": approval_id,
+                "run_status": run_status,
+                "uploaded_ranks": uploaded_now,
+                "missing_ranks": [rank for rank in requested_ranks if rank not in uploaded_now],
+                "continued": False,
+            }
+
+    uploaded_after = _manual_fulltext_uploaded_ranks(request, requested_ranks)
+    missing_after = [rank for rank in requested_ranks if rank not in uploaded_after]
+    if status == ApprovalStatus.REJECTED.value:
+        return {
+            "status": "skipped",
+            "approval_id": approval_id,
+            "uploaded_ranks": uploaded_after,
+            "missing_ranks": missing_after,
+            "continued": False,
+        }
+    if status == ApprovalStatus.APPROVED.value:
+        return {
+            "status": "ok",
+            "approval_id": approval_id,
+            "uploaded_ranks": uploaded_after,
+            "missing_ranks": missing_after,
+            "continued": True,
+        }
+    return {
+        "status": "unavailable",
+        "approval_id": approval_id,
+        "uploaded_ranks": uploaded_after,
+        "missing_ranks": missing_after,
+        "continued": False,
+    }
+
+
+async def tool_parse_pdf(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    rank: int,
+    *,
+    allow_user_checkpoint: bool = True,
+) -> dict[str, Any]:
     study = next((s for s in bridge.ranked_studies if s.reference_number == rank), None)
     title = study.title if study else f"Study #{rank}"
+    stored_fulltext = _stored_fulltext_for_rank(request, rank)
+    if stored_fulltext:
+        text, stored_source = stored_fulltext
+        return {
+            "rank": rank,
+            "title": title,
+            "source": stored_source,
+            "text_length": len(text),
+            "fulltext": text,
+        }
+
+    cached_pdf = getattr(bridge, "_pdf_bytes", {}).get(rank)
+    pdf_bytes: bytes | None = cached_pdf
+    source = getattr(bridge, "_pdf_sources", {}).get(rank, "validated_pdf") if cached_pdf else "none"
+
     urls = getattr(bridge, "_pdf_url_alternatives", {}).get(rank, [])
     if not urls:
         primary = bridge._pdf_urls.get(rank, "")
         if primary:
             urls = [primary]
 
-    pdf_bytes: bytes | None = None
-    source = "none"
+    if not pdf_bytes and urls:
+        pdf_bytes, source = await _download_pdf_bytes(rank, urls)
 
-    for url in urls:
-        if pdf_bytes:
-            break
-        # PMC tgz archive
-        if url.endswith(".tar.gz"):
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True) as client:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
-                    for member in tar.getmembers():
-                        if member.name.endswith(".pdf"):
-                            f = tar.extractfile(member)
-                            if f:
-                                pdf_bytes = f.read()
-                                source = "pmc_tgz"
-                                _log.info("[PARSE_PDF] Extracted %d bytes from PMC tgz for rank %d", len(pdf_bytes), rank)
-                            break
-            except Exception as exc:
-                _log.info("[PARSE_PDF] PMC tgz failed for rank %d: %s", rank, exc)
-        # Direct URL (Unpaywall or other)
-        else:
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), follow_redirects=True,
-                                             headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.2; academic-research)"}) as client:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                    if resp.content[:5] == b"%PDF-":
-                        pdf_bytes = resp.content
-                        source = "direct_url"
-                        _log.info("[PARSE_PDF] Downloaded %d bytes via direct URL for rank %d", len(pdf_bytes), rank)
-            except Exception as exc:
-                _log.info("[PARSE_PDF] Direct URL failed for rank %d: %s", rank, exc)
+    checkpoint: dict[str, Any] | None = None
+    if not pdf_bytes and allow_user_checkpoint:
+        previous_checkpoint = bridge._intermediate.get("await_user_pdfs")
+        already_requested = (
+            isinstance(previous_checkpoint, dict)
+            and rank in {int(r) for r in previous_checkpoint.get("missing_ranks", []) if str(r).isdigit()}
+            and previous_checkpoint.get("status") in {"ok", "skipped", "cancelled", "stale"}
+        )
+        if not already_requested:
+            await bridge.on_tool_start(
+                "await_user_pdfs",
+                {"ranks": [rank], "reason": "discovered_pdf_download_failed"},
+            )
+            checkpoint = await tool_await_user_pdfs(request, bridge, [rank])
+            await bridge.on_tool_end("await_user_pdfs", checkpoint)
+            bridge._intermediate["await_user_pdfs"] = checkpoint
+            stored_fulltext = _stored_fulltext_for_rank(request, rank)
+            if stored_fulltext:
+                text, stored_source = stored_fulltext
+                return {
+                    "rank": rank,
+                    "title": title,
+                    "source": stored_source,
+                    "text_length": len(text),
+                    "fulltext": text,
+                    "pdf_checkpoint": checkpoint,
+                }
 
     if not pdf_bytes:
-        return {"error": f"Could not download PDF for rank {rank}", "title": title}
+        error_result: dict[str, Any] = {
+            "rank": rank,
+            "error": f"Could not download PDF for rank {rank}",
+            "title": title,
+        }
+        if checkpoint:
+            error_result["pdf_checkpoint"] = checkpoint
+        return error_result
 
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-        f.write(pdf_bytes)
-        pdf_path = f.name
+    text, parse_error = await _extract_pdf_text_from_bytes(rank, pdf_bytes, source)
+    if text:
+        _store_fulltext_for_rank(
+            request,
+            rank,
+            text,
+            source="downloaded_pdf",
+            pdf_source=source,
+            pdf_url=urls[0] if urls else None,
+        )
+        return {"rank": rank, "title": title, "source": source, "text_length": len(text), "fulltext": text}
 
-    text = ""
-    # Stage 1: markitdown[pdf] (no Java required)
-    try:
-        from markitdown import MarkItDown
-        md = MarkItDown()
-        result = await asyncio.to_thread(md.convert, pdf_path)
-        text = (getattr(result, "text_content", None) or "").strip()
-    except ImportError:
-        pass
-    except Exception as exc:
-        _log.info("[PARSE_PDF] markitdown failed for rank %d: %s", rank, exc)
+    if allow_user_checkpoint:
+        await bridge.on_tool_start(
+            "await_user_pdfs",
+            {"ranks": [rank], "reason": "downloaded_pdf_parse_failed"},
+        )
+        checkpoint = await tool_await_user_pdfs(request, bridge, [rank])
+        await bridge.on_tool_end("await_user_pdfs", checkpoint)
+        bridge._intermediate["await_user_pdfs"] = checkpoint
+        stored_fulltext = _stored_fulltext_for_rank(request, rank)
+        if stored_fulltext:
+            text, stored_source = stored_fulltext
+            return {
+                "rank": rank,
+                "title": title,
+                "source": stored_source,
+                "text_length": len(text),
+                "fulltext": text,
+                "pdf_checkpoint": checkpoint,
+            }
 
-    # Stage 2: opendataloader-pdf fallback (requires Java)
-    if not text:
-        try:
-            import opendataloader_pdf
-            import glob as _glob
-            output_dir = tempfile.mkdtemp()
-            await asyncio.to_thread(
-                opendataloader_pdf.convert,
-                input_path=[pdf_path], output_dir=output_dir, format="markdown",
-            )
-            md_files = _glob.glob(f"{output_dir}/**/*.md", recursive=True)
-            if md_files:
-                with open(md_files[0]) as mf:
-                    text = mf.read()
-        except ImportError:
-            pass
-        except Exception as exc:
-            _log.info("[PARSE_PDF] opendataloader failed for rank %d: %s", rank, exc)
-
-    if not text:
-        text = f"[PDF parse error: no parser available. PDF: {len(pdf_bytes)} bytes from {source}.]"
-
-    _log.info("[PARSE_PDF] Parsed %d chars for rank %d (source=%s)", len(text), rank, source)
-
-    import os as _os
-    try:
-        _os.unlink(pdf_path)
-    except OSError:
-        pass
-
-    return {"rank": rank, "title": title, "source": source, "text_length": len(text), "fulltext": text}
+    error_result = {
+        "rank": rank,
+        "error": f"Could not parse PDF for rank {rank}",
+        "title": title,
+        "parse_error": parse_error,
+    }
+    if checkpoint:
+        error_result["pdf_checkpoint"] = checkpoint
+    return error_result
 
 
 # ---------------------------------------------------------------------------
@@ -1200,7 +1842,7 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
 ## Tools
 
 **Planning**: plan_search, suggest_databases, write_todos, update_progress
-**Search** (one call each): search_pubmed, search_openalex, search_cochrane, search_semantic_scholar, search_scopus
+**Search** (one call each): search_pubmed, search_pmc, search_europe_pmc, search_openalex, search_crossref, search_cochrane, search_semantic_scholar, search_scopus
 **Evidence** (reads from shared state — NO large JSON arguments needed):
 - get_studies(context) — deduplicates and pre-scores all collected studies, returns full details for YOUR review
 - finalize_ranking(ranked_indices, rationale) — submit your ranking. Pass indices best-first.
@@ -1209,7 +1851,8 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
 - submit_report(report_markdown) — submit your completed report. MUST be called as the final step.
 **Fulltext** (call AFTER finalize_ranking):
 - fetch_fulltext() — queries Unpaywall + PubMed Central for free PDFs across ALL ranked studies
-- parse_pdf(rank) — downloads and parses a specific study's PDF to extract full text
+- await_user_pdfs(ranks) — pauses until the user clicks Continue or Skip after uploading PDFs
+- parse_pdf(rank) — parses a user-uploaded PDF first, otherwise downloads and parses the discovered PDF
 
 ## Workflow (follow exactly)
 
@@ -1218,8 +1861,8 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
 3. Call `get_studies` with context="{"clinical" if is_clinical else "general"}". \
 Carefully review EVERY abstract. Assess relevance to the query, study design, evidence level, and quality.
 4. Call `finalize_ranking` with your ordered list of study indices (best first) and a detailed rationale.
-5. Call `fetch_fulltext` to find free PDFs across all ranked studies (Unpaywall + PMC).
-6. Call `parse_pdf` for 1-3 studies that have PDFs available — read the full text.
+5. Call `fetch_fulltext` to find free PDFs across all ranked studies (Unpaywall + PMC). This tool opens the user PDF upload checkpoint itself when publisher PDFs are missing; wait for it to return before continuing.
+6. Call `parse_pdf` for 1-3 studies that have PDFs available or were uploaded by the user — read the full text.
 7. Call `verify_studies` to validate PMIDs.
 8. Call `synthesize_report` — this returns the structured evidence data.
 9. **Write the full report** using the evidence data (see Report Format below).
@@ -1262,7 +1905,7 @@ and systematic literature review.
 
 ## Core Capabilities
 1. Build optimized search queries using PICO or PCC frameworks
-2. Search medical databases (PubMed, Scopus, Cochrane Library, OpenAlex, Semantic Scholar)
+2. Search medical databases (PubMed, PMC, Europe PMC, Crossref, Scopus, Cochrane Library, OpenAlex, Semantic Scholar)
 3. Classify evidence levels (Level I–V)
 4. Validate study populations against target criteria
 5. Synthesize findings into comprehensive evidence-based reports
@@ -1277,7 +1920,9 @@ and systematic literature review.
 ### Database Coverage
 Search multiple databases for comprehensive coverage:
 - PubMed (primary for clinical evidence)
+- PMC and Europe PMC (published open-access biomedical articles)
 - Cochrane (systematic reviews)
+- Crossref (published journal article metadata)
 - OpenAlex (broad academic coverage, free)
 - Semantic Scholar (Medicine-filtered, free)
 - Scopus (if API key available — citation counts)
@@ -1340,7 +1985,7 @@ nursing, public health, education, and implementation science.
 
 ## Core Capabilities
 1. Build keyword-based search strategies for broad healthcare/academic topics
-2. Search academic databases (PubMed, OpenAlex, Semantic Scholar, Scopus)
+2. Search academic databases (PubMed, PMC, Europe PMC, Crossref, OpenAlex, Semantic Scholar, Scopus)
 3. Identify and include diverse study methodologies (qualitative, mixed methods, policy analyses, \
 theoretical frameworks, reviews)
 4. Synthesize findings into thematic reports
@@ -1358,6 +2003,8 @@ theoretical frameworks, reviews)
 ### Database Coverage
 Search multiple databases for comprehensive coverage:
 - OpenAlex (primary for broad academic coverage, free)
+- Crossref (published journal article metadata)
+- Europe PMC / PMC (biomedical open-access and indexed literature)
 - Semantic Scholar (cross-disciplinary without field restrictions, free)
 - PubMed (for healthcare topics it indexes: nursing, bioethics, public health)
 - Scopus (if API key available — citation counts and broader coverage)
@@ -1437,7 +2084,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "plan_search": "Build a search plan. Returns keywords, databases, and source queries.",
     "suggest_databases": "Suggest database coverage for a research query.",
     "search_pubmed": "Search PubMed for medical literature.",
+    "search_pmc": "Search PubMed Central for published open-access biomedical articles.",
+    "search_europe_pmc": "Search Europe PMC for published biomedical literature.",
     "search_openalex": "Search OpenAlex for open-access academic papers.",
+    "search_crossref": "Search Crossref for published journal article metadata.",
     "search_cochrane": "Search Cochrane for systematic reviews.",
     "search_semantic_scholar": "Search Semantic Scholar for academic papers.",
     "search_scopus": "Search Scopus for academic citations.",
@@ -1450,5 +2100,6 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "write_todos": "Create a research TODO list to plan the workflow.",
     "update_progress": "Signal a phase transition or progress update to the user.",
     "fetch_fulltext": "Look up free full-text PDFs via Unpaywall + PMC for Level I & II ranked studies.",
-    "parse_pdf": "Download and parse a full-text PDF to markdown.",
+    "await_user_pdfs": "Pause until the user uploads PDFs and clicks Continue, or clicks Skip.",
+    "parse_pdf": "Parse a user-uploaded or discovered full-text PDF to markdown.",
 }

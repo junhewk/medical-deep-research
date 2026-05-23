@@ -151,9 +151,25 @@ def classify_domain(query: str) -> str:
 
 
 def suggest_databases(query: str, provider: str) -> list[str]:
-    databases = ["PubMed", "OpenAlex", "Semantic Scholar"]
     if classify_domain(query) == "clinical":
-        databases.insert(1, "Cochrane")
+        databases = [
+            "PubMed",
+            "Cochrane",
+            "PMC",
+            "Europe PMC",
+            "OpenAlex",
+            "Crossref",
+            "Semantic Scholar",
+        ]
+    else:
+        databases = [
+            "OpenAlex",
+            "Crossref",
+            "Semantic Scholar",
+            "PubMed",
+            "Europe PMC",
+            "PMC",
+        ]
     if provider != "google":
         databases.append("Scopus")
     return databases
@@ -231,7 +247,10 @@ def build_query_plan(
 
     source_queries = {
         "PubMed": pubmed_query,
+        "PMC": pubmed_query,
+        "Europe PMC": normalized_query,
         "OpenAlex": normalized_query,
+        "Crossref": normalized_query,
         "Semantic Scholar": normalized_query,
         "Cochrane": f"{normalized_query} AND systematic review",
     }

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "medical-deep-research"
-version = "2.9.2"
+version = "2.9.3"
 description = "Python-first rewrite of the Medical Deep Research desktop application"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -24,12 +24,12 @@ dependencies = [
 
 [project.optional-dependencies]
 openai = ["openai-agents"]
-anthropic = ["anthropic", "deepagents", "langchain", "langchain-anthropic", "langgraph"]
+anthropic = ["anthropic", "langchain", "langchain-anthropic"]
 claude-sdk = ["claude-agent-sdk"]
-deepseek = ["langchain", "langchain-core", "langchain-openai", "langgraph"]
-pdf = ["markitdown[pdf]", "opendataloader-pdf", "unpywall"]
-langchain = ["langchain", "langchain-core", "langchain-community", "langchain-openai", "langgraph"]
-google = ["google-adk"]
+deepseek = ["langchain-core", "langchain-openai", "langgraph"]
+pdf = ["pdfminer.six", "unpywall"]
+langchain = ["langchain-core", "langchain-openai", "langgraph"]
+google = ["google-genai", "langchain-google-genai", "langgraph"]
 dev = ["ruff"]
 
 [project.scripts]

@@ -155,6 +155,7 @@ class ReadingService:
     def store_fulltext(self, run_id: str, ref_num: int, text: str) -> None:
         """Persist user-uploaded or on-demand fulltext as an artifact."""
         artifact_name = f"fulltext_study_{ref_num}"
+        artifact_metadata = json.dumps({"source": "user_upload"})
         with self.database.session() as session:
             existing = session.exec(
                 select(ResearchArtifact).where(
@@ -164,12 +165,14 @@ class ReadingService:
             ).first()
             if existing:
                 existing.content_text = text
+                existing.content_json = artifact_metadata
             else:
                 session.add(ResearchArtifact(
                     run_id=run_id,
-                    artifact_type="fulltext_upload",
+                    artifact_type=ArtifactType.FULLTEXT_UPLOAD.value,
                     name=artifact_name,
                     content_text=text,
+                    content_json=artifact_metadata,
                 ))
             session.commit()
         # Invalidate cached index
@@ -222,10 +225,11 @@ class ReadingService:
             model=normalize_model_id(run.provider, run.model),
             language=run.language,
             api_keys=api_keys,
+            database_path=str(self.database.settings.db_path),
         )
 
         try:
-            await tool_fetch_fulltext(request, bridge)
+            await tool_fetch_fulltext(request, bridge, allow_user_checkpoint=False)
         except Exception as exc:
             _log.warning("[READING] fetch_fulltext failed: %s", exc)
             return None
@@ -234,7 +238,7 @@ class ReadingService:
             return None
 
         try:
-            result = await tool_parse_pdf(request, bridge, ref_num)
+            result = await tool_parse_pdf(request, bridge, ref_num, allow_user_checkpoint=False)
             text = result.get("fulltext")
             if text:
                 self.store_fulltext(run_id, ref_num, text)

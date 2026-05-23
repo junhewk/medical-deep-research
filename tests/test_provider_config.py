@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from medical_deep_research.provider_config import deepseek_thinking_body, normalize_local_base_url, normalize_model_id
+from medical_deep_research.runtime import build_runtime
 
 
 class ProviderConfigTests(unittest.TestCase):
@@ -42,6 +43,13 @@ class ProviderConfigTests(unittest.TestCase):
     def test_deepseek_thinking_invalid_env_falls_back_to_disabled(self) -> None:
         with patch.dict("os.environ", {"MDR_DEEPSEEK_THINKING": "maybe"}, clear=True):
             self.assertEqual(deepseek_thinking_body(), {"thinking": {"type": "disabled"}})
+
+    def test_google_runtime_uses_langchain_genai_not_adk(self) -> None:
+        runtime = build_runtime("google")
+
+        self.assertEqual(runtime.runtime_name, "Google LangChain Agent")
+        self.assertEqual(runtime.runtime_engine, "langchain_google_genai")
+        self.assertEqual(runtime.sdk_module, "langchain_google_genai")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,6 @@
 # Prerequisites:
 #   - Python 3.12+
 #   - uv (https://docs.astral.sh/uv/)
-#   - Java 11+ (for opendataloader-pdf)
 #
 # Usage:
 #   ./scripts/build-macos.sh            # build .app in dist/
@@ -18,10 +17,16 @@ APP_NAME="Medical Deep Research"
 BUNDLE_ID="com.junhewk.medical-deep-research"
 
 # ---------------------------------------------------------------------------
-# 1. Sync dependencies (all extras for a full-featured build)
+# 1. Sync dependencies (active provider extras, excluding legacy Claude SDK)
 # ---------------------------------------------------------------------------
 echo "--- Installing dependencies ---"
-uv sync --all-extras
+uv sync \
+    --extra anthropic \
+    --extra openai \
+    --extra deepseek \
+    --extra google \
+    --extra langchain \
+    --extra pdf
 uv pip install pyinstaller
 
 # Use uv run for all Python commands so they use the venv

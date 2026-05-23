@@ -20,7 +20,13 @@ Set-Location (Resolve-Path (Join-Path $PSScriptRoot ".."))
 $AppName = "Medical Deep Research"
 
 Write-Host "--- Installing dependencies ---"
-uv sync --all-extras
+uv sync `
+    --extra anthropic `
+    --extra openai `
+    --extra deepseek `
+    --extra google `
+    --extra langchain `
+    --extra pdf
 uv pip install pyinstaller
 
 $Version = uv run python -c "import tomllib, pathlib; p = tomllib.loads(pathlib.Path('pyproject.toml').read_text()); print(p['project']['version'])"

@@ -147,6 +147,61 @@ def create_literature_server() -> FastMCP:
         return result.model_dump()
 
     @server.tool()
+    async def search_pmc(
+        query: str,
+        max_results: int = 8,
+        api_key: str | None = None,
+        offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
+    ) -> dict[str, object]:
+        """Search PubMed Central with the deterministic Python adapter."""
+        result = await search_source(
+            "PMC",
+            query,
+            api_keys={"ncbi": key} if (key := _resolve_secret(api_key, "MDR_NCBI_API_KEY")) else {},
+            max_results=max_results,
+            offline_mode=_resolve_offline_mode(offline_mode),
+            domain="clinical",
+            start_year=_start_year_from_lookback(_resolve_lookback(recent_years_lookback)),
+        )
+        return result.model_dump()
+
+    @server.tool()
+    async def search_europe_pmc(
+        query: str,
+        max_results: int = 8,
+        offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
+    ) -> dict[str, object]:
+        """Search Europe PMC with the deterministic Python adapter."""
+        result = await search_source(
+            "Europe PMC",
+            query,
+            max_results=max_results,
+            offline_mode=_resolve_offline_mode(offline_mode),
+            domain="clinical",
+            start_year=_start_year_from_lookback(_resolve_lookback(recent_years_lookback)),
+        )
+        return result.model_dump()
+
+    @server.tool()
+    async def search_crossref(
+        query: str,
+        max_results: int = 8,
+        offline_mode: bool | None = None,
+        recent_years_lookback: int | None = None,
+    ) -> dict[str, object]:
+        """Search Crossref with the deterministic Python adapter."""
+        result = await search_source(
+            "Crossref",
+            query,
+            max_results=max_results,
+            offline_mode=_resolve_offline_mode(offline_mode),
+            start_year=_start_year_from_lookback(_resolve_lookback(recent_years_lookback)),
+        )
+        return result.model_dump()
+
+    @server.tool()
     async def search_cochrane(
         query: str,
         max_results: int = 6,

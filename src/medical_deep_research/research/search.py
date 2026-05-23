@@ -14,12 +14,14 @@ NCBI_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 OPENALEX_BASE_URL = "https://api.openalex.org/works"
 SCOPUS_BASE_URL = "https://api.elsevier.com/content/search/scopus"
 SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+EUROPE_PMC_BASE_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+CROSSREF_BASE_URL = "https://api.crossref.org/works"
 SEMANTIC_SCHOLAR_FIELDS = (
     "paperId,title,abstract,year,authors,venue,citationCount,externalIds,publicationTypes,journal"
 )
 HTTP_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 POLITE_EMAIL = "medical-deep-research@users.noreply.github.com"
-USER_AGENT = f"MedicalDeepResearch/2.9.2 (mailto:{POLITE_EMAIL})"
+USER_AGENT = f"MedicalDeepResearch/2.9.3 (mailto:{POLITE_EMAIL})"
 LANDMARK_JOURNALS = {
     "new england journal of medicine",
     "nejm",
@@ -136,6 +138,53 @@ def _get_text(element: ET.Element | None) -> str:
     return "".join(element.itertext()).strip()
 
 
+def _clean_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value or None
+
+
+def _normalize_doi(value: str | None) -> str | None:
+    if not value:
+        return None
+    doi = value.strip().replace("https://doi.org/", "").replace("http://doi.org/", "")
+    return doi or None
+
+
+def _first_string(value: object) -> str | None:
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+        return None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _crossref_date_parts(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    date_parts = value.get("date-parts")
+    if not isinstance(date_parts, list) or not date_parts:
+        return None
+    first = date_parts[0]
+    if not isinstance(first, list) or not first:
+        return None
+    return "-".join(str(part) for part in first if part is not None) or None
+
+
+def _summary_article_id(summary: dict[str, object], id_type: str) -> str | None:
+    for item in summary.get("articleids") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("idtype") == id_type and item.get("value"):
+            return str(item["value"])
+    return None
+
+
 def _ebm_boosted_pubmed_query(query: str, start_year: int) -> str:
     """Wrap a PubMed query to prioritize high-evidence study types and recent years."""
     ebm_filter = (
@@ -227,10 +276,12 @@ async def search_pubmed(
                 _get_text(item) for item in article.findall(".//MeshHeadingList/MeshHeading/DescriptorName") if _get_text(item)
             ]
             doi = None
+            pmcid = None
             for item in article.findall(".//ArticleIdList/ArticleId"):
                 if item.attrib.get("IdType") == "doi":
                     doi = _get_text(item)
-                    break
+                elif item.attrib.get("IdType") == "pmc":
+                    pmcid = _get_text(item)
             studies.append(
                 EvidenceStudy(
                     source="pubmed",
@@ -243,6 +294,7 @@ async def search_pubmed(
                     publication_year=year or None,
                     doi=doi,
                     pmid=pmid or None,
+                    pmcid=pmcid or None,
                     citation_count=0,
                     url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
                     evidence_level=infer_evidence_level(title, publication_types),
@@ -286,12 +338,14 @@ async def search_openalex(
         works = response.json().get("results", [])
         studies: list[EvidenceStudy] = []
         for work in works:
-            doi = work.get("doi") or work.get("ids", {}).get("doi")
-            if doi:
-                doi = doi.replace("https://doi.org/", "")
-            pmid_value = work.get("ids", {}).get("pmid")
+            ids = work.get("ids", {}) if isinstance(work.get("ids"), dict) else {}
+            doi = _normalize_doi(work.get("doi") or ids.get("doi"))
+            pmid_value = ids.get("pmid")
             pmid_match = re.search(r"(\d+)$", pmid_value or "")
             pmid = pmid_match.group(1) if pmid_match else None
+            pmcid_value = ids.get("pmcid")
+            pmcid_match = re.search(r"(PMC\d+)$", pmcid_value or "")
+            pmcid = pmcid_match.group(1) if pmcid_match else None
             journal = (work.get("primary_location") or {}).get("source") or {}
             journal = journal.get("display_name") if isinstance(journal, dict) else "Unknown"
             journal = journal or "Unknown"
@@ -312,6 +366,7 @@ async def search_openalex(
                     publication_year=str(work.get("publication_year")) if work.get("publication_year") else None,
                     doi=doi,
                     pmid=pmid,
+                    pmcid=pmcid,
                     citation_count=int(work.get("cited_by_count") or 0),
                     url=work.get("id"),
                     evidence_level=infer_evidence_level(title, [work.get("type")] if work.get("type") else []),
@@ -401,6 +456,7 @@ async def search_semantic_scholar(
             title = paper.get("title") or "Untitled"
             journal_name = (paper.get("journal") or {}).get("name") or paper.get("venue") or "Unknown"
             publication_types = paper.get("publicationTypes") or []
+            external_ids = paper.get("externalIds") or {}
             studies.append(
                 EvidenceStudy(
                     source="semantic_scholar",
@@ -410,8 +466,9 @@ async def search_semantic_scholar(
                     authors=[author.get("name") for author in paper.get("authors", []) if author.get("name")],
                     journal=journal_name,
                     publication_year=str(paper.get("year")) if paper.get("year") else None,
-                    doi=(paper.get("externalIds") or {}).get("DOI"),
-                    pmid=(paper.get("externalIds") or {}).get("PubMed"),
+                    doi=external_ids.get("DOI"),
+                    pmid=external_ids.get("PubMed"),
+                    pmcid=external_ids.get("PubMedCentral") or external_ids.get("PMC"),
                     citation_count=int(paper.get("citationCount") or 0),
                     url=f"https://www.semanticscholar.org/paper/{paper.get('paperId')}" if paper.get("paperId") else None,
                     evidence_level=infer_evidence_level(title, publication_types),
@@ -446,6 +503,243 @@ async def search_cochrane(
         study.sources = ["cochrane"]
         study.evidence_level = "Level I"
     return result
+
+
+async def search_pmc(
+    query: str,
+    max_results: int = 8,
+    *,
+    api_key: str | None = None,
+    offline_mode: bool = False,
+    start_year: int | None = None,
+) -> SearchProviderResult:
+    if offline_mode:
+        return _offline_result("PMC", query)
+
+    start_year_value, _ = _resolve_year_window(start_year)
+    bounded_query = f'({query}) AND open access[filter] AND ("{start_year_value}"[pdat] : "3000"[pdat])'
+    params = {
+        "db": "pmc",
+        "term": bounded_query,
+        "retmax": str(max_results),
+        "retmode": "json",
+        "sort": "relevance",
+    }
+    if api_key:
+        params["api_key"] = api_key
+
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
+            search_response = await client.get(f"{NCBI_BASE_URL}/esearch.fcgi", params=params)
+            search_response.raise_for_status()
+            ids = search_response.json().get("esearchresult", {}).get("idlist", [])
+            if not ids:
+                return SearchProviderResult(source="PMC", query=query, studies=[])
+
+            common_params = {"db": "pmc", "id": ",".join(ids), "retmode": "json"}
+            if api_key:
+                common_params["api_key"] = api_key
+            summary_response = await client.get(f"{NCBI_BASE_URL}/esummary.fcgi", params=common_params)
+            summary_response.raise_for_status()
+            link_response = await client.get(
+                f"{NCBI_BASE_URL}/elink.fcgi",
+                params={"dbfrom": "pmc", "db": "pubmed", "id": ",".join(ids), "retmode": "json"},
+            )
+
+        pmc_to_pubmed: dict[str, str] = {}
+        if link_response.status_code < 400:
+            for linkset in link_response.json().get("linksets", []):
+                pmc_id = (linkset.get("ids") or [None])[0]
+                for linkdb in linkset.get("linksetdbs") or []:
+                    if linkdb.get("dbto") == "pubmed" and linkdb.get("links"):
+                        pmc_to_pubmed[str(pmc_id)] = str(linkdb["links"][0])
+                        break
+
+        result = summary_response.json().get("result", {})
+        studies: list[EvidenceStudy] = []
+        for pmc_id in ids:
+            summary = result.get(pmc_id) or {}
+            title = _clean_text(str(summary.get("title") or "")) or "Untitled"
+            authors = [
+                item.get("name")
+                for item in summary.get("authors") or []
+                if isinstance(item, dict) and item.get("name")
+            ]
+            journal = str(summary.get("fulljournalname") or summary.get("source") or "PMC")
+            pubdate = str(summary.get("pubdate") or "")
+            year_match = re.search(r"\b(\d{4})\b", pubdate)
+            publication_types = [str(value) for value in summary.get("pubtype") or []]
+            doi = _normalize_doi(_summary_article_id(summary, "doi") or str(summary.get("elocationid") or ""))
+            pmcid = f"PMC{pmc_id}" if not str(pmc_id).upper().startswith("PMC") else str(pmc_id)
+            studies.append(
+                EvidenceStudy(
+                    source="pmc",
+                    source_id=pmcid,
+                    title=title,
+                    abstract=None,
+                    authors=authors,
+                    journal=journal,
+                    publication_date=pubdate or None,
+                    publication_year=year_match.group(1) if year_match else None,
+                    doi=doi,
+                    pmid=pmc_to_pubmed.get(str(pmc_id)),
+                    pmcid=pmcid,
+                    citation_count=0,
+                    url=f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/",
+                    evidence_level=infer_evidence_level(title, publication_types),
+                    publication_types=publication_types,
+                    is_landmark_journal=is_landmark_journal(journal),
+                    sources=["pmc"],
+                )
+            )
+        return SearchProviderResult(source="PMC", query=query, studies=studies)
+    except Exception as exc:
+        return _network_error("PMC", query, exc)
+
+
+async def search_europe_pmc(
+    query: str,
+    max_results: int = 8,
+    *,
+    offline_mode: bool = False,
+    start_year: int | None = None,
+) -> SearchProviderResult:
+    if offline_mode:
+        return _offline_result("Europe PMC", query)
+
+    start_year_value, end_year_value = _resolve_year_window(start_year)
+    europe_query = (
+        f"({query}) AND FIRST_PDATE:[{start_year_value}-01-01 TO {end_year_value}-12-31] "
+        "NOT SRC:PPR"
+    )
+    params = {
+        "query": europe_query,
+        "format": "json",
+        "resultType": "core",
+        "pageSize": str(max_results),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
+            response = await client.get(EUROPE_PMC_BASE_URL, params=params)
+            response.raise_for_status()
+        results = response.json().get("resultList", {}).get("result", [])
+        studies: list[EvidenceStudy] = []
+        for entry in results:
+            title = _clean_text(entry.get("title")) or "Untitled"
+            source_id = entry.get("pmid") or entry.get("pmcid") or entry.get("id") or title
+            authors = [
+                part.strip()
+                for part in str(entry.get("authorString") or "").split(",")
+                if part.strip()
+            ]
+            publication_types = [
+                item.strip()
+                for item in str(entry.get("pubType") or "").split(";")
+                if item.strip()
+            ]
+            pmcid = entry.get("pmcid")
+            if pmcid and not str(pmcid).upper().startswith("PMC"):
+                pmcid = f"PMC{pmcid}"
+            url = f"https://europepmc.org/article/MED/{source_id}"
+            fulltext_urls = entry.get("fullTextUrlList")
+            if isinstance(fulltext_urls, dict):
+                url_items = fulltext_urls.get("fullTextUrl")
+                if isinstance(url_items, list) and url_items:
+                    first_url = url_items[0]
+                    if isinstance(first_url, dict) and first_url.get("url"):
+                        url = str(first_url["url"])
+            studies.append(
+                EvidenceStudy(
+                    source="europe_pmc",
+                    source_id=str(source_id),
+                    title=title,
+                    abstract=_clean_text(entry.get("abstractText")),
+                    authors=authors,
+                    journal=_clean_text(entry.get("journalTitle")) or "Europe PMC",
+                    publication_date=entry.get("firstPublicationDate"),
+                    publication_year=str(entry.get("pubYear")) if entry.get("pubYear") else None,
+                    doi=_normalize_doi(entry.get("doi")),
+                    pmid=entry.get("pmid"),
+                    pmcid=pmcid,
+                    citation_count=int(entry.get("citedByCount") or 0),
+                    url=url,
+                    evidence_level=infer_evidence_level(title, publication_types),
+                    publication_types=publication_types,
+                    is_landmark_journal=is_landmark_journal(entry.get("journalTitle")),
+                    sources=["europe_pmc"],
+                )
+            )
+        return SearchProviderResult(source="Europe PMC", query=query, studies=studies)
+    except Exception as exc:
+        return _network_error("Europe PMC", query, exc)
+
+
+async def search_crossref(
+    query: str,
+    max_results: int = 8,
+    *,
+    offline_mode: bool = False,
+    start_year: int | None = None,
+) -> SearchProviderResult:
+    if offline_mode:
+        return _offline_result("Crossref", query)
+
+    start_year_value, end_year_value = _resolve_year_window(start_year)
+    params = {
+        "query.bibliographic": query,
+        "filter": (
+            f"from-pub-date:{start_year_value}-01-01,"
+            f"until-pub-date:{end_year_value}-12-31,type:journal-article"
+        ),
+        "rows": str(max(1, min(max_results, 100))),
+        "mailto": POLITE_EMAIL,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
+            response = await client.get(CROSSREF_BASE_URL, params=params)
+            response.raise_for_status()
+        items = response.json().get("message", {}).get("items", [])
+        studies: list[EvidenceStudy] = []
+        for item in items:
+            doi = _normalize_doi(item.get("DOI"))
+            title = _clean_text(_first_string(item.get("title"))) or "Untitled"
+            authors = []
+            for author in item.get("author") or []:
+                if not isinstance(author, dict):
+                    continue
+                name = " ".join(
+                    part for part in [author.get("given"), author.get("family")] if part
+                ).strip()
+                if name:
+                    authors.append(name)
+            pubdate = (
+                _crossref_date_parts(item.get("published-print"))
+                or _crossref_date_parts(item.get("published-online"))
+                or _crossref_date_parts(item.get("issued"))
+            )
+            year_match = re.match(r"(\d{4})", pubdate or "")
+            studies.append(
+                EvidenceStudy(
+                    source="crossref",
+                    source_id=doi or str(item.get("URL") or title),
+                    title=title,
+                    abstract=_clean_text(_first_string(item.get("abstract"))),
+                    authors=authors,
+                    journal=_clean_text(_first_string(item.get("container-title"))) or "Crossref",
+                    publication_date=pubdate,
+                    publication_year=year_match.group(1) if year_match else None,
+                    doi=doi,
+                    citation_count=int(item.get("is-referenced-by-count") or 0),
+                    url=item.get("URL") or (f"https://doi.org/{doi}" if doi else None),
+                    evidence_level=infer_evidence_level(title, [str(item.get("type") or "")]),
+                    publication_types=[str(item.get("type") or "journal-article")],
+                    is_landmark_journal=is_landmark_journal(_first_string(item.get("container-title"))),
+                    sources=["crossref"],
+                )
+            )
+        return SearchProviderResult(source="Crossref", query=query, studies=studies)
+    except Exception as exc:
+        return _network_error("Crossref", query, exc)
 
 
 async def search_scopus(
@@ -550,8 +844,30 @@ async def search_source(
             offline_mode=offline_mode,
             start_year=start_year,
         )
+    if source == "PMC":
+        return await search_pmc(
+            query,
+            max_results=max_results,
+            api_key=key_map.get("ncbi"),
+            offline_mode=offline_mode,
+            start_year=start_year,
+        )
+    if source == "Europe PMC":
+        return await search_europe_pmc(
+            query,
+            max_results=max_results,
+            offline_mode=offline_mode,
+            start_year=start_year,
+        )
     if source == "OpenAlex":
         return await search_openalex(
+            query,
+            max_results=max_results,
+            offline_mode=offline_mode,
+            start_year=start_year,
+        )
+    if source == "Crossref":
+        return await search_crossref(
             query,
             max_results=max_results,
             offline_mode=offline_mode,

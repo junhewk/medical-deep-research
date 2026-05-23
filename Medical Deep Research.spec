@@ -52,11 +52,23 @@ hiddenimports += collect_submodules('medical_deep_research')
 tmp_ret = collect_all('qasync')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-for _pkg in ('anthropic', 'langchain', 'langchain_anthropic', 'langgraph', 'deepagents', 'markitdown'):
+for _pkg in (
+    'anthropic',
+    'langchain',
+    'langchain_anthropic',
+    'langchain_openai',
+    'langchain_google_genai',
+    'langgraph',
+    'pdfminer',
+    'unpywall',
+):
     if _importlib_util.find_spec(_pkg) is None:
         continue
     tmp_ret = collect_all(_pkg)
     datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+if _importlib_util.find_spec('google.genai') is not None:
+    hiddenimports.append('google.genai')
 
 a = Analysis(
     ['scripts/desktop_entry.py'],

@@ -46,6 +46,20 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("epidural", plan.source_queries["Scopus"].lower())
         self.assertIn("pain", plan.source_queries["Scopus"].lower())
 
+    def test_planning_adds_published_sources_without_preprints(self) -> None:
+        plan = build_query_plan(
+            "adult diabetes education randomized trial",
+            "free",
+            "openai",
+        )
+
+        self.assertIn("PMC", plan.databases)
+        self.assertIn("Europe PMC", plan.databases)
+        self.assertIn("Crossref", plan.databases)
+        self.assertNotIn("arXiv", plan.databases)
+        self.assertNotIn("medRxiv", plan.databases)
+        self.assertNotIn("bioRxiv", plan.databases)
+
 
 if __name__ == "__main__":
     unittest.main()

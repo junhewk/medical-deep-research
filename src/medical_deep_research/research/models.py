@@ -27,6 +27,7 @@ class EvidenceStudy(BaseModel):
     publication_year: str | None = None
     doi: str | None = None
     pmid: str | None = None
+    pmcid: str | None = None
     citation_count: int = 0
     url: str | None = None
     evidence_level: str | None = None
@@ -45,6 +46,7 @@ class SearchProviderResult(BaseModel):
 
 
 class ScoredStudy(EvidenceStudy):
+    relevance_score: float = 0.0
     evidence_level_score: float
     citation_score: float
     recency_score: float
@@ -68,4 +70,3 @@ class VerificationSummary(BaseModel):
     offline_mode: bool = False
     details: list[VerificationDetail] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
-

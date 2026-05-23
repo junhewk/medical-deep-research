@@ -42,6 +42,7 @@ from .agentic_tools import (
     agentic_system_prompt,
     recover_report_from_bridge,
     report_quality_issues,
+    tool_await_user_pdfs,
     tool_fetch_fulltext,
     tool_finalize_ranking,
     tool_get_studies,
@@ -65,6 +66,8 @@ GOOGLE_MCP_TIMEOUT_SECONDS = 20.0
 LITERATURE_TOOL_FILTER = ["aggregate_search"]
 EVIDENCE_TOOL_FILTER = ["rank_results", "verify_results"]
 MAX_AGENT_SEARCH_ITERATIONS = 2
+DEFAULT_SEARCH_RESULTS_PER_SOURCE = 8
+MAX_AGENT_SEARCH_RESULTS_PER_SOURCE = 20
 SEARCH_GUIDANCE_TIMEOUT_SECONDS = 20.0
 REWIND_DECISION_TIMEOUT_SECONDS = 15.0
 FINAL_SYNTHESIS_TIMEOUT_SECONDS = 25.0
@@ -484,13 +487,6 @@ def _claude_text_from_blocks(blocks: list[Any]) -> str:
     return "\n".join(part for part in text_parts if part).strip()
 
 
-def _google_text_from_event(event: Any) -> str:
-    content = getattr(event, "content", None)
-    parts = getattr(content, "parts", None) or []
-    text_parts = [part.text for part in parts if getattr(part, "text", None)]
-    return "\n".join(part for part in text_parts if part).strip()
-
-
 def _message_content_text(message: Any) -> str:
     content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
     if isinstance(content, str):
@@ -645,7 +641,7 @@ class DeterministicRuntime(ResearchRuntime):
                 source,
                 source_query,
                 api_keys=request.api_keys,
-                max_results=6,
+                max_results=DEFAULT_SEARCH_RESULTS_PER_SOURCE,
                 offline_mode=request.offline_mode,
                 domain=plan.domain,
                 start_year=request.search_start_year,
@@ -699,7 +695,12 @@ class DeterministicRuntime(ResearchRuntime):
             message="Ranking studies with deterministic scoring",
             tool_name="evidence.rank_results",
         )
-        ranked = score_and_rank_results(all_studies, context="clinical" if plan.domain == "clinical" else "general")
+        ranked = score_and_rank_results(
+            all_studies,
+            context="clinical" if plan.domain == "clinical" else "general",
+            query=request.query,
+            query_payload=request.query_payload,
+        )
         yield RuntimeEventPayload(
             event_type=EventType.TOOL_RESULT,
             phase="searching",
@@ -1148,7 +1149,7 @@ class NativeSDKRuntime(DeterministicRuntime):
                 source,
                 source_query,
                 api_keys=request.api_keys,
-                max_results=6,
+                max_results=DEFAULT_SEARCH_RESULTS_PER_SOURCE,
                 offline_mode=request.offline_mode,
                 domain=plan.domain,
                 start_year=request.search_start_year,
@@ -1212,6 +1213,8 @@ class NativeSDKRuntime(DeterministicRuntime):
         ranked = score_and_rank_results(
             all_studies,
             context="clinical" if plan.domain == "clinical" else "general",
+            query=request.query,
+            query_payload=request.query_payload,
         )
         events.append(
             RuntimeEventPayload(
@@ -1759,7 +1762,10 @@ def _select_agentic_final_report(
 
 _SEARCH_SOURCES = {
     "search_pubmed": "PubMed",
+    "search_pmc": "PMC",
+    "search_europe_pmc": "Europe PMC",
     "search_openalex": "OpenAlex",
+    "search_crossref": "Crossref",
     "search_cochrane": "Cochrane",
     "search_semantic_scholar": "Semantic Scholar",
     "search_scopus": "Scopus",
@@ -1874,6 +1880,17 @@ def _build_openai_tools(request: RunRequest, bridge: AgenticEventBridge) -> list
         "type": "object",
         "properties": {},
     }, lambda _a: tool_fetch_fulltext(request, bridge)))
+
+    tools.append(_wrap("await_user_pdfs", {
+        "type": "object",
+        "properties": {
+            "ranks": {"type": "array", "items": {"type": "integer"}},
+        },
+    }, lambda a: tool_await_user_pdfs(
+        request,
+        bridge,
+        a.get("ranks", []),
+    )))
 
     tools.append(_wrap("parse_pdf", {
         "type": "object",
@@ -2102,6 +2119,15 @@ def _build_anthropic_mcp_servers(
         result = await tool_fetch_fulltext(request, bridge)
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
+    @tool("await_user_pdfs", TOOL_DESCRIPTIONS["await_user_pdfs"], {"ranks": list})
+    async def await_user_pdfs_tool(args: dict[str, Any]) -> dict[str, Any]:
+        result = await tool_await_user_pdfs(
+            request,
+            bridge,
+            args.get("ranks", []),
+        )
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
     @tool("parse_pdf", TOOL_DESCRIPTIONS["parse_pdf"], {"rank": int})
     async def parse_pdf_tool(args: dict[str, Any]) -> dict[str, Any]:
         result = await tool_parse_pdf(request, bridge, args.get("rank", 1))
@@ -2109,6 +2135,7 @@ def _build_anthropic_mcp_servers(
 
     fulltext_server = create_sdk_mcp_server("fulltext", tools=[
         fetch_fulltext_tool,
+        await_user_pdfs_tool,
         parse_pdf_tool,
     ])
 
@@ -2174,7 +2201,8 @@ class ClaudeSDKAnthropicRuntime(NativeSDKRuntime):
                 "mcp__evidence__get_studies", "mcp__evidence__finalize_ranking",
                 "mcp__evidence__verify_studies", "mcp__evidence__synthesize_report",
                 "mcp__evidence__submit_report",
-                "mcp__fulltext__fetch_fulltext", "mcp__fulltext__parse_pdf",
+                "mcp__fulltext__fetch_fulltext", "mcp__fulltext__await_user_pdfs",
+                "mcp__fulltext__parse_pdf",
                 "mcp__workspace__write_todos", "mcp__workspace__update_progress",
             ],
             hooks={
@@ -2340,268 +2368,6 @@ class ClaudeSDKAnthropicRuntime(NativeSDKRuntime):
 
 
 # ---------------------------------------------------------------------------
-# Google ADK — agentic runtime (using shared tools)
-# ---------------------------------------------------------------------------
-
-def _build_google_tools(request: RunRequest, bridge: AgenticEventBridge) -> list[Any]:
-    """Build plain async callables with type annotations for Google ADK."""
-
-    async def plan_search(query: str, query_type: str = "free") -> dict:
-        """Build a search plan. Returns keywords, databases, and source queries."""
-        return await tool_plan_search(request, bridge, query, query_type)
-
-    async def suggest_databases(query: str) -> dict:
-        """Suggest database coverage for a research query."""
-        return await tool_suggest_databases(request, bridge, query)
-
-    async def write_todos(items: list[str]) -> dict:
-        """Create a research TODO list to plan the workflow."""
-        return await tool_write_todos(request, bridge, items)
-
-    async def update_progress(phase: str, message: str) -> dict:
-        """Signal a phase transition or progress update to the user."""
-        return await tool_update_progress(request, bridge, phase, message)
-
-    async def search_pubmed(query: str, max_results: int = 8) -> dict:
-        """Search PubMed for medical literature."""
-        return await tool_search(request, bridge, "PubMed", query, max_results)
-
-    async def search_openalex(query: str, max_results: int = 8) -> dict:
-        """Search OpenAlex for open-access academic papers."""
-        return await tool_search(request, bridge, "OpenAlex", query, max_results)
-
-    async def search_cochrane(query: str, max_results: int = 8) -> dict:
-        """Search Cochrane for systematic reviews."""
-        return await tool_search(request, bridge, "Cochrane", query, max_results)
-
-    async def search_semantic_scholar(query: str, max_results: int = 8) -> dict:
-        """Search Semantic Scholar for academic papers."""
-        return await tool_search(request, bridge, "Semantic Scholar", query, max_results)
-
-    async def search_scopus(query: str, max_results: int = 8) -> dict:
-        """Search Scopus for academic citations."""
-        return await tool_search(request, bridge, "Scopus", query, max_results)
-
-    async def get_studies(context: str = "general") -> dict:
-        """Deduplicate and pre-score ALL collected studies. Returns full details for your review."""
-        return await tool_get_studies(request, bridge, context)
-
-    async def finalize_ranking(ranked_indices: list[int], rationale: str = "") -> dict:
-        """Submit your ranking after reviewing studies. Pass ordered indices (best first)."""
-        return await tool_finalize_ranking(request, bridge, ranked_indices, rationale)
-
-    async def verify_studies_fn() -> dict:
-        """Verify PMIDs of the ranked studies against PubMed."""
-        return await tool_verify_studies(request, bridge)
-
-    async def synthesize_report() -> dict:
-        """Returns structured evidence data for writing the final report."""
-        return await tool_synthesize_report(request, bridge)
-
-    async def submit_report(report_markdown: str) -> dict:
-        """Submit your completed research report (full markdown). MUST be called as the last step."""
-        return await tool_submit_report(request, bridge, report_markdown)
-
-    async def fetch_fulltext() -> dict:
-        """Look up free full-text PDFs via Unpaywall + PMC for Level I and II ranked studies."""
-        return await tool_fetch_fulltext(request, bridge)
-
-    async def parse_pdf(rank: int) -> dict:
-        """Download and parse a full-text PDF to markdown."""
-        return await tool_parse_pdf(request, bridge, rank)
-
-    # Google ADK requires the function name attribute; rename verify wrapper
-    verify_studies_fn.__name__ = "verify_studies"
-    verify_studies_fn.__qualname__ = "verify_studies"
-
-    return [
-        plan_search, suggest_databases, write_todos, update_progress,
-        search_pubmed, search_openalex, search_cochrane,
-        search_semantic_scholar, search_scopus,
-        get_studies, finalize_ranking, verify_studies_fn,
-        synthesize_report, submit_report, fetch_fulltext, parse_pdf,
-    ]
-
-
-class GoogleRuntime(NativeSDKRuntime):
-    provider = "google"
-    runtime_name = "Google ADK"
-    sdk_module = "google.adk"
-    runtime_engine = "google_adk"
-    planner_name = "ADK Planner"
-    search_agent_name = "ADK Search Workflow"
-    synthesis_agent_name = "ADK Synthesis Workflow"
-    verifier_name = "ADK Verification Workflow"
-    native_agent_name = "Google ADK Research Agent"
-
-    async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
-        if self._should_fallback(request):
-            async for event in DeterministicRuntime.stream_run(self, request):
-                yield event
-            return
-
-        from google.adk import Agent, Runner
-        from google.adk.sessions import InMemorySessionService
-        from google.genai import types as genai_types
-
-        bridge = AgenticEventBridge()
-        tools = _build_google_tools(request, bridge)
-
-        yield _agentic_run_started(self, request)
-        yield _agentic_agent_started(self.native_agent_name)
-
-        async def _before_tool(tool: Any, args: dict[str, Any], **kwargs: Any) -> None:
-            name = str(getattr(tool, "name", None) or getattr(tool, "__name__", "tool"))
-            await bridge.on_tool_start(name, args)
-
-        async def _after_tool(tool: Any, args: dict[str, Any], result: Any = None, **kwargs: Any) -> None:
-            name = str(getattr(tool, "name", None) or getattr(tool, "__name__", "tool"))
-            await bridge.on_tool_end(name, result)
-
-        # Set env vars for the entire agent run — they must persist until the task finishes
-        _env_ctx = _temporary_env(_provider_api_env(self.provider, request.api_keys))
-        _env_ctx.__enter__()
-
-        agent = Agent(
-            name="google_research_agent",
-            description=f"{self.runtime_name} medical literature research agent",
-            model=request.model,
-            instruction=agentic_system_prompt(request, self.runtime_name),
-            tools=tools,
-            before_tool_callback=_before_tool,  # type: ignore[arg-type]
-            after_tool_callback=_after_tool,  # type: ignore[arg-type]
-        )
-        session_service = InMemorySessionService()
-        runner = Runner(
-            agent=agent,
-            app_name="MedicalDeepResearch",
-            session_service=session_service,
-            auto_create_session=True,
-        )
-
-        agent_task = asyncio.create_task(
-            self._run_google_agent(runner, request, bridge, genai_types)
-        )
-
-        while True:
-            queued: RuntimeEventPayload | None = await bridge.queue.get()
-            if queued is None:
-                break
-            yield queued
-
-        try:
-            await agent_task
-        except Exception as exc:
-            _log.warning("Google ADK agentic task error: %s", exc)
-            bridge.set_error(exc)
-        finally:
-            _env_ctx.__exit__(None, None, None)
-
-        agent_text = bridge._result or ""
-        final_report, report_source = _select_agentic_final_report(
-            request, bridge, self.runtime_name, agent_text
-        )
-
-        # Translate if non-English
-        final_report, translate_events = await _maybe_translate_report(request, bridge, final_report)
-        for evt in translate_events:
-            yield evt
-
-        for event in _agentic_final_events(self, request, final_report, bridge, report_source=report_source):
-            yield event
-
-    async def _run_google_agent(
-        self,
-        runner: Any,
-        request: RunRequest,
-        bridge: AgenticEventBridge,
-        genai_types: Any,
-    ) -> None:
-        try:
-            final_text: str | None = None
-
-            async def _inner() -> None:
-                nonlocal final_text
-                async for event in runner.run_async(
-                    user_id=request.run_id,
-                    session_id=f"{request.run_id}-agentic",
-                    new_message=genai_types.UserContent(
-                        parts=[genai_types.Part(text=_agentic_user_prompt(request))]
-                    ),
-                ):
-                    if event.is_final_response():
-                        text = _google_text_from_event(event)
-                        if text:
-                            final_text = text
-
-            await asyncio.wait_for(_inner(), timeout=ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
-            if "submitted_report" in bridge._intermediate:
-                bridge._intermediate["agent_final_message"] = final_text
-            else:
-                bridge.set_result(final_text)
-        except asyncio.TimeoutError:
-            _log.warning("Google ADK agentic run timed out after %ss", ANTHROPIC_AGENTIC_TIMEOUT_SECONDS)
-            bridge.set_error(TimeoutError(f"Agent timed out after {ANTHROPIC_AGENTIC_TIMEOUT_SECONDS}s"))
-        except Exception as exc:
-            _log.warning("Google ADK agentic run failed: %s", exc)
-            bridge.set_error(exc)
-        finally:
-            await bridge.queue.put(None)
-
-    # Legacy structured checkpoint for NativeSDKRuntime fallback path
-    async def _run_structured_checkpoint(
-        self,
-        request: RunRequest,
-        *,
-        task_name: str,
-        instructions: str,
-        prompt: str,
-        output_model: type[TModel],
-    ) -> TModel:
-        from google.adk import Agent, Runner
-        from google.adk.sessions import InMemorySessionService
-        from google.genai import types as genai_types
-        output: TModel | None = None
-        output_key = f"{task_name}_output"
-
-        with _temporary_env(_provider_api_env(self.provider, request.api_keys)):
-            agent = Agent(
-                name=self._safe_agent_name(task_name),
-                description=f"{self.runtime_name} structured {task_name}",
-                model=request.model,
-                instruction=instructions,
-                tools=[],
-                output_schema=output_model,
-                output_key=output_key,
-            )
-            session_service = InMemorySessionService()
-            runner = Runner(
-                agent=agent,
-                app_name="MedicalDeepResearch",
-                session_service=session_service,
-                auto_create_session=True,
-            )
-            async for event in runner.run_async(
-                user_id=request.run_id,
-                session_id=f"{request.run_id}-{task_name}",
-                new_message=genai_types.UserContent(
-                    parts=[genai_types.Part(text=prompt)]
-                ),
-            ):
-                candidate = event.actions.state_delta.get(output_key)
-                if candidate is not None:
-                    output = _coerce_model_output(candidate, output_model)
-                elif event.is_final_response():
-                    text = _google_text_from_event(event)
-                    if text:
-                        output = _coerce_model_output(text, output_model)
-
-        if output is None:
-            raise RuntimeError(f"Google ADK did not return a structured {task_name} result.")
-        return output
-
-
-# ---------------------------------------------------------------------------
 # LangChain Local LLM — agentic runtime (Ollama / LM Studio)
 # ---------------------------------------------------------------------------
 
@@ -2749,10 +2515,11 @@ def _build_langchain_tools(
 
     def _make_search(tool_name: str, source: str) -> Any:
         @lc_tool(tool_name)
-        async def _search(query: str, max_results: int = 8) -> str:
+        async def _search(query: str, max_results: int = DEFAULT_SEARCH_RESULTS_PER_SOURCE) -> str:
             """Search a medical literature database."""
             await bridge.on_tool_start(tool_name, {"query": query})
-            result = await tool_search(request, bridge, source, query, min(max(int(max_results or 1), 1), 6))
+            requested = min(max(int(max_results or DEFAULT_SEARCH_RESULTS_PER_SOURCE), 1), MAX_AGENT_SEARCH_RESULTS_PER_SOURCE)
+            result = await tool_search(request, bridge, source, query, requested)
             await bridge.on_tool_end(tool_name, result)
             return _langchain_tool_json(tool_name, result)
         _search.description = TOOL_DESCRIPTIONS[tool_name]
@@ -2818,6 +2585,14 @@ def _build_langchain_tools(
         return _langchain_tool_json("fetch_fulltext", result)
 
     @lc_tool
+    async def await_user_pdfs(ranks: list[int]) -> str:
+        """Pause until the user uploads PDFs and clicks Continue, or clicks Skip."""
+        await bridge.on_tool_start("await_user_pdfs", {"ranks": ranks})
+        result = await tool_await_user_pdfs(request, bridge, ranks)
+        await bridge.on_tool_end("await_user_pdfs", result)
+        return _langchain_tool_json("await_user_pdfs", result)
+
+    @lc_tool
     async def parse_pdf(rank: int) -> str:
         """Download and parse a full-text PDF to markdown."""
         await bridge.on_tool_start("parse_pdf", {"rank": rank})
@@ -2829,7 +2604,7 @@ def _build_langchain_tools(
         plan_search, suggest_databases, write_todos, update_progress,
         *search_tools,
         get_studies, finalize_ranking, verify_studies, synthesize_report, submit_report,
-        fetch_fulltext, parse_pdf,
+        fetch_fulltext, await_user_pdfs, parse_pdf,
     ]
 
 
@@ -3172,7 +2947,7 @@ class LangChainLocalRuntime(NativeSDKRuntime):
                 )
                 final_text = _langchain_final_text(result)
 
-            await asyncio.wait_for(_inner(), timeout=LOCAL_AGENTIC_TIMEOUT_SECONDS)
+            await _inner()
             if "submitted_report" in bridge._intermediate:
                 bridge._intermediate["agent_final_message"] = final_text
             else:
@@ -3238,6 +3013,38 @@ class DeepSeekRuntime(LangChainLocalRuntime):
             reasoning_effort=deepseek_reasoning_effort(),
             extra_body=deepseek_thinking_body(),
             disabled_params={"parallel_tool_calls": None},
+        )
+
+
+class GoogleRuntime(LangChainLocalRuntime):
+    provider = "google"
+    runtime_name = "Google LangChain Agent"
+    sdk_module = "langchain_google_genai"
+    runtime_engine = "langchain_google_genai"
+    planner_name = "Gemini Planner"
+    search_agent_name = "Gemini Search Agent"
+    synthesis_agent_name = "Gemini Synthesis Agent"
+    verifier_name = "Gemini Verification Agent"
+    native_agent_name = "Gemini Research Agent"
+
+    @property
+    def sdk_available(self) -> bool:
+        required = ("langchain_core", "langchain_google_genai", "langgraph")
+        return all(importlib.util.find_spec(module) is not None for module in required)
+
+    def _should_fallback(self, request: RunRequest) -> bool:
+        return provider_fallback_reason(self, request) is not None
+
+    def _resolve_chat_model(self, request: RunRequest) -> Any:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(
+            model=normalize_model_id("google", request.model) or "gemini-2.5-flash",
+            api_key=request.api_keys.get("google")
+            or request.api_keys.get("gemini")
+            or os.environ.get("GOOGLE_API_KEY"),
+            temperature=0.1,
+            request_timeout=60.0,
         )
 
 

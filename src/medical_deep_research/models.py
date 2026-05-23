@@ -25,6 +25,7 @@ class QueryType(StrEnum):
 class ResearchStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    WAITING_FOR_PDFS = "waiting_for_pdfs"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -51,8 +52,10 @@ class ArtifactType(StrEnum):
     EVIDENCE_SUMMARY = "evidence_summary"
     RANKED_RESULTS = "ranked_results"
     VERIFICATION_REPORT = "verification_report"
+    FULLTEXT_STATUS = "fulltext_status"
     FINAL_REPORT = "final_report"
     DEBUG_TRACE = "debug_trace"
+    FULLTEXT_UPLOAD = "fulltext_upload"
 
 
 class ApprovalStatus(StrEnum):
@@ -175,6 +178,7 @@ class RunRequest(SQLModel):
     offline_mode: bool = False
     recent_years_lookback: int = Field(default=5)
     scopus_view: str = Field(default="STANDARD")
+    database_path: str | None = None
 
     @property
     def search_start_year(self) -> int:

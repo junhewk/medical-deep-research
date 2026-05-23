@@ -279,7 +279,10 @@ class ResearchService:
     def interrupt_run(self, run_id: str) -> None:
         with self.database.session() as session:
             run = session.get(ResearchRun, run_id)
-            if not run or run.status != ResearchStatus.RUNNING.value:
+            if not run or run.status not in {
+                ResearchStatus.RUNNING.value,
+                ResearchStatus.WAITING_FOR_PDFS.value,
+            }:
                 return
             run.status = ResearchStatus.INTERRUPTED.value
             run.phase = "interrupted"
@@ -309,13 +312,20 @@ class ResearchService:
         self._notify_ui(run_id, "run_cancelled")
 
     def resolve_approval(self, approval_id: str, approved: bool) -> None:
+        run_id: str | None = None
         with self.database.session() as session:
             approval = session.get(ApprovalRequest, approval_id)
             if not approval:
                 return
+            run_id = approval.run_id
             approval.status = ApprovalStatus.APPROVED.value if approved else ApprovalStatus.REJECTED.value
             approval.resolved_at = utcnow()
+            run = session.get(ResearchRun, approval.run_id)
+            if run and run.status == ResearchStatus.WAITING_FOR_PDFS.value:
+                run.status = ResearchStatus.RUNNING.value
             session.commit()
+        if run_id:
+            self._notify_ui(run_id, "approval_resolved")
 
     async def _execute_run(self, run_id: str) -> None:
         run = self.get_run(run_id)
@@ -345,6 +355,7 @@ class ResearchService:
             offline_mode=self.database.settings.offline_mode,
             recent_years_lookback=self.get_recent_years_lookback(),
             scopus_view=self.get_scopus_view(),
+            database_path=str(self.database.settings.db_path),
         )
 
         with self.database.session() as session:
@@ -392,6 +403,14 @@ class ResearchService:
             if event.event_type == EventType.RUN_FAILED:
                 run.status = ResearchStatus.FAILED.value
                 run.error_message = event.message
+            elif (
+                event.event_type == EventType.APPROVAL_REQUESTED
+                and isinstance(event.extra, dict)
+                and event.extra.get("type") == "pdf_upload"
+            ):
+                run.status = ResearchStatus.WAITING_FOR_PDFS.value
+            elif run.status == ResearchStatus.WAITING_FOR_PDFS.value:
+                run.status = ResearchStatus.RUNNING.value
 
             session.add(
                 RuntimeEvent(

@@ -22,9 +22,9 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 | **Architecture** | Agentic loop — LLM calls 16 tools autonomously via shared-state bridge |
 | **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
-| **Search** | PubMed, Cochrane, OpenAlex, Semantic Scholar, Scopus |
+| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, Semantic Scholar, Scopus |
 | **Ranking** | Agent-driven: LLM reviews abstracts and ranks by relevance and evidence quality |
-| **Full-text** | Unpaywall + PubMed Central OA lookup, PDF parsing |
+| **Full-text** | Unpaywall + PubMed Central OA lookup, Java-free PDF parsing, user PDF upload checkpoint |
 | **Evidence** | Level I–V classification, PMID verification against PubMed |
 | **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
 | **i18n** | English / Korean UI, LLM-powered report translation |
@@ -68,25 +68,25 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.9.2 — Provider Route Reliability
+### v2.9.3 — Full-Text Workflow Reliability
 
-- DeepSeek model display names are normalized to API model IDs, and DeepSeek thinking payloads are disabled by default to avoid OpenAI-compatible `reasoning_content` replay failures during tool-call loops.
-- Local LLM routes normalize Ollama, LM Studio, and llama-server base URLs to the OpenAI-compatible `/v1` API shape.
-- Local agent runs recover cleanly after rejected final-report submissions instead of continuing until the 600-second app timeout.
-- Research settings now live inside **New Research** instead of a separate tab.
+- Search coverage now includes PMC, Europe PMC, and Crossref while excluding preprint-only sources for medical deep research.
+- Full-text gathering validates that discovered PDFs are both downloadable and parseable before counting them as available.
+- User PDF uploads are requested in the run trace when publisher PDFs are missing or cannot be parsed.
+- Parsed full text from downloaded PDFs and user uploads is persisted in the run database so later agent tool calls cannot lose it.
 
 ## Quick Start (from source)
 
 ```bash
-# Install with all provider extras
-uv sync --all-extras
+# Install with the standard desktop/provider extras
+uv sync --extra anthropic --extra openai --extra deepseek --extra google --extra langchain --extra pdf
 
 # Or pick your provider
 uv sync --extra anthropic   # Claude via LangChain/Anthropic
 uv sync --extra claude-sdk   # Optional legacy Claude SDK mode
 uv sync --extra openai      # OpenAI Agents SDK
 uv sync --extra deepseek    # DeepSeek via OpenAI-compatible Chat API
-uv sync --extra google      # Google ADK
+uv sync --extra google      # Gemini via LangChain/Google GenAI
 uv sync --extra langchain   # Local LLMs (Ollama, LM Studio, llama-server)
 uv sync --extra pdf         # Full-text PDF parsing
 
@@ -159,7 +159,7 @@ The system prompt adapts to the query domain:
 | Anthropic | `langchain-anthropic` | claude-haiku-4-5 | Yes |
 | OpenAI | `openai-agents` | gpt-5-mini | Yes |
 | DeepSeek | `langchain-openai` | deepseek-v4-pro | Yes |
-| Google | `google-adk` | gemini-2.5-flash | Yes |
+| Google | `langchain-google-genai` | gemini-2.5-flash | Yes |
 | Local | `langchain` + `langgraph` | qwen3.5-27b | Yes |
 
 All providers fall back to a deterministic pipeline if SDK/credentials are unavailable. Anthropic also falls back if the SDK route starts but never reaches a search tool.
@@ -182,7 +182,7 @@ After ranking, the agent retrieves open-access full-text for Level I & II studie
 
 1. **Unpaywall** — parallel lookup for ranked studies with DOIs
 2. **PubMed Central** — batch PMID→PMCID conversion, OA service
-3. **PDF parsing** — `markitdown[pdf]` (primary, no Java required) with `opendataloader-pdf` as a fallback
+3. **PDF parsing** — `pdfminer.six` text extraction, no Java runtime required
 
 ## Architecture
 
@@ -227,7 +227,7 @@ scripts/
 ## Development
 
 ```bash
-uv sync --all-extras  # includes dev tools
+uv sync --extra anthropic --extra openai --extra deepseek --extra google --extra langchain --extra pdf --extra dev
 uv run ruff check src/
 uv run python -m unittest discover -s tests -v
 
@@ -244,8 +244,8 @@ MIT License — see [LICENSE](LICENSE)
 - Inspired by [Local Deep Research](https://github.com/LearningCircuit/local-deep-research) by LearningCircuit
 - PubMed/MeSH: [NCBI/NLM](https://www.ncbi.nlm.nih.gov/)
 - Open access: [Unpaywall](https://unpaywall.org/), [PubMed Central](https://pmc.ncbi.nlm.nih.gov/)
-- PDF parsing: [markitdown](https://github.com/microsoft/markitdown), [opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf)
-- Agent SDKs: [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code/sdk), [OpenAI Agents](https://openai.github.io/openai-agents-python/), [Google ADK](https://google.github.io/adk-docs/), [LangChain](https://python.langchain.com/)
+- PDF parsing: [pdfminer.six](https://github.com/pdfminer/pdfminer.six)
+- Agent SDKs: [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code/sdk), [OpenAI Agents](https://openai.github.io/openai-agents-python/), [Google GenAI](https://googleapis.github.io/python-genai/), [LangChain](https://python.langchain.com/)
 - UI framework: [PySide6 (Qt for Python)](https://doc.qt.io/qtforpython-6/), [qasync](https://github.com/CabbageDevelopment/qasync)
 - UI font: [Pretendard](https://github.com/orioncactus/pretendard), bundled under its included license
 

@@ -34,6 +34,7 @@ from ..theme import (
 )
 from ..widgets.badge import BadgePill, EvidenceBadge
 from ..widgets.markdown_view import MarkdownView
+from ...pdf_text import extract_pdf_text
 
 
 _TOOL_PROMPTS = {
@@ -403,26 +404,12 @@ class StudiesTab(QWidget):
         async def _do() -> None:
             text = ""
             tmp_in = None
-            tmp_dir = None
             try:
                 with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as fp:
                     fp.write(data)
                     tmp_in = fp.name
                 try:
-                    import glob
-                    import opendataloader_pdf  # type: ignore
-                    tmp_dir = tempfile.mkdtemp()
-                    await asyncio.to_thread(
-                        opendataloader_pdf.convert,
-                        input_path=[tmp_in],
-                        output_dir=tmp_dir,
-                        format="markdown",
-                    )
-                    md_files = glob.glob(f"{tmp_dir}/**/*.md", recursive=True)
-                    if md_files:
-                        text = Path(md_files[0]).read_text(encoding="utf-8")
-                except ImportError:
-                    text = "[opendataloader-pdf not installed]"
+                    text = await asyncio.to_thread(extract_pdf_text, tmp_in)
                 except Exception as exc:  # pragma: no cover - depends on optional lib
                     text = f"[PDF parse error: {exc}]"
             finally:

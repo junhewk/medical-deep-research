@@ -19,13 +19,13 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 
 | Feature | Description |
 |---------|-------------|
-| **Architecture** | Agentic loop — LLM calls 16 tools autonomously via shared-state bridge |
+| **Architecture** | Agentic loop — LLM calls literature, evidence, full-text, and workspace tools via shared-state bridge |
 | **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
-| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, Semantic Scholar, Scopus |
-| **Ranking** | Agent-driven: LLM reviews abstracts and ranks by relevance and evidence quality |
-| **Full-text** | Unpaywall + PubMed Central OA lookup, Java-free PDF parsing, user PDF upload checkpoint |
-| **Evidence** | Level I–V classification, PMID verification against PubMed |
+| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, ClinicalTrials.gov, Semantic Scholar, Scopus, citation snowballing |
+| **Ranking** | Agent-driven: PICO/PCC screening, EBM ranking, and GRADE-style appraisal |
+| **Full-text** | Europe PMC XML + Unpaywall + PubMed Central OA lookup, Java-free PDF parsing, user PDF upload checkpoint |
+| **Evidence** | Level I–V classification, GRADE certainty notes, PMID verification against PubMed |
 | **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
 | **i18n** | English / Korean UI, LLM-powered report translation |
 | **Desktop** | Native PySide6 (Qt) window, PyInstaller packaging, push-based UI, splitter-based layout |
@@ -68,12 +68,13 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.9.3 — Full-Text Workflow Reliability
+### v2.9.4 — Screened Evidence Workflow
 
-- Search coverage now includes PMC, Europe PMC, and Crossref while excluding preprint-only sources for medical deep research.
-- Full-text gathering validates that discovered PDFs are both downloadable and parseable before counting them as available.
-- User PDF uploads are requested in the run trace when publisher PDFs are missing or cannot be parsed.
-- Parsed full text from downloaded PDFs and user uploads is persisted in the run database so later agent tool calls cannot lose it.
+- Run progress is now monotonic across repeated phases and rewinds, with pass labels in the trace and 100% reserved for completion.
+- The agent workflow now includes explicit `screen_studies` and `appraise_evidence` checkpoints before report writing.
+- Citation snowballing can expand ranked studies through Europe PMC references/citations and OpenAlex fallbacks, then merge and re-screen candidates.
+- Clinical questions now search ClinicalTrials.gov for registered, ongoing, and completed-but-unpublished trials to surface publication-bias signals.
+- Full-text retrieval tries Europe PMC JATS XML before PDF routes and keeps user PDF checkpoints connected to downstream parsing and appraisal.
 
 ## Quick Start (from source)
 
@@ -132,15 +133,18 @@ The agent autonomously executes a multi-step research workflow:
 
 ```
  1. plan_search        → Build search strategy (keywords, databases, queries)
- 2. search_*           → Search 3–5 databases (PubMed, Cochrane, OpenAlex, etc.)
+ 2. search_*           → Search 3–5 databases plus ClinicalTrials.gov for clinical questions
  3. get_studies        → Deduplicate and pre-score all collected studies
- 4. finalize_ranking   → Agent reviews abstracts and ranks by EBM quality
- 5. fetch_fulltext     → Unpaywall + PMC lookup for open-access PDFs
- 6. parse_pdf          → Download and parse full-text PDFs to markdown
- 7. verify_studies     → Validate PMIDs against PubMed
- 8. synthesize_report  → Collect structured evidence data
- 9. submit_report      → Agent writes and submits the final synthesis report
-10. [translate]        → If language is Korean, translate via LLM (English preserved as artifact)
+ 4. screen_studies     → Apply inclusion/exclusion decisions with reasons
+ 5. finalize_ranking   → Agent ranks included studies by relevance and EBM quality
+ 6. [snowball]         → Optionally fetch references/citations and re-screen candidates
+ 7. fetch_fulltext     → Europe PMC XML + Unpaywall + PMC lookup for open-access full text
+ 8. parse_pdf          → Download, upload, or parse full-text PDFs to markdown
+ 9. appraise_evidence  → Record GRADE certainty and rationale per major finding
+10. verify_studies     → Validate PMIDs against PubMed
+11. synthesize_report  → Collect structured evidence data
+12. submit_report      → Agent writes and submits the final synthesis report
+13. [translate]        → If language is Korean, translate via LLM (English preserved as artifact)
 ```
 
 The LLM drives the workflow — it decides what to search, reviews evidence quality, ranks studies using medical knowledge, and writes the synthesis. Tools use a **shared-state bridge** so the agent never passes large JSON blobs as arguments.
@@ -169,20 +173,27 @@ All providers fall back to a deterministic pipeline if SDK/credentials are unava
 | Database | Access | Notes |
 |----------|--------|-------|
 | PubMed | Free (NCBI key optional) | EBM publication type boost, relevance sort |
+| PMC | Free | PubMed Central open-access article discovery |
+| Europe PMC | Free | Broader biomedical coverage, full-text metadata, citation links |
+| Crossref | Free | DOI metadata and publisher coverage |
 | Cochrane | Free (via PubMed) | Systematic reviews only |
-| OpenAlex | Free | Broad academic coverage |
+| OpenAlex | Free | Broad academic coverage and citation fallback |
+| ClinicalTrials.gov | Free | Registered/ongoing trials, phase/status, posted-results flag |
 | Semantic Scholar | API key required | Medicine field filter; skipped without key |
 | Scopus | API key required | Citation counts, broader coverage; STANDARD/COMPLETE view toggle |
+| Snowballing | Free | Europe PMC references/citations with OpenAlex DOI fallback |
 
 The publication-year window is configurable per-app in **New Research** (default: last 5 years).
 
 ### Full-text Pipeline
 
-After ranking, the agent retrieves open-access full-text for Level I & II studies:
+After ranking, the agent retrieves open-access full text for ranked studies:
 
-1. **Unpaywall** — parallel lookup for ranked studies with DOIs
-2. **PubMed Central** — batch PMID→PMCID conversion, OA service
-3. **PDF parsing** — `pdfminer.six` text extraction, no Java runtime required
+1. **Europe PMC XML** — JATS full text for open-access PMC articles when available
+2. **Unpaywall** — parallel lookup for ranked studies with DOIs
+3. **PubMed Central** — batch PMID→PMCID conversion, OA service, and OA archives
+4. **User PDF checkpoint** — prompts for missing publisher PDFs and records uploaded ranks
+5. **PDF parsing** — `pdfminer.six` text extraction, no Java runtime required
 
 ## Architecture
 
@@ -195,13 +206,16 @@ src/medical_deep_research/
 ├── config.py               # Settings (pydantic-settings)
 ├── models.py               # SQLModel data models + RunRequest
 ├── persistence.py          # SQLite database layer
+├── progress.py             # Monotonic progress and phase pass tracking
 ├── service.py              # Run orchestration + push-based UI updates
 ├── runtime.py              # Provider runtimes (Anthropic, OpenAI, Google, Local)
 ├── agentic_tools.py        # Shared tool logic + system prompts + translation
 ├── research/
+│   ├── fulltext.py         # Europe PMC JATS XML full-text retrieval
 │   ├── planning.py         # Query planning, keyword extraction, domain classification
-│   ├── search.py           # PubMed, OpenAlex, Cochrane, Semantic Scholar, Scopus
+│   ├── search.py           # PubMed, PMC, Europe PMC, Crossref, ClinicalTrials.gov, OpenAlex, Scopus
 │   ├── scoring.py          # Evidence level scoring, composite ranking
+│   ├── snowball.py         # Europe PMC/OpenAlex citation-graph traversal
 │   ├── verification.py     # PMID verification via NCBI
 │   ├── reporting.py        # Fallback markdown report rendering
 │   └── models.py           # Research data models

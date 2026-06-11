@@ -258,6 +258,12 @@ def _merge_duplicate(target: EvidenceStudy, incoming: EvidenceStudy) -> Evidence
     merged.is_landmark_journal = target.is_landmark_journal or incoming.is_landmark_journal
     if len(incoming.authors) > len(merged.authors):
         merged.authors = incoming.authors
+    if not merged.trial_status and incoming.trial_status:
+        merged.trial_status = incoming.trial_status
+    if not merged.trial_phase and incoming.trial_phase:
+        merged.trial_phase = incoming.trial_phase
+    if merged.has_published_results is None and incoming.has_published_results is not None:
+        merged.has_published_results = incoming.has_published_results
     return merged
 
 

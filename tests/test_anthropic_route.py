@@ -199,6 +199,7 @@ outcome alignment. The included evidence was ranked by relevance, evidence level
 ## Discussion
 The evidence should be interpreted cautiously because the available ranked set is small. Still, the study design
 is relevant to the clinical question and supports further focused comparison of ESPB with PCA-based strategies [1].
+The overall GRADE certainty of evidence for the pain outcome is Low, rated down for imprecision and risk of bias [1].
 
 ## Conclusions
 ESPB may be a useful analgesic adjunct after cardiac surgery, but conclusions should remain proportional to the
@@ -326,7 +327,15 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         ):
             selected_runtime = runtime or AlwaysAvailableAnthropicRuntime()
             selected_request = request or make_request()
-            return [event async for event in selected_runtime.stream_run(selected_request)]
+            events = [event async for event in selected_runtime.stream_run(selected_request)]
+        previous = 0
+        for event in events:
+            self.assertGreaterEqual(event.progress, previous, "progress must not decrease")
+            previous = event.progress
+        completed = [event for event in events if event.event_type == EventType.RUN_COMPLETED]
+        if completed:
+            self.assertEqual(completed[-1].progress, 100)
+        return events
 
     async def test_no_tool_calls_runs_deterministic_fallback(self) -> None:
         async def no_op_agent(_tools: list[object], _inputs: dict[str, object]) -> object:

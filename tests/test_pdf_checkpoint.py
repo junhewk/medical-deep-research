@@ -230,6 +230,80 @@ class PdfCheckpointTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 database.close()
 
+    async def test_europe_pmc_xml_short_circuits_pdf_chain(self) -> None:
+        async def boom_download(_rank: int, _urls: list[str]) -> tuple[bytes | None, str]:
+            raise AssertionError("PDF download must not run when XML succeeds")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
+            database = AppDatabase(settings)
+            try:
+                database.create_all()
+                with database.session() as session:
+                    session.add(
+                        ResearchRun(
+                            id="run-xml-first",
+                            query="diabetes education randomized trial",
+                            query_type="free",
+                            provider="openai",
+                            model="gpt-5-mini",
+                            runtime_name="test",
+                        )
+                    )
+                    session.commit()
+
+                bridge = AgenticEventBridge()
+                bridge.ranked_studies = [
+                    ScoredStudy(
+                        source="pubmed",
+                        source_id="123",
+                        title="Diabetes education randomized trial",
+                        journal="Test Journal",
+                        publication_year="2025",
+                        doi="10.1000/test",
+                        pmcid="PMC9999999",
+                        evidence_level="Level II",
+                        citation_count=5,
+                        sources=["pubmed"],
+                        evidence_level_score=0.8,
+                        citation_score=0.2,
+                        recency_score=0.9,
+                        relevance_score=0.8,
+                        composite_score=0.7,
+                        reference_number=1,
+                    )
+                ]
+                request = RunRequest(
+                    run_id="run-xml-first",
+                    query="diabetes education randomized trial",
+                    query_type="free",
+                    mode="detailed",
+                    provider="openai",
+                    model="gpt-5-mini",
+                    database_path=str(settings.db_path),
+                )
+
+                async def fake_xml(_pmcid: str) -> str:
+                    return "Europe PMC full text body"
+
+                with (
+                    patch("medical_deep_research.agentic_tools.fetch_europe_pmc_fulltext_xml", new=fake_xml),
+                    patch("medical_deep_research.agentic_tools._download_pdf_bytes", new=boom_download),
+                ):
+                    result = await tool_fetch_fulltext(request, bridge, allow_user_checkpoint=False)
+
+                self.assertEqual(result["europe_pmc_xml_hits"], 1)
+                self.assertEqual(result["pdfs_found"], 1)
+                self.assertEqual(result["missing_pdf_ranks"], [])
+
+                fresh_bridge = AgenticEventBridge()
+                fresh_bridge.ranked_studies = bridge.ranked_studies
+                parsed = await tool_parse_pdf(request, fresh_bridge, 1, allow_user_checkpoint=False)
+                self.assertEqual(parsed["source"], "europe_pmc_xml")
+                self.assertEqual(parsed["fulltext"], "Europe PMC full text body")
+            finally:
+                database.close()
+
     async def test_parse_pdf_download_failure_requests_user_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")

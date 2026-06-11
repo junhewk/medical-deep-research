@@ -35,6 +35,10 @@ class EvidenceStudy(BaseModel):
     mesh_terms: list[str] = Field(default_factory=list)
     is_landmark_journal: bool = False
     sources: list[str] = Field(default_factory=list)
+    # Registry metadata (ClinicalTrials.gov records only)
+    trial_status: str | None = None
+    trial_phase: str | None = None
+    has_published_results: bool | None = None
 
 
 class SearchProviderResult(BaseModel):

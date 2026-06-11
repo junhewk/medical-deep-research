@@ -15,7 +15,9 @@ OPENALEX_BASE_URL = "https://api.openalex.org/works"
 SCOPUS_BASE_URL = "https://api.elsevier.com/content/search/scopus"
 SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 EUROPE_PMC_BASE_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+EUROPE_PMC_REST_BASE_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 CROSSREF_BASE_URL = "https://api.crossref.org/works"
+CLINICALTRIALS_BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 SEMANTIC_SCHOLAR_FIELDS = (
     "paperId,title,abstract,year,authors,venue,citationCount,externalIds,publicationTypes,journal"
 )
@@ -597,20 +599,76 @@ async def search_pmc(
         return _network_error("PMC", query, exc)
 
 
-async def search_europe_pmc(
+def europe_pmc_study_from_entry(entry: dict, *, preprint: bool = False) -> EvidenceStudy:
+    """Map one Europe PMC REST result entry (search or citation network) to a study."""
+    title = _clean_text(entry.get("title")) or "Untitled"
+    source_id = entry.get("pmid") or entry.get("pmcid") or entry.get("id") or title
+    authors = [
+        part.strip()
+        for part in str(entry.get("authorString") or "").split(",")
+        if part.strip()
+    ]
+    publication_types = [
+        item.strip()
+        for item in str(entry.get("pubType") or "").split(";")
+        if item.strip()
+    ]
+    pmcid = entry.get("pmcid")
+    if pmcid and not str(pmcid).upper().startswith("PMC"):
+        pmcid = f"PMC{pmcid}"
+    url = f"https://europepmc.org/article/MED/{source_id}"
+    fulltext_urls = entry.get("fullTextUrlList")
+    if isinstance(fulltext_urls, dict):
+        url_items = fulltext_urls.get("fullTextUrl")
+        if isinstance(url_items, list) and url_items:
+            first_url = url_items[0]
+            if isinstance(first_url, dict) and first_url.get("url"):
+                url = str(first_url["url"])
+    abstract = _clean_text(entry.get("abstractText"))
+    journal = _clean_text(entry.get("journalTitle"))
+    if preprint:
+        abstract = f"[PREPRINT — not peer reviewed] {abstract}" if abstract else "[PREPRINT — not peer reviewed]"
+        journal = journal or "Preprint server (not peer reviewed)"
+        publication_types = sorted(set(publication_types) | {"preprint"})
+    source = "preprints" if preprint else "europe_pmc"
+    return EvidenceStudy(
+        source=source,
+        source_id=str(source_id),
+        title=title,
+        abstract=abstract,
+        authors=authors,
+        journal=journal or "Europe PMC",
+        publication_date=entry.get("firstPublicationDate"),
+        publication_year=str(entry.get("pubYear")) if entry.get("pubYear") else None,
+        doi=_normalize_doi(entry.get("doi")),
+        pmid=entry.get("pmid"),
+        pmcid=pmcid,
+        citation_count=int(entry.get("citedByCount") or 0),
+        url=url,
+        evidence_level="Level V" if preprint else infer_evidence_level(title, publication_types),
+        publication_types=publication_types,
+        is_landmark_journal=False if preprint else is_landmark_journal(entry.get("journalTitle")),
+        sources=[source],
+    )
+
+
+async def _search_europe_pmc_impl(
     query: str,
-    max_results: int = 8,
+    max_results: int,
     *,
-    offline_mode: bool = False,
-    start_year: int | None = None,
+    offline_mode: bool,
+    start_year: int | None,
+    preprints: bool,
 ) -> SearchProviderResult:
+    source_name = "Preprints" if preprints else "Europe PMC"
     if offline_mode:
-        return _offline_result("Europe PMC", query)
+        return _offline_result(source_name, query)
 
     start_year_value, end_year_value = _resolve_year_window(start_year)
+    preprint_clause = "AND SRC:PPR" if preprints else "NOT SRC:PPR"
     europe_query = (
         f"({query}) AND FIRST_PDATE:[{start_year_value}-01-01 TO {end_year_value}-12-31] "
-        "NOT SRC:PPR"
+        f"{preprint_clause}"
     )
     params = {
         "query": europe_query,
@@ -623,55 +681,47 @@ async def search_europe_pmc(
             response = await client.get(EUROPE_PMC_BASE_URL, params=params)
             response.raise_for_status()
         results = response.json().get("resultList", {}).get("result", [])
-        studies: list[EvidenceStudy] = []
-        for entry in results:
-            title = _clean_text(entry.get("title")) or "Untitled"
-            source_id = entry.get("pmid") or entry.get("pmcid") or entry.get("id") or title
-            authors = [
-                part.strip()
-                for part in str(entry.get("authorString") or "").split(",")
-                if part.strip()
-            ]
-            publication_types = [
-                item.strip()
-                for item in str(entry.get("pubType") or "").split(";")
-                if item.strip()
-            ]
-            pmcid = entry.get("pmcid")
-            if pmcid and not str(pmcid).upper().startswith("PMC"):
-                pmcid = f"PMC{pmcid}"
-            url = f"https://europepmc.org/article/MED/{source_id}"
-            fulltext_urls = entry.get("fullTextUrlList")
-            if isinstance(fulltext_urls, dict):
-                url_items = fulltext_urls.get("fullTextUrl")
-                if isinstance(url_items, list) and url_items:
-                    first_url = url_items[0]
-                    if isinstance(first_url, dict) and first_url.get("url"):
-                        url = str(first_url["url"])
-            studies.append(
-                EvidenceStudy(
-                    source="europe_pmc",
-                    source_id=str(source_id),
-                    title=title,
-                    abstract=_clean_text(entry.get("abstractText")),
-                    authors=authors,
-                    journal=_clean_text(entry.get("journalTitle")) or "Europe PMC",
-                    publication_date=entry.get("firstPublicationDate"),
-                    publication_year=str(entry.get("pubYear")) if entry.get("pubYear") else None,
-                    doi=_normalize_doi(entry.get("doi")),
-                    pmid=entry.get("pmid"),
-                    pmcid=pmcid,
-                    citation_count=int(entry.get("citedByCount") or 0),
-                    url=url,
-                    evidence_level=infer_evidence_level(title, publication_types),
-                    publication_types=publication_types,
-                    is_landmark_journal=is_landmark_journal(entry.get("journalTitle")),
-                    sources=["europe_pmc"],
-                )
-            )
-        return SearchProviderResult(source="Europe PMC", query=query, studies=studies)
+        studies = [europe_pmc_study_from_entry(entry, preprint=preprints) for entry in results]
+        return SearchProviderResult(source=source_name, query=query, studies=studies)
     except Exception as exc:
-        return _network_error("Europe PMC", query, exc)
+        return _network_error(source_name, query, exc)
+
+
+async def search_europe_pmc(
+    query: str,
+    max_results: int = 8,
+    *,
+    offline_mode: bool = False,
+    start_year: int | None = None,
+) -> SearchProviderResult:
+    return await _search_europe_pmc_impl(
+        query,
+        max_results,
+        offline_mode=offline_mode,
+        start_year=start_year,
+        preprints=False,
+    )
+
+
+async def search_preprints(
+    query: str,
+    max_results: int = 8,
+    *,
+    offline_mode: bool = False,
+    start_year: int | None = None,
+) -> SearchProviderResult:
+    """Search preprint servers (medRxiv/bioRxiv/etc.) via Europe PMC SRC:PPR.
+
+    Results are explicitly labeled as preprints and forced to Level V so they
+    can never outrank peer-reviewed evidence.
+    """
+    return await _search_europe_pmc_impl(
+        query,
+        max_results,
+        offline_mode=offline_mode,
+        start_year=start_year,
+        preprints=True,
+    )
 
 
 async def search_crossref(
@@ -824,6 +874,118 @@ async def search_scopus(
         )
 
 
+_CLINICALTRIALS_FIELDS = ",".join(
+    [
+        "NCTId",
+        "BriefTitle",
+        "OverallStatus",
+        "Phase",
+        "StudyType",
+        "DesignAllocation",
+        "BriefSummary",
+        "StartDate",
+        "PrimaryCompletionDate",
+        "LeadSponsorName",
+        "Condition",
+        "InterventionName",
+        "ResultsFirstPostDate",
+        "EnrollmentCount",
+    ]
+)
+
+
+async def search_clinical_trials(
+    query: str,
+    max_results: int = 8,
+    *,
+    offline_mode: bool = False,
+    start_year: int | None = None,
+) -> SearchProviderResult:
+    """Search the ClinicalTrials.gov registry (REST API v2, no key required).
+
+    Registry records are not publications: they surface ongoing/completed
+    trials, and registered-but-unpublished trials are a publication-bias
+    signal for the report's Discussion section.
+    """
+    if offline_mode:
+        return _offline_result("ClinicalTrials.gov", query)
+
+    start_year_value, _ = _resolve_year_window(start_year)
+    params = {
+        "query.term": query,
+        "pageSize": str(max(1, min(max_results, 100))),
+        "fields": _CLINICALTRIALS_FIELDS,
+        "filter.advanced": f"AREA[StartDate]RANGE[{start_year_value}-01-01,MAX]",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
+            response = await client.get(CLINICALTRIALS_BASE_URL, params=params)
+            response.raise_for_status()
+        entries = response.json().get("studies", [])
+        studies: list[EvidenceStudy] = []
+        for entry in entries:
+            protocol = entry.get("protocolSection") or {}
+            identification = protocol.get("identificationModule") or {}
+            status_module = protocol.get("statusModule") or {}
+            design = protocol.get("designModule") or {}
+            description = protocol.get("descriptionModule") or {}
+            sponsor = ((protocol.get("sponsorCollaboratorsModule") or {}).get("leadSponsor") or {}).get("name")
+            conditions = (protocol.get("conditionsModule") or {}).get("conditions") or []
+            interventions = [
+                item.get("name")
+                for item in ((protocol.get("armsInterventionsModule") or {}).get("interventions") or [])
+                if isinstance(item, dict) and item.get("name")
+            ]
+            nct_id = identification.get("nctId")
+            if not nct_id:
+                continue
+            title = _clean_text(identification.get("briefTitle")) or "Untitled trial"
+            status = str(status_module.get("overallStatus") or "UNKNOWN")
+            phases = design.get("phases") or []
+            phase = ", ".join(str(item) for item in phases) or None
+            study_type = str(design.get("studyType") or "")
+            allocation = str(((design.get("designInfo") or {}).get("allocation")) or "")
+            randomized_interventional = study_type == "INTERVENTIONAL" and allocation == "RANDOMIZED"
+            start_date = ((status_module.get("startDateStruct") or {}).get("date")) or None
+            year_match = re.match(r"(\d{4})", start_date or "")
+            has_results = bool(entry.get("hasResults")) or bool(
+                (status_module.get("resultsFirstPostDateStruct") or {}).get("date")
+            )
+            summary_parts = [
+                f"Registry record ({status}{f', {phase}' if phase else ''})."
+            ]
+            if conditions:
+                summary_parts.append("Conditions: " + "; ".join(str(item) for item in conditions[:5]) + ".")
+            if interventions:
+                summary_parts.append("Interventions: " + "; ".join(interventions[:5]) + ".")
+            brief_summary = _clean_text(description.get("briefSummary"))
+            if brief_summary:
+                summary_parts.append(brief_summary)
+            studies.append(
+                EvidenceStudy(
+                    source="clinicaltrials",
+                    source_id=str(nct_id),
+                    title=title,
+                    abstract=" ".join(summary_parts),
+                    authors=[sponsor] if sponsor else [],
+                    journal="ClinicalTrials.gov Registry",
+                    publication_date=start_date,
+                    publication_year=year_match.group(1) if year_match else None,
+                    citation_count=0,
+                    url=f"https://clinicaltrials.gov/study/{nct_id}",
+                    evidence_level="Level II" if randomized_interventional else None,
+                    publication_types=["registry_record", status] + ([phase] if phase else []),
+                    sources=["clinicaltrials"],
+                    trial_status=status,
+                    trial_phase=phase,
+                    has_published_results=has_results,
+                )
+            )
+        return SearchProviderResult(source="ClinicalTrials.gov", query=query, studies=studies)
+    except Exception as exc:
+        return _network_error("ClinicalTrials.gov", query, exc)
+
+
 async def search_source(
     source: str,
     query: str,
@@ -899,6 +1061,20 @@ async def search_source(
             offline_mode=offline_mode,
             start_year=start_year,
             scopus_view=scopus_view,
+        )
+    if source == "ClinicalTrials.gov":
+        return await search_clinical_trials(
+            query,
+            max_results=max_results,
+            offline_mode=offline_mode,
+            start_year=start_year,
+        )
+    if source == "Preprints":
+        return await search_preprints(
+            query,
+            max_results=max_results,
+            offline_mode=offline_mode,
+            start_year=start_year,
         )
     return SearchProviderResult(source=source, query=query, skipped=True, error="Unsupported source")
 

@@ -41,9 +41,12 @@ from .research import (
     render_verification_report,
     score_and_rank_results,
     search_source,
+    snowball,
     verify_studies,
 )
+from .progress import ProgressTracker
 from .research.models import QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
+from .research.fulltext import fetch_europe_pmc_fulltext_xml
 from .research.planning import suggest_databases as _suggest_databases
 from .research.search import POLITE_EMAIL
 from .models import RunRequest
@@ -110,27 +113,35 @@ def _debug_jsonable(value: Any, *, _depth: int = 0) -> Any:
 # Provider-specific builders may namespace them (e.g. ``mcp__literature__plan_search``)
 # and should call ``bridge.set_tool_name_map`` if the runtime tool names differ.
 
-_BARE_PHASE_MAP: dict[str, tuple[str, int]] = {
-    "plan_search": ("planning", 12),
-    "suggest_databases": ("planning", 14),
-    "search_pubmed": ("searching", 20),
-    "search_pmc": ("searching", 24),
-    "search_europe_pmc": ("searching", 28),
-    "search_openalex": ("searching", 30),
-    "search_crossref": ("searching", 34),
-    "search_cochrane": ("searching", 40),
-    "search_semantic_scholar": ("searching", 50),
-    "search_scopus": ("searching", 58),
-    "get_studies": ("ranking", 68),
-    "finalize_ranking": ("ranking", 75),
-    "verify_studies": ("verifying", 82),
-    "synthesize_report": ("synthesizing", 92),
-    "write_todos": ("planning", 8),
-    "update_progress": ("planning", 10),
-    "fetch_fulltext": ("fulltext", 78),
-    "await_user_pdfs": ("fulltext", 79),
-    "parse_pdf": ("fulltext", 80),
+_BARE_PHASE_MAP: dict[str, str] = {
+    "plan_search": "planning",
+    "suggest_databases": "planning",
+    "search_pubmed": "searching",
+    "search_pmc": "searching",
+    "search_europe_pmc": "searching",
+    "search_openalex": "searching",
+    "search_crossref": "searching",
+    "search_cochrane": "searching",
+    "search_semantic_scholar": "searching",
+    "search_scopus": "searching",
+    "search_clinical_trials": "searching",
+    "search_preprints": "searching",
+    "get_references": "searching",
+    "get_citations": "searching",
+    "get_studies": "ranking",
+    "screen_studies": "screening",
+    "finalize_ranking": "ranking",
+    "appraise_evidence": "appraising",
+    "verify_studies": "verifying",
+    "synthesize_report": "synthesizing",
+    "fetch_fulltext": "fulltext",
+    "await_user_pdfs": "fulltext",
+    "parse_pdf": "fulltext",
 }
+
+# Bookkeeping tools follow whatever phase the run is currently in instead of
+# flipping the trace back to "planning" on every call.
+_CURRENT_PHASE_TOOLS = {"write_todos", "update_progress"}
 
 
 class AgenticEventBridge:
@@ -144,6 +155,7 @@ class AgenticEventBridge:
 
     def __init__(self) -> None:
         self.queue: asyncio.Queue[RuntimeEventPayload | None] = asyncio.Queue()
+        self.progress = ProgressTracker()
         self._intermediate: dict[str, Any] = {}
         self._todos: list[str] = []
         self._tool_call_count = 0
@@ -155,6 +167,8 @@ class AgenticEventBridge:
         self.search_results: list[SearchProviderResult] = []
         self.ranked_studies: list[ScoredStudy] = []
         self.verification: VerificationSummary | None = None
+        self.screening: dict[str, Any] | None = None
+        self.appraisal: dict[str, Any] | None = None
         self.plan: QueryPlan | None = None
         self._pre_scored: list[ScoredStudy] = []
         self._pdf_urls: dict[int, str] = {}
@@ -179,18 +193,20 @@ class AgenticEventBridge:
             return tool_name.rsplit("__", 1)[-1]
         return tool_name
 
-    def _phase_for(self, tool_name: str) -> tuple[str, int]:
+    def _phase_for(self, tool_name: str) -> str:
         bare = self._bare_name(tool_name)
+        if bare in _CURRENT_PHASE_TOOLS:
+            return self.progress.current_phase or "planning"
         if bare in _BARE_PHASE_MAP:
             return _BARE_PHASE_MAP[bare]
         if bare.startswith("search_"):
-            return ("searching", 35)
-        return ("searching", 50)
+            return "searching"
+        return "searching"
 
     # -- Generic event helpers (called by provider-specific hooks/callbacks) --
 
     async def on_tool_start(self, tool_name: str, tool_input: dict[str, Any] | None = None) -> None:
-        phase, progress = self._phase_for(tool_name)
+        phase, _ = self.progress.enter(self._phase_for(tool_name))
         self._tool_call_count += 1
         input_summary = {}
         if tool_input:
@@ -203,7 +219,7 @@ class AgenticEventBridge:
             RuntimeEventPayload(
                 event_type=EventType.TOOL_CALLED,
                 phase=phase,
-                progress=min(progress + self._tool_call_count, 97),
+                progress=self.progress.advance(),
                 message=f"Agent calling {tool_name}",
                 tool_name=tool_name,
                 extra=extra,
@@ -211,14 +227,16 @@ class AgenticEventBridge:
         )
 
     async def on_tool_end(self, tool_name: str, response: Any = None) -> None:
-        phase, progress = self._phase_for(tool_name)
+        phase, _ = self.progress.enter(self._phase_for(tool_name))
         resp_str = str(response) if response else "<empty>"
         resp_preview = resp_str[:300] + "..." if len(resp_str) > 300 else resp_str
         _log.info("[AGENT RESULT #%d] %s  response_len=%d  preview=%s", self._tool_call_count, tool_name, len(resp_str), resp_preview)
         bare = self._bare_name(tool_name)
         if bare in (
             "get_studies",
+            "screen_studies",
             "finalize_ranking",
+            "appraise_evidence",
             "verify_studies",
             "synthesize_report",
             "plan_search",
@@ -237,7 +255,7 @@ class AgenticEventBridge:
             RuntimeEventPayload(
                 event_type=EventType.TOOL_RESULT,
                 phase=phase,
-                progress=min(progress + self._tool_call_count + 1, 97),
+                progress=self.progress.advance(),
                 message=self._tool_result_message(bare, tool_name, response),
                 tool_name=tool_name,
                 extra=extra,
@@ -247,8 +265,8 @@ class AgenticEventBridge:
             await self.queue.put(
                 RuntimeEventPayload(
                     event_type=EventType.ARTIFACT_CREATED,
-                    phase="fulltext",
-                    progress=min(progress + self._tool_call_count + 2, 97),
+                    phase=self.progress.phase_label("fulltext"),
+                    progress=self.progress.advance(),
                     message="Saved full-text PDF status",
                     artifact_type=ArtifactType.FULLTEXT_STATUS,
                     artifact_name="Full Text PDF Status",
@@ -259,12 +277,36 @@ class AgenticEventBridge:
             await self.queue.put(
                 RuntimeEventPayload(
                     event_type=EventType.ARTIFACT_CREATED,
-                    phase="ranking",
-                    progress=min(progress + self._tool_call_count + 2, 97),
+                    phase=self.progress.phase_label("ranking"),
+                    progress=self.progress.advance(),
                     message="Saved ranked evidence artifact",
                     artifact_type=ArtifactType.RANKED_RESULTS,
                     artifact_name="Ranked Results",
                     artifact_json={"studies": [study.model_dump() for study in self.ranked_studies[:12]]},
+                )
+            )
+        if bare == "screen_studies" and self.screening is not None:
+            await self.queue.put(
+                RuntimeEventPayload(
+                    event_type=EventType.ARTIFACT_CREATED,
+                    phase=self.progress.phase_label("screening"),
+                    progress=self.progress.advance(),
+                    message="Saved screening decisions",
+                    artifact_type=ArtifactType.SCREENING_DECISIONS,
+                    artifact_name="Screening Decisions",
+                    artifact_json=_debug_jsonable(self.screening),
+                )
+            )
+        if bare == "appraise_evidence" and self.appraisal is not None:
+            await self.queue.put(
+                RuntimeEventPayload(
+                    event_type=EventType.ARTIFACT_CREATED,
+                    phase=self.progress.phase_label("appraising"),
+                    progress=self.progress.advance(),
+                    message="Saved GRADE appraisal summary",
+                    artifact_type=ArtifactType.APPRAISAL_SUMMARY,
+                    artifact_name="GRADE Appraisal",
+                    artifact_json=_debug_jsonable(self.appraisal),
                 )
             )
 
@@ -284,7 +326,9 @@ class AgenticEventBridge:
                 )
             if response.get("error"):
                 return f"Full-text PDF lookup failed: {response['error']}"
-            return f"Full-text PDFs: {found} available; {len(unavailable)} need user upload"
+            xml_hits = int(response.get("europe_pmc_xml_hits") or 0)
+            xml_note = f" ({xml_hits} via Europe PMC XML)" if xml_hits else ""
+            return f"Full text: {found} available{xml_note}; {len(unavailable)} need user upload"
         if bare == "await_user_pdfs":
             uploaded = response.get("uploaded_ranks") or []
             missing = response.get("missing_ranks") or []
@@ -313,6 +357,8 @@ class AgenticEventBridge:
             "search_results": _debug_jsonable([result.model_dump() for result in self.search_results]),
             "ranked_studies": _debug_jsonable([study.model_dump() for study in self.ranked_studies]),
             "verification": _debug_jsonable(self.verification.model_dump()) if self.verification else None,
+            "screening": _debug_jsonable(self.screening) if self.screening else None,
+            "appraisal": _debug_jsonable(self.appraisal) if self.appraisal else None,
             "plan": _debug_jsonable(self.plan.model_dump()) if self.plan else None,
         }
         return payload
@@ -321,11 +367,12 @@ class AgenticEventBridge:
 
     async def emit_todos(self, items: list[str]) -> None:
         self._todos = list(items)
+        phase, _ = self.progress.enter(self.progress.current_phase or "planning")
         await self.queue.put(
             RuntimeEventPayload(
                 event_type=EventType.ARTIFACT_CREATED,
-                phase="planning",
-                progress=8,
+                phase=phase,
+                progress=self.progress.advance(),
                 message="Agent created research TODO list",
                 artifact_type=ArtifactType.TODO_LIST,
                 artifact_name="Research TODOs",
@@ -334,11 +381,12 @@ class AgenticEventBridge:
         )
 
     async def emit_progress(self, phase: str, message: str) -> None:
+        label, _ = self.progress.enter(phase)
         await self.queue.put(
             RuntimeEventPayload(
                 event_type=EventType.AGENT_STARTED,
-                phase=phase,
-                progress=min(10 + self._tool_call_count * 3, 97),
+                phase=label,
+                progress=self.progress.advance(),
                 message=message,
                 agent_name="Research Agent",
             )
@@ -410,8 +458,9 @@ async def tool_search(request: RunRequest, bridge: AgenticEventBridge, source: s
     studies_summary = []
     for s in result.studies:
         abstract = (s.abstract or "").replace("\n", " ").strip()
+        title = s.title or ""
         studies_summary.append({
-            "title": s.title,
+            "title": title[:200] + "..." if len(title) > 200 else title,
             "journal": s.journal,
             "year": s.publication_year,
             "pmid": s.pmid,
@@ -435,6 +484,8 @@ async def tool_get_studies(request: RunRequest, bridge: AgenticEventBridge, cont
         query_payload=request.query_payload,
     )
     bridge._pre_scored = pre_scored
+    # Re-deriving the pool invalidates any prior screening decision.
+    bridge.screening = None
     studies_out = []
     for s in pre_scored:
         abstract = (s.abstract or "").replace("\n", " ").strip()
@@ -449,14 +500,8 @@ async def tool_get_studies(request: RunRequest, bridge: AgenticEventBridge, cont
             "authors": s.authors[:3],
             "evidence_level": s.evidence_level,
             "citation_count": s.citation_count,
-            "sources": s.sources,
+            "source_count": len(s.sources),
             "pre_score": s.composite_score,
-            "score_breakdown": {
-                "relevance": s.relevance_score,
-                "evidence": s.evidence_level_score,
-                "citations": s.citation_score,
-                "recency": s.recency_score,
-            },
         })
     return {"total": len(studies_out), "context": context, "studies": studies_out}
 
@@ -485,6 +530,171 @@ async def tool_finalize_ranking(request: RunRequest, bridge: AgenticEventBridge,
         "status": "ok", "total_ranked": len(ranked),
         "top_5": [{"rank": s.reference_number, "title": s.title} for s in ranked[:5]],
         "rationale": rationale,
+    }
+
+
+_GRADE_LEVELS = {"high": "High", "moderate": "Moderate", "low": "Low", "very low": "Very Low"}
+
+
+def _normalize_certainty(value: str | None) -> str:
+    text = (value or "").strip().lower()
+    if text in _GRADE_LEVELS:
+        return _GRADE_LEVELS[text]
+    if "very" in text and "low" in text:
+        return "Very Low"
+    for key, label in _GRADE_LEVELS.items():
+        if key in text:
+            return label
+    return "Low"
+
+
+async def tool_snowball(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    reference_number: int,
+    direction: str,
+) -> dict[str, Any]:
+    """Fetch the reference list or citing papers of a ranked study (snowballing)."""
+    direction = "references" if str(direction).lower().startswith("ref") else "citations"
+    pool = bridge.ranked_studies or bridge._pre_scored
+    if not pool:
+        return {"error": "Rank studies first (get_studies/finalize_ranking) before snowballing."}
+    target = next((s for s in pool if s.reference_number == int(reference_number)), None)
+    if target is None:
+        return {"error": f"No ranked study [{reference_number}] found."}
+    result = await snowball(target, direction)  # type: ignore[arg-type]
+    bridge.search_results.append(result)
+    summary = []
+    for s in result.studies[:10]:
+        abstract = (s.abstract or "").replace("\n", " ").strip()
+        summary.append({
+            "title": s.title[:200],
+            "journal": s.journal,
+            "year": s.publication_year,
+            "pmid": s.pmid,
+            "doi": s.doi,
+            "evidence_level": s.evidence_level,
+            "abstract": abstract[:300] + "..." if len(abstract) > 300 else abstract,
+        })
+    return {
+        "direction": direction,
+        "seed_reference": int(reference_number),
+        "new_candidates": len(result.studies),
+        "error": result.error,
+        "studies": summary,
+        "note": "Call get_studies again to merge and re-rank these candidates.",
+    }
+
+
+async def tool_screen_studies(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    included_indices: list[int],
+    excluded_indices: list[int] | None = None,
+    exclusion_reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    """Apply explicit PICO-based inclusion/exclusion to the deduped study pool.
+
+    The agent is the screening judge: it passes which study indices to keep and
+    which to drop (with a reason each). Indices in neither list default to
+    included, so a model that skips screening degrades to "include all".
+    """
+    pre_scored = bridge._pre_scored
+    if not pre_scored:
+        return {"error": "Call get_studies first."}
+    excluded_indices = [int(i) for i in (excluded_indices or [])]
+    reasons = list(exclusion_reasons or [])
+    reason_map = {
+        idx: (reasons[i] if i < len(reasons) else "No reason given")
+        for i, idx in enumerate(excluded_indices)
+    }
+    included_set = {int(i) for i in included_indices}
+    excluded_set = set(excluded_indices)
+
+    kept: list[ScoredStudy] = []
+    excluded_records: list[dict[str, Any]] = []
+    for study in pre_scored:
+        ref = study.reference_number
+        # Exclusion wins only when explicitly excluded and not explicitly included.
+        if ref in excluded_set and ref not in included_set:
+            excluded_records.append({
+                "reference_number": ref,
+                "title": study.title,
+                "reason": reason_map.get(ref, "No reason given"),
+            })
+        else:
+            kept.append(study)
+
+    # Keep the full pool so a later get_studies (e.g. after snowballing) rebuilds.
+    bridge._pre_scored = kept
+    bridge.screening = {
+        "screened_count": len(pre_scored),
+        "included": len(kept),
+        "excluded": excluded_records,
+    }
+    warning = None
+    if len(kept) < 3:
+        warning = "Fewer than 3 studies passed screening — consider broadening searches or snowballing before ranking."
+    return {
+        "status": "ok",
+        "screened": len(pre_scored),
+        "included": len(kept),
+        "excluded": len(excluded_records),
+        "warning": warning,
+    }
+
+
+async def tool_appraise_evidence(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    findings: list[str],
+    certainties: list[str],
+    rationales: list[str] | None = None,
+    reference_numbers_csv: list[str] | None = None,
+) -> dict[str, Any]:
+    """Record GRADE-style certainty of evidence for each major finding.
+
+    Parallel arrays keep the tool schema simple for weak models. Certainty is
+    normalized to High/Moderate/Low/Very Low. Findings backed only by studies
+    with no retrieved full text are flagged as abstract-only assessments.
+    """
+    if not bridge.ranked_studies:
+        return {"error": "No ranked studies. Call finalize_ranking first."}
+    rationales = list(rationales or [])
+    refs_csv = list(reference_numbers_csv or [])
+
+    fulltext_ranks = {
+        rank for rank in range(1, len(bridge.ranked_studies) + 1)
+        if _stored_fulltext_for_rank(request, rank)
+    }
+
+    appraised: list[dict[str, Any]] = []
+    for i, finding in enumerate(findings):
+        refs: list[int] = []
+        if i < len(refs_csv):
+            for token in re.split(r"[,\s]+", str(refs_csv[i])):
+                token = token.strip().lstrip("[").rstrip("]")
+                if token.isdigit():
+                    refs.append(int(token))
+        abstract_only = bool(refs) and not any(r in fulltext_ranks for r in refs)
+        appraised.append({
+            "finding": finding,
+            "certainty": _normalize_certainty(certainties[i] if i < len(certainties) else None),
+            "rationale": rationales[i] if i < len(rationales) else "",
+            "reference_numbers": refs,
+            "abstract_only_assessment": abstract_only,
+        })
+
+    any_abstract_only = any(item["abstract_only_assessment"] for item in appraised)
+    bridge.appraisal = {
+        "findings": appraised,
+        "abstract_only_any": any_abstract_only,
+    }
+    return {
+        "status": "ok",
+        "appraised": len(appraised),
+        "certainties": [item["certainty"] for item in appraised],
+        "abstract_only_any": any_abstract_only,
     }
 
 
@@ -534,7 +744,20 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
             "skipped": r.skipped,
         }
 
-    data = {
+    registry_trials = [
+        {
+            "rank": s.reference_number,
+            "title": s.title,
+            "nct_id": s.source_id,
+            "status": s.trial_status,
+            "phase": s.trial_phase,
+            "has_published_results": s.has_published_results,
+        }
+        for s in bridge.ranked_studies
+        if s.source == "clinicaltrials"
+    ]
+
+    data: dict[str, Any] = {
         "query": request.query,
         "query_type": request.query_type,
         "language": request.language,
@@ -551,24 +774,41 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
             "missing_pmids": verification.missing_pmids,
             "notes": verification.notes,
         },
-        "instructions": (
-            "Write a comprehensive research synthesis report in markdown. "
-            "Submit the report itself, not a completion/status message. "
-            "For non-empty evidence, target 1,200-2,000 words. "
-            "The report MUST include: "
-            "(1) An executive summary that directly answers the research question; "
-            "(2) A methods section describing the search strategy; "
-            "(3) A findings section that synthesizes evidence across studies — do NOT just list studies, "
-            "compare and contrast findings, identify patterns, agreements and contradictions; "
-            "(4) A discussion section interpreting the evidence, noting limitations, gaps, and quality of evidence; "
-            "(5) A conclusion with clear takeaways; "
-            "(6) A numbered references section. "
-            "Cite studies by [number] throughout the text. "
-            "In Results/Findings, present evidence levels from highest to lowest: Level I, Level II, Level III, Level IV, Level V. "
-            "Number references sequentially as [1], [2], [3] with no gaps, and use only those same numbers in text citations. "
-            "Write in the language specified by the query language setting."
-        ),
     }
+    if bridge.screening:
+        data["screening"] = bridge.screening
+    if bridge.appraisal:
+        data["appraisal"] = bridge.appraisal
+    if registry_trials:
+        data["registry_trials"] = registry_trials
+
+    instructions = (
+        "Write a comprehensive research synthesis report in markdown. "
+        "Submit the report itself, not a completion/status message. "
+        "For non-empty evidence, target 1,200-2,000 words. "
+        "The report MUST include: "
+        "(1) An executive summary that directly answers the research question; "
+        "(2) A methods section describing the search strategy"
+        + (" and the number of studies screened out with the dominant exclusion reasons" if bridge.screening else "")
+        + "; "
+        "(3) A findings section that synthesizes evidence across studies — do NOT just list studies, "
+        "compare and contrast findings, identify patterns, agreements and contradictions; "
+        "(4) A discussion section interpreting the evidence, noting limitations, gaps, and quality of evidence; "
+        "(4b) State the GRADE certainty of evidence (High/Moderate/Low/Very Low) for each major finding using the appraisal data; "
+        "(4c) If appraisal was based on abstracts only, say so under Limitations; "
+        "(5) A conclusion with clear takeaways; "
+        "(6) A numbered references section. "
+        "Cite studies by [number] throughout the text. "
+        "In Results/Findings, present evidence levels from highest to lowest: Level I, Level II, Level III, Level IV, Level V. "
+        "Number references sequentially as [1], [2], [3] with no gaps, and use only those same numbers in text citations. "
+        "Write in the language specified by the query language setting."
+    )
+    if registry_trials:
+        instructions += (
+            " In the Discussion, compare the registered trials against the published evidence and explicitly "
+            "flag any completed-but-unpublished trials (has_published_results = false) as potential publication bias."
+        )
+    data["instructions"] = instructions
     bridge._intermediate["synthesize_report"] = data
     return data
 
@@ -715,11 +955,17 @@ EVIDENCE_LEVEL_ORDER_ISSUE = (
     "Results/Findings must present evidence levels from Level I to Level V, "
     "not lower levels before higher levels."
 )
+GRADE_CERTAINTY_ISSUE = (
+    "Report should state the GRADE certainty of evidence (High/Moderate/Low/Very Low) "
+    "for major findings."
+)
 MAX_SUBMIT_REPORT_REJECTIONS = 3
 
 _EVIDENCE_LEVEL_RE = re.compile(r"\bLevel\s+(IV|III|II|I|V)\b", re.IGNORECASE)
 _EVIDENCE_LEVEL_ORDER = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
-_SOFT_REPORT_QUALITY_ISSUES = {EVIDENCE_LEVEL_ORDER_ISSUE}
+_CERTAINTY_RE = re.compile(r"certaint|grade|확실성", re.IGNORECASE)
+# Soft issues let weak local models pass after the 3rd attempt (see soft-accept path).
+_SOFT_REPORT_QUALITY_ISSUES = {EVIDENCE_LEVEL_ORDER_ISSUE, GRADE_CERTAINTY_ISSUE}
 
 
 def _evidence_level_order_issues(report_markdown: str) -> list[str]:
@@ -820,6 +1066,8 @@ def report_quality_issues(report_markdown: str, ranked_count: int = 0, search_co
         else:
             issues.extend(_reference_number_issues(report_markdown))
         issues.extend(_evidence_level_order_issues(report_markdown))
+        if not _CERTAINTY_RE.search(report_markdown):
+            issues.append(GRADE_CERTAINTY_ISSUE)
 
     return issues
 
@@ -1353,6 +1601,7 @@ async def tool_fetch_fulltext(
     manual_ranks: set[int] = set()
     unpywall_hits = 0
     pmc_hits = 0
+    europe_pmc_xml_hits = 0
 
     for s in candidates:
         rank = s.reference_number
@@ -1369,6 +1618,57 @@ async def tool_fetch_fulltext(
                 "evidence_level": s.evidence_level,
                 "source": stored[1],
             }
+
+    # Resolve PMIDs to PMCIDs once, up front, so both the Europe PMC XML pass
+    # and the PMC OA pass can reuse it.
+    pmid_to_pmcid: dict[str, str] = {}
+    ids_param = ",".join(s.pmid for s in candidates if s.pmid and s.reference_number is not None)
+    if ids_param:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
+                resp = await client.get(
+                    "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+                    params={"ids": ids_param, "format": "json", "tool": "medical-deep-research", "email": POLITE_EMAIL},
+                )
+                resp.raise_for_status()
+            for r in resp.json().get("records", []):
+                if r.get("pmcid") and r.get("pmid"):
+                    pmid_to_pmcid[r["pmid"]] = r["pmcid"]
+        except Exception as exc:
+            _log.info("[FULLTEXT] PMC ID converter failed: %s", exc)
+
+    # Pass 0: Europe PMC full-text XML for OA articles (cleaner and more
+    # reliable than the PDF chain). Hits skip the PDF pipeline entirely.
+    xml_candidates = [
+        s for s in candidates
+        if s.reference_number is not None
+        and s.reference_number not in found_ranks
+        and (s.pmcid or (s.pmid and pmid_to_pmcid.get(s.pmid)))
+    ]
+    if xml_candidates:
+        sem_xml = asyncio.Semaphore(5)
+
+        async def _xml_lookup(s: ScoredStudy) -> None:
+            nonlocal europe_pmc_xml_hits
+            rank = s.reference_number
+            if rank is None:
+                return
+            pmcid = s.pmcid or (pmid_to_pmcid.get(s.pmid) if s.pmid else None)
+            if not pmcid:
+                return
+            async with sem_xml:
+                text = await fetch_europe_pmc_fulltext_xml(pmcid)
+            if not text:
+                return
+            _store_fulltext_for_rank(request, rank, text, source="europe_pmc_xml")
+            found_ranks[rank] = {
+                "rank": rank, "title": s.title, "doi": s.doi, "pmid": s.pmid,
+                "pmcid": pmcid, "evidence_level": s.evidence_level, "source": "europe_pmc_xml",
+                "downloadable": True,
+            }
+            europe_pmc_xml_hits += 1
+
+        await asyncio.gather(*[_xml_lookup(s) for s in xml_candidates])
 
     # Pass 1: Parallel Unpaywall (10 concurrent)
     if has_unpywall:
@@ -1397,25 +1697,11 @@ async def tool_fetch_fulltext(
     # reliable than Unpaywall URLs which often return 403 from publishers)
     remaining = [
         s for s in candidates
-        if s.reference_number is not None and (s.pmid or s.pmcid)
+        if s.reference_number is not None
+        and (s.pmid or s.pmcid)
+        and s.reference_number not in found_ranks
     ]
     if remaining:
-        ids_param = ",".join(s.pmid for s in remaining if s.pmid)
-        pmid_to_pmcid: dict[str, str] = {}
-        if ids_param:
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
-                    resp = await client.get(
-                        "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
-                        params={"ids": ids_param, "format": "json", "tool": "medical-deep-research", "email": POLITE_EMAIL},
-                    )
-                    resp.raise_for_status()
-                for r in resp.json().get("records", []):
-                    if r.get("pmcid") and r.get("pmid"):
-                        pmid_to_pmcid[r["pmid"]] = r["pmcid"]
-            except Exception as exc:
-                _log.info("[FULLTEXT] PMC ID converter failed: %s", exc)
-
         sem_pmc = asyncio.Semaphore(5)
 
         async def _pmc_lookup(s: ScoredStudy) -> None:
@@ -1518,8 +1804,8 @@ async def tool_fetch_fulltext(
     found_rank_ids = {int(r["rank"]) for r in available}
     missing_pdf_ranks = [rank for rank in candidate_ranks if rank not in found_rank_ids]
     _log.info(
-        "[FULLTEXT] %d parseable PDFs found (unpaywall=%d, pmc=%d, failed_download=%d, failed_parse=%d) from %d Level I/II studies",
-        len(available), unpywall_hits, pmc_hits, len(download_failed_ranks), len(parse_failed_ranks), len(candidates),
+        "[FULLTEXT] %d full texts found (europe_pmc_xml=%d, unpaywall=%d, pmc=%d, failed_download=%d, failed_parse=%d) from %d Level I/II studies",
+        len(available), europe_pmc_xml_hits, unpywall_hits, pmc_hits, len(download_failed_ranks), len(parse_failed_ranks), len(candidates),
     )
     result = {
         "level_I_II_studies": len(candidates),
@@ -1528,6 +1814,7 @@ async def tool_fetch_fulltext(
         "validated_pdf_ranks": sorted(bridge._pdf_bytes),
         "download_failed_ranks": sorted(download_failed_ranks),
         "parse_failed_ranks": sorted(parse_failed_ranks),
+        "europe_pmc_xml_hits": europe_pmc_xml_hits,
         "unpywall_hits": unpywall_hits,
         "pmc_hits": pmc_hits,
         "user_upload_hits": len(manual_ranks),
@@ -1630,8 +1917,8 @@ async def tool_await_user_pdfs(
     await bridge.queue.put(
         RuntimeEventPayload(
             event_type=EventType.APPROVAL_REQUESTED,
-            phase="fulltext",
-            progress=79,
+            phase=bridge.progress.enter("fulltext")[0],
+            progress=bridge.progress.advance(),
             message=f"Waiting for user PDFs for {len(missing)} studies",
             tool_name="await_user_pdfs",
             extra={
@@ -1842,34 +2129,50 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
 ## Tools
 
 **Planning**: plan_search, suggest_databases, write_todos, update_progress
-**Search** (one call each): search_pubmed, search_pmc, search_europe_pmc, search_openalex, search_crossref, search_cochrane, search_semantic_scholar, search_scopus
+**Search** (one call each): search_pubmed, search_pmc, search_europe_pmc, search_openalex, search_crossref, search_cochrane, search_semantic_scholar, search_scopus{", search_clinical_trials" if is_clinical else ""}, search_preprints
+**Snowballing** (citation-graph traversal on ranked studies):
+- get_references(reference_number) — fetch the reference list of a ranked study [n] (backward)
+- get_citations(reference_number) — fetch papers citing a ranked study [n] (forward)
 **Evidence** (reads from shared state — NO large JSON arguments needed):
 - get_studies(context) — deduplicates and pre-scores all collected studies, returns full details for YOUR review
+- screen_studies(included_indices, excluded_indices, exclusion_reasons) — apply PICO inclusion/exclusion; excluded studies are dropped before ranking
 - finalize_ranking(ranked_indices, rationale) — submit your ranking. Pass indices best-first.
+- appraise_evidence(findings, certainties, rationales, reference_numbers_csv) — record GRADE certainty per major finding
 - verify_studies() — verifies PMIDs of ranked studies
 - synthesize_report() — returns structured evidence data for you to write the final report
 - submit_report(report_markdown) — submit your completed report. MUST be called as the final step.
 **Fulltext** (call AFTER finalize_ranking):
-- fetch_fulltext() — queries Unpaywall + PubMed Central for free PDFs across ALL ranked studies
+- fetch_fulltext() — Europe PMC full-text + Unpaywall + PubMed Central for free full text across ALL ranked studies
 - await_user_pdfs(ranks) — pauses until the user clicks Continue or Skip after uploading PDFs
 - parse_pdf(rank) — parses a user-uploaded PDF first, otherwise downloads and parses the discovered PDF
 
 ## Workflow (follow exactly)
 
 1. Call `plan_search` with the query.
-2. Call search tools (one per database, use queries from the plan). Search 3-5 databases.
+2. Call search tools (one per database, use queries from the plan). Search 3-5 databases{" — include search_clinical_trials for registered/ongoing trials" if is_clinical else ""}.
 3. Call `get_studies` with context="{"clinical" if is_clinical else "general"}". \
 Carefully review EVERY abstract. Assess relevance to the query, study design, evidence level, and quality.
-4. Call `finalize_ranking` with your ordered list of study indices (best first) and a detailed rationale.
-5. Call `fetch_fulltext` to find free PDFs across all ranked studies (Unpaywall + PMC). This tool opens the user PDF upload checkpoint itself when publisher PDFs are missing; wait for it to return before continuing.
-6. Call `parse_pdf` for 1-3 studies that have PDFs available or were uploaded by the user — read the full text.
-7. Call `verify_studies` to validate PMIDs.
-8. Call `synthesize_report` — this returns the structured evidence data.
-9. **Write the full report** using the evidence data (see Report Format below).
-10. Call `submit_report(report_markdown)` with your complete report. This is the FINAL step.
+4. Call `screen_studies`: list the indices to include and the indices to exclude (with one reason each — e.g. population mismatch, wrong intervention/comparator, wrong study type, off-topic). Excluded studies are removed before ranking.
+5. Call `finalize_ranking` with your ordered list of included study indices (best first) and a detailed rationale.
+6. (Optional) If 2+ Level I/II studies were ranked and coverage is thin, call `get_references` and/or `get_citations` for the top 1-2 of them (at most 3 snowball calls total), then call `get_studies` and `screen_studies` again to merge and re-screen the new candidates.
+7. Call `fetch_fulltext` to find free full text across all ranked studies. This tool opens the user PDF upload checkpoint itself when publisher PDFs are missing; wait for it to return before continuing.
+8. Call `parse_pdf` for 1-3 studies that have full text available or were uploaded by the user — read the full text.
+9. Call `appraise_evidence`: for each major finding state a GRADE certainty (High/Moderate/Low/Very Low) with a short rationale and the supporting reference numbers. {"Start High for findings from RCTs/meta-analyses and Low for observational studies; rate down for risk of bias, imprecision, indirectness, or inconsistency." if is_clinical else "Describe the strength and limitations of the evidence base; formal GRADE is optional for non-clinical questions."}
+10. Call `verify_studies` to validate PMIDs.
+11. Call `synthesize_report` — this returns the structured evidence data.
+12. **Write the full report** using the evidence data (see Report Format below).
+13. Call `submit_report(report_markdown)` with your complete report. This is the FINAL step.
 
 Do NOT pass study data as arguments — tools read from shared state.
 Do NOT repeat searches. One call per database, then move forward.
+
+## Search Discipline
+
+- Use at most 3-5 query variants for a source, and only when a source returned fewer than 3 relevant hits.
+- NEVER fabricate PMIDs, DOIs, or NCT IDs — cite only identifiers that appear in tool results.
+- Verify the spelling of uncommon medical terms (drug names, eponymous syndromes) before searching; prefer the standard term over an abbreviation on the first search.
+- Prefer slim outputs: do not request max_results above 10 unless results are sparse.
+- Only call `search_preprints` when peer-reviewed evidence is sparse or the topic is very recent, and always label preprint findings as not peer reviewed.
 
 ## Report Quality Requirements (CRITICAL)
 
@@ -1879,6 +2182,8 @@ Do NOT repeat searches. One call per database, then move forward.
 - Synthesize across studies; compare findings, study designs, populations, agreement, contradictions, and evidence quality.
 - Cite only searched studies as [1], [2], etc. Do not cite unsearched sources.
 - In Results/Findings, order evidence levels from Level I to Level V. Never put Level IV/V evidence before Level I/II evidence.
+- State the GRADE certainty of evidence (High/Moderate/Low/Very Low) for each major finding, using your `appraise_evidence` judgments.
+- In Methods, note how many studies were screened out and the dominant exclusion reasons. If your appraisal was based on abstracts only (no full text), say so under Limitations.
 - Number References sequentially as [1], [2], [3] with no gaps. In-text citations must use only those reference numbers.
 - Never write phrases like "the full report is above/below" or "I have completed the report" in `submit_report`.
 
@@ -1926,6 +2231,7 @@ Search multiple databases for comprehensive coverage:
 - OpenAlex (broad academic coverage, free)
 - Semantic Scholar (Medicine-filtered, free)
 - Scopus (if API key available — citation counts)
+- ClinicalTrials.gov (registered/ongoing trials; flags whether results were posted)
 
 ## Evidence Classification
 
@@ -1935,6 +2241,14 @@ Assign evidence levels to each study:
 - **Level III**: Non-randomized controlled studies, cohort studies
 - **Level IV**: Case series, case-control studies
 - **Level V**: Expert opinion, narrative reviews, case reports
+
+## Evidence Appraisal (GRADE)
+
+Rate the certainty of evidence for each major finding/outcome, not just the study type:
+- Start **High** for findings based on RCTs or meta-analyses of RCTs; start **Low** for findings based on observational studies.
+- Rate DOWN for: risk of bias, inconsistency across studies, indirectness (population/intervention/outcome mismatch), and imprecision (wide confidence intervals, few events).
+- Report the resulting certainty as **High / Moderate / Low / Very Low** with a one-line rationale.
+- When you judged a finding from the abstract only (no full text retrieved), say so — abstracts limit risk-of-bias appraisal.
 
 ## Report Format (Markdown) — YOU MUST WRITE THIS
 
@@ -1958,12 +2272,15 @@ Organize by evidence level, with [n] citations throughout:
 - Level III–V evidence
 - Compare and contrast findings across studies
 - Note agreements, contradictions, and effect sizes
+- State the GRADE certainty (High/Moderate/Low/Very Low) for each major finding
 Do not present Level IV/V evidence before Level I/II evidence.
 
 ### 5. Discussion
 - Address population-specific considerations
 - Clinical implications and applicability
-- Limitations of the available evidence
+- Limitations of the available evidence (including whether appraisal was abstract-only)
+- Compare registered trials (ClinicalTrials.gov) against the published evidence; explicitly flag completed-but-unpublished trials as potential publication bias
+- Note how many studies were screened out and why
 - Gaps in the literature
 
 ### 6. Conclusions
@@ -1999,6 +2316,11 @@ theoretical frameworks, reviews)
 - Prioritize OpenAlex and Semantic Scholar for cross-disciplinary coverage
 - Use PubMed for healthcare topics it indexes well
 - Skip Cochrane for non-clinical-intervention topics
+- Skip ClinicalTrials.gov — the trial registry is for clinical-intervention questions only
+
+## Screening & Appraisal
+- Still call `screen_studies` to exclude off-topic or out-of-scope studies (with a reason each).
+- For `appraise_evidence`, describe the strength and limitations of the evidence base (methodological diversity, transferability, saturation). Formal GRADE certainty is optional for non-clinical questions — use it only where an intervention's effect is being judged.
 
 ### Database Coverage
 Search multiple databases for comprehensive coverage:
@@ -2091,8 +2413,14 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "search_cochrane": "Search Cochrane for systematic reviews.",
     "search_semantic_scholar": "Search Semantic Scholar for academic papers.",
     "search_scopus": "Search Scopus for academic citations.",
+    "search_clinical_trials": "Search the ClinicalTrials.gov registry (API v2). Returns trials with status/phase and whether results were posted — use for ongoing trials and publication-bias awareness.",
+    "search_preprints": "Search preprint servers (medRxiv/bioRxiv) via Europe PMC. Use ONLY when peer-reviewed evidence is sparse or the topic is very recent; results are labeled preprints and rated Level V.",
+    "get_references": "Backward snowballing: fetch the reference list of a ranked study [n]. Candidates merge into the pool on the next get_studies call.",
+    "get_citations": "Forward snowballing: fetch papers that cite a ranked study [n]. Candidates merge into the pool on the next get_studies call.",
     "get_studies": "Deduplicate and pre-score ALL collected studies. Returns full details for your review.",
+    "screen_studies": "Apply PICO inclusion/exclusion to the pre-scored pool. Pass included_indices and excluded_indices (+ a reason per exclusion). Excluded studies are dropped before ranking.",
     "finalize_ranking": "Submit your ranking after reviewing studies. Pass ordered indices (best first).",
+    "appraise_evidence": "Record GRADE certainty (High/Moderate/Low/Very Low) for each major finding, with rationale and the supporting reference numbers.",
     "verify_studies": "Verify PMIDs of the ranked studies against PubMed.",
     "synthesize_report": "Returns structured evidence data for writing the final report.",
     "submit_report": "Submit your written research report (full markdown). MUST be called as the last step.",

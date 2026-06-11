@@ -91,6 +91,15 @@ def render_report(
     if verification.notes:
         lines.extend(f"- {note}" for note in verification.notes)
 
+    lines.extend(
+        [
+            "",
+            "## Certainty of Evidence",
+            "",
+            "- Study screening and GRADE certainty appraisal require an LLM runtime and were not performed in this deterministic pipeline.",
+        ]
+    )
+
     lines.extend(["", "## References", ""])
     for study in top_studies:
         citation_parts = [f"[{study.reference_number}] {study.title}"]

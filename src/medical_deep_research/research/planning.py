@@ -160,6 +160,7 @@ def suggest_databases(query: str, provider: str) -> list[str]:
             "OpenAlex",
             "Crossref",
             "Semantic Scholar",
+            "ClinicalTrials.gov",
         ]
     else:
         databases = [
@@ -253,6 +254,7 @@ def build_query_plan(
         "Crossref": normalized_query,
         "Semantic Scholar": normalized_query,
         "Cochrane": f"{normalized_query} AND systematic review",
+        "ClinicalTrials.gov": normalized_query,
     }
     scopus_query = convert_to_scopus_query(pubmed_query)
     if scopus_query:

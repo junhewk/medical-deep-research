@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from contextlib import contextmanager
 from json import JSONDecodeError
 from pathlib import Path
@@ -35,6 +36,7 @@ from .research import (
     search_source,
     verify_studies,
 )
+from .progress import ProgressTracker
 from .research.models import QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
 from .agentic_tools import (
     AgenticEventBridge,
@@ -42,13 +44,16 @@ from .agentic_tools import (
     agentic_system_prompt,
     recover_report_from_bridge,
     report_quality_issues,
+    tool_appraise_evidence,
     tool_await_user_pdfs,
     tool_fetch_fulltext,
     tool_finalize_ranking,
     tool_get_studies,
     tool_parse_pdf,
     tool_plan_search,
+    tool_screen_studies,
     tool_search,
+    tool_snowball,
     tool_suggest_databases,
     tool_submit_report,
     tool_synthesize_report,
@@ -69,7 +74,9 @@ MAX_AGENT_SEARCH_ITERATIONS = 2
 DEFAULT_SEARCH_RESULTS_PER_SOURCE = 8
 MAX_AGENT_SEARCH_RESULTS_PER_SOURCE = 20
 SEARCH_GUIDANCE_TIMEOUT_SECONDS = 20.0
+SCREENING_TIMEOUT_SECONDS = 20.0
 REWIND_DECISION_TIMEOUT_SECONDS = 15.0
+APPRAISAL_TIMEOUT_SECONDS = 30.0
 FINAL_SYNTHESIS_TIMEOUT_SECONDS = 25.0
 ANTHROPIC_AGENTIC_TIMEOUT_SECONDS = 300.0
 ANTHROPIC_AGENTIC_MAX_TURNS = 25
@@ -100,6 +107,31 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _ev(
+    tracker: ProgressTracker,
+    event_type: EventType,
+    phase: str,
+    message: str,
+    *,
+    complete: bool = False,
+    **kwargs: Any,
+) -> RuntimeEventPayload:
+    """Build an event whose phase label and percent come from the tracker."""
+    if complete:
+        label = tracker.phase_label(phase)
+        progress = tracker.complete()
+    else:
+        label, _ = tracker.enter(phase)
+        progress = tracker.advance()
+    return RuntimeEventPayload(
+        event_type=event_type,
+        phase=label,
+        progress=progress,
+        message=message,
+        **kwargs,
+    )
+
+
 class AgentResearchOutput(BaseModel):
     plan: QueryPlan
     search_results: list[SearchProviderResult] = Field(default_factory=list)
@@ -125,8 +157,42 @@ class RewindDecisionOutput(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class ScreeningExclusion(BaseModel):
+    reference_number: int
+    reason: str
+
+
+class ScreeningOutput(BaseModel):
+    included_reference_numbers: list[int] = Field(default_factory=list)
+    exclusions: list[ScreeningExclusion] = Field(default_factory=list)
+    rationale: str = ""
+
+
+class AppraisedFinding(BaseModel):
+    finding: str
+    certainty: str  # High | Moderate | Low | Very Low
+    rationale: str = ""
+    reference_numbers: list[int] = Field(default_factory=list)
+
+
+class AppraisalOutput(BaseModel):
+    findings: list[AppraisedFinding] = Field(default_factory=list)
+    overall_note: str = ""
+
+
 class FinalSynthesisOutput(BaseModel):
     final_report: str
+
+
+@dataclass
+class _IterationResult:
+    events: list[RuntimeEventPayload]
+    provider_results: list[SearchProviderResult]
+    ranked: list[ScoredStudy]
+    verification: VerificationSummary
+    screening: dict[str, Any] | None = None
+    appraisal: dict[str, Any] | None = None
+    notes: list[str] = field(default_factory=list)
 
 
 class ProviderDiagnostics(BaseModel):
@@ -555,6 +621,9 @@ class DeterministicRuntime(ResearchRuntime):
     search_agent_name: str = "Search Agent"
     synthesis_agent_name: str = "Synthesis Agent"
     verifier_name: str = "Verification Agent"
+    # Pre-seeded tracker so a mid-stream fallback continues from the percent
+    # already shown to the user instead of regressing to 0.
+    _seed_tracker: ProgressTracker | None = None
 
     def _execution_mode(self, request: RunRequest) -> str:
         del request
@@ -576,64 +645,64 @@ class DeterministicRuntime(ResearchRuntime):
         return extra
 
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
+        tracker = getattr(self, "_seed_tracker", None) or ProgressTracker()
         plan = build_query_plan(request.query, request.query_type, request.provider, request.query_payload)
-        yield RuntimeEventPayload(
-            event_type=EventType.RUN_STARTED,
-            phase="planning",
-            progress=5,
-            message=f"Starting deterministic {self.runtime_name} research run",
+        yield _ev(
+            tracker,
+            EventType.RUN_STARTED,
+            "planning",
+            f"Starting deterministic {self.runtime_name} research run",
             extra=self._run_start_extra(request),
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.AGENT_STARTED,
-            phase="planning",
-            progress=10,
-            message=f"{self.planner_name} is building the source-specific query plan",
+        yield _ev(
+            tracker,
+            EventType.AGENT_STARTED,
+            "planning",
+            f"{self.planner_name} is building the source-specific query plan",
             agent_name=self.planner_name,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="planning",
-            progress=18,
-            message="Created initial todo list",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "planning",
+            "Created initial todo list",
             artifact_type=ArtifactType.TODO_LIST,
             artifact_name="Research TODOs",
             artifact_text="\n".join(f"- {todo}" for todo in plan.todos),
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.TOOL_CALLED,
-            phase="planning",
-            progress=22,
-            message="Prepared deterministic query plan",
+        yield _ev(
+            tracker,
+            EventType.TOOL_CALLED,
+            "planning",
+            "Prepared deterministic query plan",
             tool_name="literature.keyword_bundle",
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="planning",
-            progress=28,
-            message="Saved search plan artifact",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "planning",
+            "Saved search plan artifact",
             artifact_type=ArtifactType.SEARCH_PLAN,
             artifact_name="Search Plan",
             artifact_json=plan.model_dump(),
         )
 
-        yield RuntimeEventPayload(
-            event_type=EventType.AGENT_STARTED,
-            phase="searching",
-            progress=34,
-            message=f"{self.search_agent_name} is executing the fixed source order",
+        yield _ev(
+            tracker,
+            EventType.AGENT_STARTED,
+            "searching",
+            f"{self.search_agent_name} is executing the fixed source order",
             agent_name=self.search_agent_name,
         )
 
         provider_results: list[SearchProviderResult] = []
-        for index, source in enumerate(plan.databases):
+        for source in plan.databases:
             source_query = plan.source_queries.get(source, plan.normalized_query)
-            base_progress = 36 + index * 8
-            yield RuntimeEventPayload(
-                event_type=EventType.TOOL_CALLED,
-                phase="searching",
-                progress=base_progress,
-                message=f"Searching {source}",
+            yield _ev(
+                tracker,
+                EventType.TOOL_CALLED,
+                "searching",
+                f"Searching {source}",
                 tool_name=_source_tool_name(source),
                 extra={"query": source_query},
             )
@@ -648,29 +717,29 @@ class DeterministicRuntime(ResearchRuntime):
                 scopus_view=request.scopus_view,
             )
             provider_results.append(result)
-            yield RuntimeEventPayload(
-                event_type=EventType.TOOL_RESULT,
-                phase="searching",
-                progress=min(base_progress + 5, 72),
-                message=f"{source} completed with {len(result.studies)} studies",
+            yield _ev(
+                tracker,
+                EventType.TOOL_RESULT,
+                "searching",
+                f"{source} completed with {len(result.studies)} studies",
                 tool_name=_source_tool_name(source),
                 extra={"error": result.error, "skipped": result.skipped, "count": len(result.studies)},
             )
-            yield RuntimeEventPayload(
-                event_type=EventType.ARTIFACT_CREATED,
-                phase="searching",
-                progress=min(base_progress + 6, 74),
-                message=f"Captured {source} search results",
+            yield _ev(
+                tracker,
+                EventType.ARTIFACT_CREATED,
+                "searching",
+                f"Captured {source} search results",
                 artifact_type=ArtifactType.SEARCH_RESULTS,
                 artifact_name=f"{source} Results",
                 artifact_json=result.model_dump(),
             )
 
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="searching",
-            progress=76,
-            message="Captured source execution summary",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "searching",
+            "Captured source execution summary",
             artifact_type=ArtifactType.SOURCE_PLAN,
             artifact_name="Source Execution Summary",
             artifact_json={
@@ -681,18 +750,18 @@ class DeterministicRuntime(ResearchRuntime):
         )
 
         all_studies = flatten_studies(provider_results)
-        yield RuntimeEventPayload(
-            event_type=EventType.AGENT_STARTED,
-            phase="searching",
-            progress=78,
-            message="Scoring and ranking aggregated studies",
+        yield _ev(
+            tracker,
+            EventType.AGENT_STARTED,
+            "ranking",
+            "Scoring and ranking aggregated studies",
             agent_name=self.search_agent_name,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.TOOL_CALLED,
-            phase="searching",
-            progress=80,
-            message="Ranking studies with deterministic scoring",
+        yield _ev(
+            tracker,
+            EventType.TOOL_CALLED,
+            "ranking",
+            "Ranking studies with deterministic scoring",
             tool_name="evidence.rank_results",
         )
         ranked = score_and_rank_results(
@@ -701,41 +770,34 @@ class DeterministicRuntime(ResearchRuntime):
             query=request.query,
             query_payload=request.query_payload,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.TOOL_RESULT,
-            phase="searching",
-            progress=82,
-            message=f"Ranked {len(ranked)} studies",
+        yield _ev(
+            tracker,
+            EventType.TOOL_RESULT,
+            "ranking",
+            f"Ranked {len(ranked)} studies",
             tool_name="evidence.rank_results",
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.AGENT_STARTED,
-            phase="synthesizing",
-            progress=84,
-            message=f"{self.synthesis_agent_name} is assembling the deterministic report",
-            agent_name=self.synthesis_agent_name,
-        )
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="synthesizing",
-            progress=86,
-            message="Saved ranked evidence artifact",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "ranking",
+            "Saved ranked evidence artifact",
             artifact_type=ArtifactType.RANKED_RESULTS,
             artifact_name="Ranked Results",
             artifact_json={"studies": [study.model_dump() for study in ranked[:12]]},
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.AGENT_STARTED,
-            phase="verifying",
-            progress=88,
-            message=f"{self.verifier_name} is checking PubMed identifiers",
+        yield _ev(
+            tracker,
+            EventType.AGENT_STARTED,
+            "verifying",
+            f"{self.verifier_name} is checking PubMed identifiers",
             agent_name=self.verifier_name,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.TOOL_CALLED,
-            phase="verifying",
-            progress=90,
-            message="Running deterministic verification checks",
+        yield _ev(
+            tracker,
+            EventType.TOOL_CALLED,
+            "verifying",
+            "Running deterministic verification checks",
             tool_name="evidence.verify_results",
         )
         verification = await verify_studies(
@@ -750,22 +812,29 @@ class DeterministicRuntime(ResearchRuntime):
                 "No ranked studies were available for identifier verification."
             )
             verification_report = render_verification_report(verification)
-        yield RuntimeEventPayload(
-            event_type=EventType.TOOL_RESULT,
-            phase="verifying",
-            progress=93,
-            message="Verification checks completed",
+        yield _ev(
+            tracker,
+            EventType.TOOL_RESULT,
+            "verifying",
+            "Verification checks completed",
             tool_name="evidence.verify_results",
             extra=verification.model_dump(),
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="verifying",
-            progress=95,
-            message="Saved verification artifact",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "verifying",
+            "Saved verification artifact",
             artifact_type=ArtifactType.VERIFICATION_REPORT,
             artifact_name="Verification Report",
             artifact_text=verification_report,
+        )
+        yield _ev(
+            tracker,
+            EventType.AGENT_STARTED,
+            "synthesizing",
+            f"{self.synthesis_agent_name} is assembling the deterministic report",
+            agent_name=self.synthesis_agent_name,
         )
         final_report = render_report(
             query=request.query,
@@ -777,30 +846,33 @@ class DeterministicRuntime(ResearchRuntime):
             runtime_name=self.runtime_name,
         )
         translation_bridge = AgenticEventBridge()
+        translation_bridge.progress = tracker
         final_report, translate_events = await _maybe_translate_report(request, translation_bridge, final_report)
         for evt in translate_events:
             yield evt
-        yield RuntimeEventPayload(
-            event_type=EventType.REPORT_DELTA,
-            phase="synthesizing",
-            progress=97,
-            message="Report body updated from ranked evidence",
+        yield _ev(
+            tracker,
+            EventType.REPORT_DELTA,
+            "synthesizing",
+            "Report body updated from ranked evidence",
             report_markdown=final_report,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="complete",
-            progress=100,
-            message="Saved final report artifact",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "complete",
+            "Saved final report artifact",
+            complete=True,
             artifact_type=ArtifactType.FINAL_REPORT,
             artifact_name="Final Report",
             artifact_text=final_report,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.RUN_COMPLETED,
-            phase="complete",
-            progress=100,
-            message=f"{self.runtime_name} run completed",
+        yield _ev(
+            tracker,
+            EventType.RUN_COMPLETED,
+            "complete",
+            f"{self.runtime_name} run completed",
+            complete=True,
             report_markdown=final_report,
             extra={
                 **self._run_completed_extra(request, len(ranked)),
@@ -815,7 +887,9 @@ class AgenticFailureFallbackRuntime(DeterministicRuntime):
         source_runtime: ResearchRuntime,
         fallback_reason: str,
         failure_diagnostics: dict[str, Any] | None = None,
+        tracker: ProgressTracker | None = None,
     ) -> None:
+        self._seed_tracker = tracker
         self.provider = source_runtime.provider
         self.runtime_name = f"{source_runtime.runtime_name} deterministic fallback"
         self.sdk_module = source_runtime.sdk_module
@@ -867,13 +941,13 @@ class NativeSDKRuntime(DeterministicRuntime):
     def _should_fallback(self, request: RunRequest) -> bool:
         return provider_fallback_reason(self, request) is not None
 
-    def _native_start_events(self, request: RunRequest) -> list[RuntimeEventPayload]:
+    def _native_start_events(self, request: RunRequest, tracker: ProgressTracker) -> list[RuntimeEventPayload]:
         return [
-            RuntimeEventPayload(
-                event_type=EventType.RUN_STARTED,
-                phase="planning",
-                progress=5,
-                message=f"Starting native {self.runtime_name} research run",
+            _ev(
+                tracker,
+                EventType.RUN_STARTED,
+                "planning",
+                f"Starting native {self.runtime_name} research run",
                 extra={
                     "sdk_available": self.sdk_available,
                     "offline_mode": request.offline_mode,
@@ -883,11 +957,11 @@ class NativeSDKRuntime(DeterministicRuntime):
                     "search_credentials_present": _search_credentials_present(request.api_keys),
                 },
             ),
-            RuntimeEventPayload(
-                event_type=EventType.AGENT_STARTED,
-                phase="planning",
-                progress=12,
-                message=f"{self.native_agent_name} is guiding search checkpoints",
+            _ev(
+                tracker,
+                EventType.AGENT_STARTED,
+                "planning",
+                f"{self.native_agent_name} is guiding search checkpoints",
                 agent_name=self.native_agent_name,
             ),
         ]
@@ -949,8 +1023,10 @@ class NativeSDKRuntime(DeterministicRuntime):
         ranked: list[ScoredStudy],
         verification: VerificationSummary,
         iteration: int,
+        screening: dict[str, Any] | None = None,
+        appraisal: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "iteration": iteration + 1,
             "plan": self._plan_summary_payload(plan),
             "source_counts": {result.source: len(result.studies) for result in results},
@@ -959,6 +1035,26 @@ class NativeSDKRuntime(DeterministicRuntime):
             "top_ranked_studies": [self._compact_study_summary(study) for study in ranked[:8]],
             "verification": verification.model_dump(),
         }
+        if screening:
+            payload["screening"] = {
+                "included": screening.get("included"),
+                "excluded_count": len(screening.get("excluded", [])),
+                "top_exclusion_reasons": [ex.get("reason") for ex in screening.get("excluded", [])[:5]],
+            }
+        if appraisal:
+            findings = appraisal.get("findings", [])
+            histogram: dict[str, int] = {}
+            low_findings: list[str] = []
+            for finding in findings:
+                certainty = str(finding.get("certainty", "")).strip() or "Unknown"
+                histogram[certainty] = histogram.get(certainty, 0) + 1
+                if certainty.lower() in ("low", "very low"):
+                    low_findings.append(str(finding.get("finding", "")))
+            payload["appraisal"] = {
+                "certainty_histogram": histogram,
+                "low_certainty_findings": low_findings[:5],
+            }
+        return payload
 
     def _apply_guidance(
         self,
@@ -1033,12 +1129,16 @@ class NativeSDKRuntime(DeterministicRuntime):
         ranked: list[ScoredStudy],
         verification: VerificationSummary,
         iteration: int,
+        screening: dict[str, Any] | None = None,
+        appraisal: dict[str, Any] | None = None,
     ) -> RewindDecisionOutput:
         instructions = "\n".join(
             [
                 "You are deciding whether the literature search should be rewound with adjusted source queries.",
                 "Rewind only when another search pass is likely to materially improve coverage or reduce obvious noise.",
                 "Reasons to rewind include: too few relevant studies, source failures, poor verification coverage, or queries that are clearly too narrow.",
+                "Also rewind when screening left fewer than 3 included studies (broaden the queries),",
+                "or when no High/Moderate-certainty evidence exists for the core outcome (target RCTs, systematic reviews, or registered trials).",
                 "If no rewind is needed, set should_rewind to false and leave source_queries empty.",
                 "If rewind is needed, only update source_queries for the affected sources.",
             ]
@@ -1053,6 +1153,8 @@ class NativeSDKRuntime(DeterministicRuntime):
                         ranked=ranked,
                         verification=verification,
                         iteration=iteration,
+                        screening=screening,
+                        appraisal=appraisal,
                     ),
                     indent=2,
                 ),
@@ -1068,6 +1170,77 @@ class NativeSDKRuntime(DeterministicRuntime):
             output_model=RewindDecisionOutput,
         )
 
+    async def _request_screening(
+        self,
+        request: RunRequest,
+        *,
+        plan: QueryPlan,
+        pre_ranked: list[ScoredStudy],
+    ) -> ScreeningOutput:
+        instructions = "\n".join(
+            [
+                "You are screening retrieved studies for an evidence review against the research question.",
+                "Include studies that match the population, intervention/exposure, comparator, and outcomes of interest.",
+                "Exclude studies that are off-topic, the wrong population, the wrong intervention/comparator, or the wrong study type — give a short reason for each exclusion.",
+                "Return included_reference_numbers for the studies to keep and exclusions for the studies to drop.",
+                "When in doubt, include the study. Do not exclude more than half unless they are clearly irrelevant.",
+            ]
+        )
+        prompt = "\n".join(
+            [
+                "Research question:",
+                request.query,
+                "",
+                "Candidate studies JSON:",
+                json.dumps([self._compact_study_summary(study) for study in pre_ranked], indent=2),
+                "",
+                "Decide which studies to include and which to exclude (with reasons).",
+            ]
+        )
+        return await self._run_structured_checkpoint(
+            request,
+            task_name="screening",
+            instructions=instructions,
+            prompt=prompt,
+            output_model=ScreeningOutput,
+        )
+
+    async def _request_appraisal(
+        self,
+        request: RunRequest,
+        *,
+        plan: QueryPlan,
+        ranked: list[ScoredStudy],
+        verification: VerificationSummary,
+    ) -> AppraisalOutput:
+        instructions = "\n".join(
+            [
+                "You are appraising the certainty of evidence (GRADE) for the key findings of this review.",
+                "For each major finding, start High for RCT/meta-analysis-based evidence and Low for observational evidence.",
+                "Rate DOWN for risk of bias, inconsistency, indirectness, and imprecision.",
+                "Report certainty as exactly one of: High, Moderate, Low, Very Low — with a one-line rationale and the supporting reference numbers.",
+                "Base findings only on the supplied studies; do not invent outcomes.",
+            ]
+        )
+        prompt = "\n".join(
+            [
+                "Research question:",
+                request.query,
+                "",
+                "Ranked studies JSON:",
+                json.dumps([self._compact_study_summary(study) for study in ranked[:10]], indent=2),
+                "",
+                "Return a GRADE certainty assessment per major finding.",
+            ]
+        )
+        return await self._run_structured_checkpoint(
+            request,
+            task_name="appraisal",
+            instructions=instructions,
+            prompt=prompt,
+            output_model=AppraisalOutput,
+        )
+
     async def _request_final_synthesis(
         self,
         request: RunRequest,
@@ -1076,13 +1249,17 @@ class NativeSDKRuntime(DeterministicRuntime):
         results: list[SearchProviderResult],
         ranked: list[ScoredStudy],
         verification: VerificationSummary,
+        screening: dict[str, Any] | None = None,
+        appraisal: dict[str, Any] | None = None,
     ) -> FinalSynthesisOutput:
         instructions = "\n".join(
             [
                 "Write a medical evidence report in markdown from the supplied deterministic evidence bundle.",
                 "Do not invent citations, PMIDs, or findings that are not present in the input.",
                 "Be explicit when evidence is weak, indirect, missing, or contradicted by source failures.",
-                "Use sections: Executive Summary, Methods, Ranked Evidence, Verification, References.",
+                "State the GRADE certainty of evidence (High/Moderate/Low/Very Low) for each major finding using the appraisal data.",
+                "If the appraisal was based on abstracts only, note that limitation; in Methods, note how many studies were screened out.",
+                "Use sections: Executive Summary, Methods, Ranked Evidence, Certainty of Evidence, Verification, References.",
             ]
         )
         prompt = "\n".join(
@@ -1095,6 +1272,8 @@ class NativeSDKRuntime(DeterministicRuntime):
                         ranked=ranked,
                         verification=verification,
                         iteration=max(self.max_search_iterations - 1, 0),
+                        screening=screening,
+                        appraisal=appraisal,
                     ),
                     indent=2,
                 ),
@@ -1118,31 +1297,31 @@ class NativeSDKRuntime(DeterministicRuntime):
         *,
         plan: QueryPlan,
         iteration: int,
-    ) -> tuple[list[RuntimeEventPayload], list[SearchProviderResult], list[ScoredStudy], VerificationSummary]:
+        tracker: ProgressTracker,
+    ) -> _IterationResult:
         events: list[RuntimeEventPayload] = []
         provider_results: list[SearchProviderResult] = []
-        progress_base = 34 + iteration * 24
+        notes: list[str] = []
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.AGENT_STARTED,
-            phase="searching",
-            progress=progress_base,
-            message=f"{self.search_agent_name} is executing search cycle {iteration + 1}",
-            agent_name=self.search_agent_name,
+            _ev(
+                tracker,
+                EventType.AGENT_STARTED,
+                "searching",
+                f"{self.search_agent_name} is executing search cycle {iteration + 1}",
+                agent_name=self.search_agent_name,
             )
         )
 
-        for index, source in enumerate(plan.databases):
+        for source in plan.databases:
             source_query = plan.source_queries.get(source, plan.normalized_query)
-            step_progress = min(progress_base + 2 + index * 3, 52 + iteration * 20)
             events.append(
-                RuntimeEventPayload(
-                event_type=EventType.TOOL_CALLED,
-                phase="searching",
-                progress=step_progress,
-                message=f"Searching {source} in cycle {iteration + 1}",
-                tool_name=_source_tool_name(source),
-                extra={"query": source_query, "iteration": iteration + 1},
+                _ev(
+                    tracker,
+                    EventType.TOOL_CALLED,
+                    "searching",
+                    f"Searching {source} in cycle {iteration + 1}",
+                    tool_name=_source_tool_name(source),
+                    extra={"query": source_query, "iteration": iteration + 1},
                 )
             )
             result = await search_source(
@@ -1157,57 +1336,57 @@ class NativeSDKRuntime(DeterministicRuntime):
             )
             provider_results.append(result)
             events.append(
-                RuntimeEventPayload(
-                event_type=EventType.TOOL_RESULT,
-                phase="searching",
-                progress=min(step_progress + 1, 54 + iteration * 20),
-                message=f"{source} completed with {len(result.studies)} studies",
-                tool_name=_source_tool_name(source),
-                extra={
-                    "error": result.error,
-                    "skipped": result.skipped,
-                    "count": len(result.studies),
-                    "iteration": iteration + 1,
-                },
+                _ev(
+                    tracker,
+                    EventType.TOOL_RESULT,
+                    "searching",
+                    f"{source} completed with {len(result.studies)} studies",
+                    tool_name=_source_tool_name(source),
+                    extra={
+                        "error": result.error,
+                        "skipped": result.skipped,
+                        "count": len(result.studies),
+                        "iteration": iteration + 1,
+                    },
                 )
             )
             events.append(
-                RuntimeEventPayload(
-                event_type=EventType.ARTIFACT_CREATED,
-                phase="searching",
-                progress=min(step_progress + 2, 56 + iteration * 20),
-                message=f"Captured {source} search results for cycle {iteration + 1}",
-                artifact_type=ArtifactType.SEARCH_RESULTS,
-                artifact_name=f"{source} Results (Cycle {iteration + 1})",
-                artifact_json=result.model_dump(),
+                _ev(
+                    tracker,
+                    EventType.ARTIFACT_CREATED,
+                    "searching",
+                    f"Captured {source} search results for cycle {iteration + 1}",
+                    artifact_type=ArtifactType.SEARCH_RESULTS,
+                    artifact_name=f"{source} Results (Cycle {iteration + 1})",
+                    artifact_json=result.model_dump(),
                 )
             )
 
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="searching",
-            progress=min(progress_base + 14, 60 + iteration * 20),
-            message=f"Captured source execution summary for cycle {iteration + 1}",
-            artifact_type=ArtifactType.SOURCE_PLAN,
-            artifact_name=f"Source Execution Summary (Cycle {iteration + 1})",
-            artifact_json={
-                "iteration": iteration + 1,
-                "sources": [result.source for result in provider_results],
-                "counts": {result.source: len(result.studies) for result in provider_results},
-                "errors": {result.source: result.error for result in provider_results if result.error},
-            },
+            _ev(
+                tracker,
+                EventType.ARTIFACT_CREATED,
+                "searching",
+                f"Captured source execution summary for cycle {iteration + 1}",
+                artifact_type=ArtifactType.SOURCE_PLAN,
+                artifact_name=f"Source Execution Summary (Cycle {iteration + 1})",
+                artifact_json={
+                    "iteration": iteration + 1,
+                    "sources": [result.source for result in provider_results],
+                    "counts": {result.source: len(result.studies) for result in provider_results},
+                    "errors": {result.source: result.error for result in provider_results if result.error},
+                },
             )
         )
 
         all_studies = flatten_studies(provider_results)
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.TOOL_CALLED,
-            phase="searching",
-            progress=min(progress_base + 16, 62 + iteration * 20),
-            message=f"Ranking studies for cycle {iteration + 1}",
-            tool_name="evidence.rank_results",
+            _ev(
+                tracker,
+                EventType.TOOL_CALLED,
+                "ranking",
+                f"Ranking studies for cycle {iteration + 1}",
+                tool_name="evidence.rank_results",
             )
         )
         ranked = score_and_rank_results(
@@ -1217,42 +1396,70 @@ class NativeSDKRuntime(DeterministicRuntime):
             query_payload=request.query_payload,
         )
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.TOOL_RESULT,
-            phase="searching",
-            progress=min(progress_base + 18, 64 + iteration * 20),
-            message=f"Ranked {len(ranked)} studies in cycle {iteration + 1}",
-            tool_name="evidence.rank_results",
+            _ev(
+                tracker,
+                EventType.TOOL_RESULT,
+                "ranking",
+                f"Ranked {len(ranked)} studies in cycle {iteration + 1}",
+                tool_name="evidence.rank_results",
             )
         )
+
+        # Screening checkpoint: include/exclude against the question, then renumber.
+        screening_summary: dict[str, Any] | None = None
+        if ranked:
+            events.append(
+                _ev(
+                    tracker,
+                    EventType.TOOL_CALLED,
+                    "screening",
+                    f"Screening studies against the question for cycle {iteration + 1}",
+                    tool_name="agent.screen_studies",
+                )
+            )
+            ranked, screening_summary, screen_note = await self._apply_screening(request, plan=plan, ranked=ranked)
+            if screen_note:
+                notes.append(screen_note)
+            events.append(
+                _ev(
+                    tracker,
+                    EventType.ARTIFACT_CREATED,
+                    "screening",
+                    f"Saved screening decisions for cycle {iteration + 1}",
+                    artifact_type=ArtifactType.SCREENING_DECISIONS,
+                    artifact_name=f"Screening Decisions (Cycle {iteration + 1})",
+                    artifact_json=screening_summary,
+                )
+            )
+
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="synthesizing",
-            progress=min(progress_base + 19, 65 + iteration * 20),
-            message=f"Saved ranked evidence artifact for cycle {iteration + 1}",
-            artifact_type=ArtifactType.RANKED_RESULTS,
-            artifact_name=f"Ranked Results (Cycle {iteration + 1})",
-            artifact_json={"studies": [study.model_dump() for study in ranked[:12]]},
+            _ev(
+                tracker,
+                EventType.ARTIFACT_CREATED,
+                "ranking",
+                f"Saved ranked evidence artifact for cycle {iteration + 1}",
+                artifact_type=ArtifactType.RANKED_RESULTS,
+                artifact_name=f"Ranked Results (Cycle {iteration + 1})",
+                artifact_json={"studies": [study.model_dump() for study in ranked[:12]]},
             )
         )
 
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.AGENT_STARTED,
-            phase="verifying",
-            progress=min(progress_base + 20, 66 + iteration * 20),
-            message=f"{self.verifier_name} is checking PubMed identifiers for cycle {iteration + 1}",
-            agent_name=self.verifier_name,
+            _ev(
+                tracker,
+                EventType.AGENT_STARTED,
+                "verifying",
+                f"{self.verifier_name} is checking PubMed identifiers for cycle {iteration + 1}",
+                agent_name=self.verifier_name,
             )
         )
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.TOOL_CALLED,
-            phase="verifying",
-            progress=min(progress_base + 21, 67 + iteration * 20),
-            message=f"Running verification checks for cycle {iteration + 1}",
-            tool_name="evidence.verify_results",
+            _ev(
+                tracker,
+                EventType.TOOL_CALLED,
+                "verifying",
+                f"Running verification checks for cycle {iteration + 1}",
+                tool_name="evidence.verify_results",
             )
         )
         verification = await verify_studies(
@@ -1266,27 +1473,154 @@ class NativeSDKRuntime(DeterministicRuntime):
                 "No ranked studies were available for identifier verification."
             )
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.TOOL_RESULT,
-            phase="verifying",
-            progress=min(progress_base + 22, 68 + iteration * 20),
-            message=f"Verification checks completed for cycle {iteration + 1}",
-            tool_name="evidence.verify_results",
-            extra=verification.model_dump(),
+            _ev(
+                tracker,
+                EventType.TOOL_RESULT,
+                "verifying",
+                f"Verification checks completed for cycle {iteration + 1}",
+                tool_name="evidence.verify_results",
+                extra=verification.model_dump(),
             )
         )
         events.append(
-            RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="verifying",
-            progress=min(progress_base + 23, 69 + iteration * 20),
-            message=f"Saved verification artifact for cycle {iteration + 1}",
-            artifact_type=ArtifactType.VERIFICATION_REPORT,
-            artifact_name=f"Verification Report (Cycle {iteration + 1})",
-            artifact_text=render_verification_report(verification),
+            _ev(
+                tracker,
+                EventType.ARTIFACT_CREATED,
+                "verifying",
+                f"Saved verification artifact for cycle {iteration + 1}",
+                artifact_type=ArtifactType.VERIFICATION_REPORT,
+                artifact_name=f"Verification Report (Cycle {iteration + 1})",
+                artifact_text=render_verification_report(verification),
             )
         )
-        return events, provider_results, ranked, verification
+
+        # Appraisal checkpoint: GRADE certainty per major finding.
+        appraisal_summary: dict[str, Any] | None = None
+        if ranked:
+            events.append(
+                _ev(
+                    tracker,
+                    EventType.TOOL_CALLED,
+                    "appraising",
+                    f"Appraising certainty of evidence (GRADE) for cycle {iteration + 1}",
+                    tool_name="agent.appraise_evidence",
+                )
+            )
+            appraisal_summary, appraise_note = await self._apply_appraisal(
+                request, plan=plan, ranked=ranked, verification=verification
+            )
+            if appraise_note:
+                notes.append(appraise_note)
+            events.append(
+                _ev(
+                    tracker,
+                    EventType.ARTIFACT_CREATED,
+                    "appraising",
+                    f"Saved GRADE appraisal for cycle {iteration + 1}",
+                    artifact_type=ArtifactType.APPRAISAL_SUMMARY,
+                    artifact_name=f"GRADE Appraisal (Cycle {iteration + 1})",
+                    artifact_json=appraisal_summary,
+                )
+            )
+
+        return _IterationResult(
+            events=events,
+            provider_results=provider_results,
+            ranked=ranked,
+            verification=verification,
+            screening=screening_summary,
+            appraisal=appraisal_summary,
+            notes=notes,
+        )
+
+    async def _apply_screening(
+        self,
+        request: RunRequest,
+        *,
+        plan: QueryPlan,
+        ranked: list[ScoredStudy],
+    ) -> tuple[list[ScoredStudy], dict[str, Any], str | None]:
+        """Run the screening checkpoint; on failure, include all studies.
+
+        Returns the (renumbered) included studies, a screening summary, and an
+        optional note for the rewind decision.
+        """
+        title_by_ref = {s.reference_number: s.title for s in ranked}
+        try:
+            decision = await asyncio.wait_for(
+                self._request_screening(request, plan=plan, pre_ranked=ranked),
+                timeout=SCREENING_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            summary = {
+                "screened_count": len(ranked),
+                "included": len(ranked),
+                "excluded": [],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            return ranked, summary, None
+
+        excluded_map = {
+            ex.reference_number: ex.reason
+            for ex in decision.exclusions
+            if ex.reference_number in title_by_ref
+        }
+        included_set = set(decision.included_reference_numbers)
+        kept: list[ScoredStudy] = []
+        for study in ranked:
+            ref = study.reference_number
+            # Exclude only when explicitly excluded and not explicitly included.
+            if ref in excluded_map and ref not in included_set:
+                continue
+            kept.append(study)
+        if not kept:  # Never screen everything out.
+            kept = list(ranked)
+            excluded_map = {}
+        # Renumber contiguously so the report reference gate stays satisfied.
+        renumbered: list[ScoredStudy] = []
+        for new_ref, study in enumerate(kept, start=1):
+            copy = study.model_copy(deep=True)
+            copy.reference_number = new_ref
+            renumbered.append(copy)
+        summary = {
+            "screened_count": len(ranked),
+            "included": len(renumbered),
+            "excluded": [
+                {"reference_number": ref, "title": title_by_ref.get(ref, ""), "reason": reason}
+                for ref, reason in excluded_map.items()
+            ],
+            "rationale": decision.rationale,
+        }
+        note = None
+        if len(renumbered) < 3:
+            note = f"Screening left only {len(renumbered)} studies; broaden the searches."
+        return renumbered, summary, note
+
+    async def _apply_appraisal(
+        self,
+        request: RunRequest,
+        *,
+        plan: QueryPlan,
+        ranked: list[ScoredStudy],
+        verification: VerificationSummary,
+    ) -> tuple[dict[str, Any], str | None]:
+        """Run the appraisal checkpoint; on failure, return a skipped summary."""
+        try:
+            appraisal = await asyncio.wait_for(
+                self._request_appraisal(request, plan=plan, ranked=ranked, verification=verification),
+                timeout=APPRAISAL_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            return {"findings": [], "skipped": True, "error": f"{type(exc).__name__}: {exc}"}, "Appraisal was skipped."
+        findings = [f.model_dump() for f in appraisal.findings]
+        summary = {"findings": findings, "overall_note": appraisal.overall_note}
+        note = None
+        high_moderate = [
+            f for f in appraisal.findings if f.certainty.strip().lower() in ("high", "moderate")
+        ]
+        if appraisal.findings and not high_moderate:
+            note = "No High/Moderate-certainty evidence was found for the core outcomes."
+        return summary, note
 
     async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
         if self._should_fallback(request):
@@ -1294,15 +1628,16 @@ class NativeSDKRuntime(DeterministicRuntime):
                 yield event
             return
 
-        for event in self._native_start_events(request):
+        tracker = ProgressTracker()
+        for event in self._native_start_events(request, tracker):
             yield event
 
         base_plan = build_query_plan(request.query, request.query_type, request.provider, request.query_payload)
-        yield RuntimeEventPayload(
-            event_type=EventType.TOOL_CALLED,
-            phase="planning",
-            progress=16,
-            message="Requesting provider-guided query broadening",
+        yield _ev(
+            tracker,
+            EventType.TOOL_CALLED,
+            "planning",
+            "Requesting provider-guided query broadening",
             tool_name="agent.search_guidance",
         )
         try:
@@ -1317,39 +1652,39 @@ class NativeSDKRuntime(DeterministicRuntime):
                 notes=guidance.notes,
                 summary=guidance.strategy_summary,
             )
-            yield RuntimeEventPayload(
-                event_type=EventType.TOOL_RESULT,
-                phase="planning",
-                progress=20,
-                message="Provider returned search guidance",
+            yield _ev(
+                tracker,
+                EventType.TOOL_RESULT,
+                "planning",
+                "Provider returned search guidance",
                 tool_name="agent.search_guidance",
                 extra=guidance.model_dump(),
             )
         except Exception as exc:
             plan = base_plan
-            yield RuntimeEventPayload(
-                event_type=EventType.TOOL_RESULT,
-                phase="planning",
-                progress=20,
-                message="Provider search guidance failed; using deterministic plan",
+            yield _ev(
+                tracker,
+                EventType.TOOL_RESULT,
+                "planning",
+                "Provider search guidance failed; using deterministic plan",
                 tool_name="agent.search_guidance",
                 extra={"error": f"{type(exc).__name__}: {exc}"},
             )
 
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="planning",
-            progress=24,
-            message="Created initial todo list",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "planning",
+            "Created initial todo list",
             artifact_type=ArtifactType.TODO_LIST,
             artifact_name="Research TODOs",
             artifact_text="\n".join(f"- {todo}" for todo in plan.todos),
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="planning",
-            progress=28,
-            message="Saved search plan artifact",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "planning",
+            "Saved search plan artifact",
             artifact_type=ArtifactType.SEARCH_PLAN,
             artifact_name="Search Plan",
             artifact_json=plan.model_dump(),
@@ -1358,30 +1693,38 @@ class NativeSDKRuntime(DeterministicRuntime):
         current_plan = plan
         final_results: list[SearchProviderResult] = []
         final_ranked: list[ScoredStudy] = []
+        final_screening: dict[str, Any] | None = None
+        final_appraisal: dict[str, Any] | None = None
         final_verification = empty_verification_summary(
             "Verification was not reached in the provider-guided loop."
         )
 
         for iteration in range(self.max_search_iterations):
-            iteration_events, provider_results, ranked, verification = await self._run_search_iteration(
+            iteration_result = await self._run_search_iteration(
                 request,
                 plan=current_plan,
                 iteration=iteration,
+                tracker=tracker,
             )
-            for event in iteration_events:
+            for event in iteration_result.events:
                 yield event
+            provider_results = iteration_result.provider_results
+            ranked = iteration_result.ranked
+            verification = iteration_result.verification
             final_results = provider_results
             final_ranked = ranked
             final_verification = verification
+            final_screening = iteration_result.screening
+            final_appraisal = iteration_result.appraisal
 
             if iteration + 1 >= self.max_search_iterations:
                 break
 
-            yield RuntimeEventPayload(
-                event_type=EventType.TOOL_CALLED,
-                phase="evaluating",
-                progress=72 + iteration * 10,
-                message=f"Requesting rewind decision after cycle {iteration + 1}",
+            yield _ev(
+                tracker,
+                EventType.TOOL_CALLED,
+                "evaluating",
+                f"Requesting rewind decision after cycle {iteration + 1}",
                 tool_name="agent.rewind_decision",
             )
             try:
@@ -1393,14 +1736,16 @@ class NativeSDKRuntime(DeterministicRuntime):
                         ranked=ranked,
                         verification=verification,
                         iteration=iteration,
+                        screening=iteration_result.screening,
+                        appraisal=iteration_result.appraisal,
                     ),
                     timeout=REWIND_DECISION_TIMEOUT_SECONDS,
                 )
-                yield RuntimeEventPayload(
-                    event_type=EventType.TOOL_RESULT,
-                    phase="evaluating",
-                    progress=74 + iteration * 10,
-                    message=f"Provider returned rewind decision after cycle {iteration + 1}",
+                yield _ev(
+                    tracker,
+                    EventType.TOOL_RESULT,
+                    "evaluating",
+                    f"Provider returned rewind decision after cycle {iteration + 1}",
                     tool_name="agent.rewind_decision",
                     extra=rewind.model_dump(),
                 )
@@ -1410,11 +1755,11 @@ class NativeSDKRuntime(DeterministicRuntime):
                     rationale="Provider rewind decision failed; continuing with current evidence.",
                     notes=[f"{type(exc).__name__}: {exc}"],
                 )
-                yield RuntimeEventPayload(
-                    event_type=EventType.TOOL_RESULT,
-                    phase="evaluating",
-                    progress=74 + iteration * 10,
-                    message=f"Provider rewind decision failed after cycle {iteration + 1}",
+                yield _ev(
+                    tracker,
+                    EventType.TOOL_RESULT,
+                    "evaluating",
+                    f"Provider rewind decision failed after cycle {iteration + 1}",
                     tool_name="agent.rewind_decision",
                     extra=rewind.model_dump(),
                 )
@@ -1430,11 +1775,11 @@ class NativeSDKRuntime(DeterministicRuntime):
                 break
 
             current_plan = updated_plan
-            yield RuntimeEventPayload(
-                event_type=EventType.ARTIFACT_CREATED,
-                phase="evaluating",
-                progress=76 + iteration * 10,
-                message=f"Saved rewound search plan for cycle {iteration + 2}",
+            yield _ev(
+                tracker,
+                EventType.ARTIFACT_CREATED,
+                "evaluating",
+                f"Saved rewound search plan for cycle {iteration + 2}",
                 artifact_type=ArtifactType.SEARCH_PLAN,
                 artifact_name=f"Search Plan (Cycle {iteration + 2})",
                 artifact_json=current_plan.model_dump(),
@@ -1449,11 +1794,11 @@ class NativeSDKRuntime(DeterministicRuntime):
             provider=request.provider,
             runtime_name=self.runtime_name,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.TOOL_CALLED,
-            phase="synthesizing",
-            progress=90,
-            message="Requesting provider final synthesis",
+        yield _ev(
+            tracker,
+            EventType.TOOL_CALLED,
+            "synthesizing",
+            "Requesting provider final synthesis",
             tool_name="agent.final_synthesis",
         )
         try:
@@ -1464,50 +1809,54 @@ class NativeSDKRuntime(DeterministicRuntime):
                     results=final_results,
                     ranked=final_ranked,
                     verification=final_verification,
+                    screening=final_screening,
+                    appraisal=final_appraisal,
                 ),
                 timeout=FINAL_SYNTHESIS_TIMEOUT_SECONDS,
             )
             final_report = synthesis.final_report.strip() or deterministic_report
-            yield RuntimeEventPayload(
-                event_type=EventType.TOOL_RESULT,
-                phase="synthesizing",
-                progress=93,
-                message="Provider final synthesis completed",
+            yield _ev(
+                tracker,
+                EventType.TOOL_RESULT,
+                "synthesizing",
+                "Provider final synthesis completed",
                 tool_name="agent.final_synthesis",
                 extra={"report_length": len(final_report)},
             )
         except Exception as exc:
             final_report = deterministic_report
-            yield RuntimeEventPayload(
-                event_type=EventType.TOOL_RESULT,
-                phase="synthesizing",
-                progress=93,
-                message="Provider final synthesis failed; using deterministic report",
+            yield _ev(
+                tracker,
+                EventType.TOOL_RESULT,
+                "synthesizing",
+                "Provider final synthesis failed; using deterministic report",
                 tool_name="agent.final_synthesis",
                 extra={"error": f"{type(exc).__name__}: {exc}", "report_length": len(final_report)},
             )
 
-        yield RuntimeEventPayload(
-            event_type=EventType.REPORT_DELTA,
-            phase="synthesizing",
-            progress=97,
-            message="Report body updated from provider-guided evidence loop",
+        yield _ev(
+            tracker,
+            EventType.REPORT_DELTA,
+            "synthesizing",
+            "Report body updated from provider-guided evidence loop",
             report_markdown=final_report,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="complete",
-            progress=100,
-            message="Saved final report artifact",
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "complete",
+            "Saved final report artifact",
+            complete=True,
             artifact_type=ArtifactType.FINAL_REPORT,
             artifact_name="Final Report",
             artifact_text=final_report,
         )
-        yield RuntimeEventPayload(
-            event_type=EventType.RUN_COMPLETED,
-            phase="complete",
-            progress=100,
-            message=f"{self.runtime_name} run completed",
+        yield _ev(
+            tracker,
+            EventType.RUN_COMPLETED,
+            "complete",
+            f"{self.runtime_name} run completed",
+            complete=True,
             report_markdown=final_report,
             extra={
                 "sdk_available": self.sdk_available,
@@ -1539,12 +1888,14 @@ def _agentic_user_prompt(request: RunRequest) -> str:
 # Agentic event helpers (shared across provider runtimes)
 # ---------------------------------------------------------------------------
 
-def _agentic_run_started(runtime: ResearchRuntime, request: RunRequest) -> RuntimeEventPayload:
-    return RuntimeEventPayload(
-        event_type=EventType.RUN_STARTED,
-        phase="planning",
-        progress=5,
-        message=f"Starting agentic {runtime.runtime_name} research run",
+def _agentic_run_started(
+    runtime: ResearchRuntime, request: RunRequest, bridge: AgenticEventBridge
+) -> RuntimeEventPayload:
+    return _ev(
+        bridge.progress,
+        EventType.RUN_STARTED,
+        "planning",
+        f"Starting agentic {runtime.runtime_name} research run",
         extra={
             "sdk_available": runtime.sdk_available,
             "offline_mode": request.offline_mode,
@@ -1556,12 +1907,12 @@ def _agentic_run_started(runtime: ResearchRuntime, request: RunRequest) -> Runti
     )
 
 
-def _agentic_agent_started(agent_name: str) -> RuntimeEventPayload:
-    return RuntimeEventPayload(
-        event_type=EventType.AGENT_STARTED,
-        phase="planning",
-        progress=7,
-        message=f"{agent_name} is autonomously driving the research workflow",
+def _agentic_agent_started(agent_name: str, bridge: AgenticEventBridge) -> RuntimeEventPayload:
+    return _ev(
+        bridge.progress,
+        EventType.AGENT_STARTED,
+        "planning",
+        f"{agent_name} is autonomously driving the research workflow",
         agent_name=agent_name,
     )
 
@@ -1587,20 +1938,20 @@ async def _maybe_translate_report(
     events: list[RuntimeEventPayload] = []
 
     # Save the English original as an artifact before translating
-    events.append(RuntimeEventPayload(
-        event_type=EventType.ARTIFACT_CREATED,
-        phase="translating",
-        progress=96,
-        message="Saved original English report",
+    events.append(_ev(
+        bridge.progress,
+        EventType.ARTIFACT_CREATED,
+        "translating",
+        "Saved original English report",
         artifact_type=ArtifactType.FINAL_REPORT,
         artifact_name="Report (English)",
         artifact_text=report,
     ))
-    events.append(RuntimeEventPayload(
-        event_type=EventType.AGENT_STARTED,
-        phase="translating",
-        progress=97,
-        message=f"Translating report to {request.language}",
+    events.append(_ev(
+        bridge.progress,
+        EventType.AGENT_STARTED,
+        "translating",
+        f"Translating report to {request.language}",
         agent_name="Report Translator",
     ))
     try:
@@ -1636,15 +1987,14 @@ def _agentic_debug_trace_event(
     bridge: AgenticEventBridge,
     *,
     phase: str = "diagnostics",
-    progress: int = 96,
 ) -> RuntimeEventPayload | None:
     if not bridge.full_trace_enabled:
         return None
-    return RuntimeEventPayload(
-        event_type=EventType.ARTIFACT_CREATED,
-        phase=phase,
-        progress=progress,
-        message="Saved full agentic debug trace",
+    return _ev(
+        bridge.progress,
+        EventType.ARTIFACT_CREATED,
+        phase,
+        "Saved full agentic debug trace",
         artifact_type=ArtifactType.DEBUG_TRACE,
         artifact_name="Agentic Debug Trace",
         artifact_json=bridge.debug_trace_payload(),
@@ -1699,27 +2049,29 @@ def _agentic_final_events(
         completion_extra["post_submit_error_type"] = bridge._intermediate.get("post_submit_error_type")
 
     return [
-        RuntimeEventPayload(
-            event_type=EventType.REPORT_DELTA,
-            phase="synthesizing",
-            progress=97,
-            message="Report assembled from agentic research workflow",
+        _ev(
+            bridge.progress,
+            EventType.REPORT_DELTA,
+            "synthesizing",
+            "Report assembled from agentic research workflow",
             report_markdown=final_report,
         ),
-        RuntimeEventPayload(
-            event_type=EventType.ARTIFACT_CREATED,
-            phase="complete",
-            progress=100,
-            message="Saved final report artifact",
+        _ev(
+            bridge.progress,
+            EventType.ARTIFACT_CREATED,
+            "complete",
+            "Saved final report artifact",
+            complete=True,
             artifact_type=ArtifactType.FINAL_REPORT,
             artifact_name="Final Report",
             artifact_text=final_report,
         ),
-        RuntimeEventPayload(
-            event_type=EventType.RUN_COMPLETED,
-            phase="complete",
-            progress=100,
-            message=f"{runtime.runtime_name} agentic run completed",
+        _ev(
+            bridge.progress,
+            EventType.RUN_COMPLETED,
+            "complete",
+            f"{runtime.runtime_name} agentic run completed",
+            complete=True,
             report_markdown=final_report,
             extra=completion_extra,
         ),
@@ -1769,6 +2121,8 @@ _SEARCH_SOURCES = {
     "search_cochrane": "Cochrane",
     "search_semantic_scholar": "Semantic Scholar",
     "search_scopus": "Scopus",
+    "search_clinical_trials": "ClinicalTrials.gov",
+    "search_preprints": "Preprints",
 }
 
 
@@ -1844,11 +2198,39 @@ def _build_openai_tools(request: RunRequest, bridge: AgenticEventBridge) -> list
             "required": ["query"],
         }, lambda a, s=_src: tool_search(request, bridge, s, a["query"], a.get("max_results", 8))))
 
+    # Snowballing tools (citation-graph traversal on ranked studies)
+    tools.append(_wrap("get_references", {
+        "type": "object",
+        "properties": {"reference_number": {"type": "integer"}},
+        "required": ["reference_number"],
+    }, lambda a: tool_snowball(request, bridge, a["reference_number"], "references")))
+
+    tools.append(_wrap("get_citations", {
+        "type": "object",
+        "properties": {"reference_number": {"type": "integer"}},
+        "required": ["reference_number"],
+    }, lambda a: tool_snowball(request, bridge, a["reference_number"], "citations")))
+
     # Evidence tools
     tools.append(_wrap("get_studies", {
         "type": "object",
         "properties": {"context": {"type": "string", "default": "general"}},
     }, lambda a: tool_get_studies(request, bridge, a.get("context", "general"))))
+
+    tools.append(_wrap("screen_studies", {
+        "type": "object",
+        "properties": {
+            "included_indices": {"type": "array", "items": {"type": "integer"}},
+            "excluded_indices": {"type": "array", "items": {"type": "integer"}},
+            "exclusion_reasons": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["included_indices"],
+    }, lambda a: tool_screen_studies(
+        request, bridge,
+        a.get("included_indices", []),
+        a.get("excluded_indices", []),
+        a.get("exclusion_reasons", []),
+    )))
 
     tools.append(_wrap("finalize_ranking", {
         "type": "object",
@@ -1858,6 +2240,23 @@ def _build_openai_tools(request: RunRequest, bridge: AgenticEventBridge) -> list
         },
         "required": ["ranked_indices"],
     }, lambda a: tool_finalize_ranking(request, bridge, a.get("ranked_indices", []), a.get("rationale", ""))))
+
+    tools.append(_wrap("appraise_evidence", {
+        "type": "object",
+        "properties": {
+            "findings": {"type": "array", "items": {"type": "string"}},
+            "certainties": {"type": "array", "items": {"type": "string"}},
+            "rationales": {"type": "array", "items": {"type": "string"}},
+            "reference_numbers_csv": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["findings", "certainties"],
+    }, lambda a: tool_appraise_evidence(
+        request, bridge,
+        a.get("findings", []),
+        a.get("certainties", []),
+        a.get("rationales", []),
+        a.get("reference_numbers_csv", []),
+    )))
 
     tools.append(_wrap("verify_studies", {
         "type": "object",
@@ -1923,8 +2322,8 @@ class OpenAIRuntime(NativeSDKRuntime):
         bridge = AgenticEventBridge()
         tools = _build_openai_tools(request, bridge)
 
-        yield _agentic_run_started(self, request)
-        yield _agentic_agent_started(self.native_agent_name)
+        yield _agentic_run_started(self, request, bridge)
+        yield _agentic_agent_started(self.native_agent_name, bridge)
 
         env_updates = _provider_api_env(self.provider, request.api_keys)
         _env_ctx = _temporary_env(env_updates)
@@ -2062,14 +2461,44 @@ def _build_anthropic_mcp_servers(
 
     # -- Evidence tools ------------------------------------------------------
 
+    def _make_snowball_tool(name: str, direction: str) -> Any:
+        @tool(name, TOOL_DESCRIPTIONS[name], {"reference_number": int})
+        async def _snowball(args: dict[str, Any]) -> dict[str, Any]:
+            result = await tool_snowball(request, bridge, args["reference_number"], direction)
+            return {"content": [{"type": "text", "text": json.dumps(result)}]}
+        return _snowball
+
     @tool("get_studies", TOOL_DESCRIPTIONS["get_studies"], {"context": str})
     async def get_studies_tool(args: dict[str, Any]) -> dict[str, Any]:
         result = await tool_get_studies(request, bridge, args.get("context", "general"))
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
+    @tool("screen_studies", TOOL_DESCRIPTIONS["screen_studies"],
+          {"included_indices": list, "excluded_indices": list, "exclusion_reasons": list})
+    async def screen_studies_tool(args: dict[str, Any]) -> dict[str, Any]:
+        result = await tool_screen_studies(
+            request, bridge,
+            args.get("included_indices", []),
+            args.get("excluded_indices", []),
+            args.get("exclusion_reasons", []),
+        )
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
     @tool("finalize_ranking", TOOL_DESCRIPTIONS["finalize_ranking"], {"ranked_indices": list, "rationale": str})
     async def finalize_ranking_tool(args: dict[str, Any]) -> dict[str, Any]:
         result = await tool_finalize_ranking(request, bridge, args.get("ranked_indices", []), args.get("rationale", ""))
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+    @tool("appraise_evidence", TOOL_DESCRIPTIONS["appraise_evidence"],
+          {"findings": list, "certainties": list, "rationales": list, "reference_numbers_csv": list})
+    async def appraise_evidence_tool(args: dict[str, Any]) -> dict[str, Any]:
+        result = await tool_appraise_evidence(
+            request, bridge,
+            args.get("findings", []),
+            args.get("certainties", []),
+            args.get("rationales", []),
+            args.get("reference_numbers_csv", []),
+        )
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     @tool("verify_studies", TOOL_DESCRIPTIONS["verify_studies"], {})
@@ -2088,8 +2517,12 @@ def _build_anthropic_mcp_servers(
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     evidence_server = create_sdk_mcp_server("evidence", tools=[
+        _make_snowball_tool("get_references", "references"),
+        _make_snowball_tool("get_citations", "citations"),
         get_studies_tool,
+        screen_studies_tool,
         finalize_ranking_tool,
+        appraise_evidence_tool,
         verify_studies_tool,
         synthesize_report_tool,
         submit_report_tool,
@@ -2177,8 +2610,8 @@ class ClaudeSDKAnthropicRuntime(NativeSDKRuntime):
                 mcp_alias[f"mcp__{server_name}__{bare}"] = bare
         bridge.set_tool_name_map(mcp_alias)
 
-        yield _agentic_run_started(self, request)
-        yield _agentic_agent_started(self.native_agent_name)
+        yield _agentic_run_started(self, request, bridge)
+        yield _agentic_agent_started(self.native_agent_name, bridge)
 
         sdk_stderr_lines: list[str] = []
 
@@ -2239,11 +2672,11 @@ class ClaudeSDKAnthropicRuntime(NativeSDKRuntime):
         startup_fallback_reason = self._pre_search_fallback_reason(bridge)
         if startup_fallback_reason:
             failure_diagnostics = _agentic_failure_diagnostics(bridge)
-            yield RuntimeEventPayload(
-                event_type=EventType.AGENT_STARTED,
-                phase="searching",
-                progress=12,
-                message=f"{startup_fallback_reason} Running deterministic fallback.",
+            yield _ev(
+                bridge.progress,
+                EventType.AGENT_STARTED,
+                bridge.progress.current_phase or "planning",
+                f"{startup_fallback_reason} Running deterministic fallback.",
                 agent_name=self.native_agent_name,
                 extra={
                     "fallback_reason": startup_fallback_reason,
@@ -2256,7 +2689,9 @@ class ClaudeSDKAnthropicRuntime(NativeSDKRuntime):
                     **failure_diagnostics,
                 },
             )
-            fallback_runtime = AgenticFailureFallbackRuntime(self, startup_fallback_reason, failure_diagnostics)
+            fallback_runtime = AgenticFailureFallbackRuntime(
+                self, startup_fallback_reason, failure_diagnostics, tracker=bridge.progress
+            )
             async for event in fallback_runtime.stream_run(request):
                 yield event
             return
@@ -2528,6 +2963,22 @@ def _build_langchain_tools(
     search_tools = [_make_search(name, src) for name, src in _SEARCH_SOURCES.items()]
 
     @lc_tool
+    async def get_references(reference_number: int) -> str:
+        """Backward snowballing: fetch the reference list of a ranked study [n]. Re-run get_studies to merge."""
+        await bridge.on_tool_start("get_references", {"reference_number": reference_number})
+        result = await tool_snowball(request, bridge, reference_number, "references")
+        await bridge.on_tool_end("get_references", result)
+        return _langchain_tool_json("get_references", result)
+
+    @lc_tool
+    async def get_citations(reference_number: int) -> str:
+        """Forward snowballing: fetch papers citing a ranked study [n]. Re-run get_studies to merge."""
+        await bridge.on_tool_start("get_citations", {"reference_number": reference_number})
+        result = await tool_snowball(request, bridge, reference_number, "citations")
+        await bridge.on_tool_end("get_citations", result)
+        return _langchain_tool_json("get_citations", result)
+
+    @lc_tool
     async def get_studies(context: str = "general") -> str:
         """Deduplicate and pre-score ALL collected studies. Returns full details for your review."""
         await bridge.on_tool_start("get_studies", {"context": context})
@@ -2536,12 +2987,41 @@ def _build_langchain_tools(
         return _langchain_tool_json("get_studies", result)
 
     @lc_tool
+    async def screen_studies(
+        included_indices: list[int],
+        excluded_indices: list[int] | None = None,
+        exclusion_reasons: list[str] | None = None,
+    ) -> str:
+        """Apply PICO inclusion/exclusion to the pre-scored pool. Excluded studies are dropped before ranking."""
+        await bridge.on_tool_start("screen_studies", {"included": len(included_indices)})
+        result = await tool_screen_studies(
+            request, bridge, included_indices, excluded_indices or [], exclusion_reasons or []
+        )
+        await bridge.on_tool_end("screen_studies", result)
+        return _langchain_tool_json("screen_studies", result)
+
+    @lc_tool
     async def finalize_ranking(ranked_indices: list[int], rationale: str = "") -> str:
         """Submit your ranking after reviewing studies. Pass ordered indices (best first)."""
         await bridge.on_tool_start("finalize_ranking", {"count": len(ranked_indices)})
         result = await tool_finalize_ranking(request, bridge, ranked_indices, rationale)
         await bridge.on_tool_end("finalize_ranking", result)
         return _langchain_tool_json("finalize_ranking", result)
+
+    @lc_tool
+    async def appraise_evidence(
+        findings: list[str],
+        certainties: list[str],
+        rationales: list[str] | None = None,
+        reference_numbers_csv: list[str] | None = None,
+    ) -> str:
+        """Record GRADE certainty (High/Moderate/Low/Very Low) per major finding, with rationale and supporting [n]."""
+        await bridge.on_tool_start("appraise_evidence", {"findings": len(findings)})
+        result = await tool_appraise_evidence(
+            request, bridge, findings, certainties, rationales or [], reference_numbers_csv or []
+        )
+        await bridge.on_tool_end("appraise_evidence", result)
+        return _langchain_tool_json("appraise_evidence", result)
 
     @lc_tool
     async def verify_studies() -> str:
@@ -2603,7 +3083,9 @@ def _build_langchain_tools(
     return [
         plan_search, suggest_databases, write_todos, update_progress,
         *search_tools,
-        get_studies, finalize_ranking, verify_studies, synthesize_report, submit_report,
+        get_references, get_citations,
+        get_studies, screen_studies, finalize_ranking, appraise_evidence,
+        verify_studies, synthesize_report, submit_report,
         fetch_fulltext, await_user_pdfs, parse_pdf,
     ]
 
@@ -2640,8 +3122,8 @@ class AnthropicRuntime(NativeSDKRuntime):
         bridge = AgenticEventBridge()
         tools = _build_langchain_tools(request, bridge, stop_after_submit=True)
 
-        yield _agentic_run_started(self, request)
-        yield _agentic_agent_started(self.native_agent_name)
+        yield _agentic_run_started(self, request, bridge)
+        yield _agentic_agent_started(self.native_agent_name, bridge)
 
         env_updates = _provider_api_env(self.provider, request.api_keys)
         _env_ctx = _temporary_env(env_updates)
@@ -2684,11 +3166,11 @@ class AnthropicRuntime(NativeSDKRuntime):
         fallback_reason = self._agentic_fallback_reason(bridge)
         if fallback_reason:
             failure_diagnostics = _agentic_failure_diagnostics(bridge)
-            yield RuntimeEventPayload(
-                event_type=EventType.AGENT_STARTED,
-                phase="searching",
-                progress=12,
-                message=f"{fallback_reason} Running deterministic fallback.",
+            yield _ev(
+                bridge.progress,
+                EventType.AGENT_STARTED,
+                bridge.progress.current_phase or "planning",
+                f"{fallback_reason} Running deterministic fallback.",
                 agent_name=self.native_agent_name,
                 extra={
                     "fallback_reason": fallback_reason,
@@ -2702,7 +3184,9 @@ class AnthropicRuntime(NativeSDKRuntime):
                     **failure_diagnostics,
                 },
             )
-            fallback_runtime = AgenticFailureFallbackRuntime(self, fallback_reason, failure_diagnostics)
+            fallback_runtime = AgenticFailureFallbackRuntime(
+                self, fallback_reason, failure_diagnostics, tracker=bridge.progress
+            )
             async for event in fallback_runtime.stream_run(request):
                 yield event
             return
@@ -2890,8 +3374,8 @@ class LangChainLocalRuntime(NativeSDKRuntime):
             stop_after_report_rejection=self.provider == "local",
         )
 
-        yield _agentic_run_started(self, request)
-        yield _agentic_agent_started(self.native_agent_name)
+        yield _agentic_run_started(self, request, bridge)
+        yield _agentic_agent_started(self.native_agent_name, bridge)
 
         agent_task = asyncio.create_task(
             self._run_langchain_agent(request, bridge, tools)

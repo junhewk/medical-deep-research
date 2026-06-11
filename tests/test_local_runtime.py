@@ -107,6 +107,17 @@ def fake_langgraph_agent(agent_impl: Callable[[list[object], dict[str, object]],
                 sys.modules[name] = module
 
 
+def _assert_progress_monotonic(events: list[Any]) -> None:
+    """Progress must never decrease, and a completed run must end at 100."""
+    previous = 0
+    for event in events:
+        assert event.progress >= previous, f"progress went backwards: {previous} -> {event.progress}"
+        previous = event.progress
+    completed = [e for e in events if e.event_type == EventType.RUN_COMPLETED]
+    if completed:
+        assert completed[-1].progress == 100, f"final progress {completed[-1].progress} != 100"
+
+
 async def fake_search_source(source: str, query: str, **_kwargs: object) -> SearchProviderResult:
     studies = []
     if source == "PubMed":
@@ -173,6 +184,7 @@ The agent searched PubMed and screened the retrieved study for population, inter
 
 ## Discussion
 The evidence should be interpreted cautiously because the available ranked set is small [1].
+The overall GRADE certainty of evidence for the pain outcome is Low, rated down for imprecision [1].
 
 ## Conclusions
 ESPB may be a useful analgesic adjunct after cardiac surgery.
@@ -191,7 +203,9 @@ class LocalRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch("medical_deep_research.agentic_tools.search_source", fake_search_source),
             patch("medical_deep_research.agentic_tools.verify_studies", fake_verify_studies),
         ):
-            return [event async for event in AlwaysAvailableLocalRuntime().stream_run(make_request())]
+            events = [event async for event in AlwaysAvailableLocalRuntime().stream_run(make_request())]
+        _assert_progress_monotonic(events)
+        return events
 
     async def test_local_runtime_stops_after_accepted_submit_report(self) -> None:
         report = make_valid_report().strip()
@@ -237,6 +251,63 @@ class LocalRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(final.extra["had_error"])
         self.assertEqual(final.extra["report_source"], "recovered_agentic_state")
         self.assertIn("Local LLM (fallback)", final.report_markdown or "")
+
+
+class NewToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    def _build_tools(self) -> list[object]:
+        from medical_deep_research.agentic_tools import AgenticEventBridge
+        from medical_deep_research.runtime import _build_langchain_tools
+
+        with fake_langgraph_agent(lambda _t, _i: {"messages": []}):
+            return _build_langchain_tools(make_request(), AgenticEventBridge())
+
+    async def _seed_pool(self, tools: list[object]) -> None:
+        with (
+            patch("medical_deep_research.agentic_tools.search_source", fake_search_source),
+            patch("medical_deep_research.agentic_tools.verify_studies", fake_verify_studies),
+        ):
+            await call_fake_tool(tools, "search_pubmed", query="q", max_results=3)
+            await call_fake_tool(tools, "get_studies", context="clinical")
+
+    async def test_screen_before_get_studies_errors(self) -> None:
+        import json
+
+        tools = self._build_tools()
+        result = json.loads(await call_fake_tool(tools, "screen_studies", included_indices=[1]))  # type: ignore[arg-type]
+        self.assertIn("error", result)
+
+    async def test_screen_filters_pool_before_ranking(self) -> None:
+        import json
+
+        tools = self._build_tools()
+        await self._seed_pool(tools)
+        result = json.loads(
+            await call_fake_tool(
+                tools, "screen_studies", included_indices=[1], excluded_indices=[1], exclusion_reasons=["wrong population"]
+            )  # type: ignore[arg-type]
+        )
+        # index 1 is both included and excluded -> inclusion wins; nothing dropped here
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["excluded"], 0)
+
+    async def test_appraise_normalizes_certainty(self) -> None:
+        import json
+
+        tools = self._build_tools()
+        await self._seed_pool(tools)
+        await call_fake_tool(tools, "finalize_ranking", ranked_indices=[1], rationale="r")
+        result = json.loads(
+            await call_fake_tool(
+                tools,
+                "appraise_evidence",
+                findings=["Pain reduced", "Mortality unchanged"],
+                certainties=["MODERATE", "uncertain"],
+                rationales=["RCT", "few events"],
+                reference_numbers_csv=["1", "1"],
+            )  # type: ignore[arg-type]
+        )
+        # "MODERATE" normalizes to the bucket; "uncertain" is unparseable -> Low default.
+        self.assertEqual(result["certainties"], ["Moderate", "Low"])
 
 
 if __name__ == "__main__":

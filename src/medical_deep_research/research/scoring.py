@@ -95,16 +95,19 @@ def get_evidence_level_score(level: str | None) -> float:
     if not level:
         return 0.3
     lowered = level.lower().strip()
-    if "level i" in lowered or lowered == "i":
-        return 1.0
-    if "level ii" in lowered or lowered == "ii":
-        return 0.8
+    # Check the longer/unique substrings first: "level i" is a substring of
+    # "level ii"/"iii"/"iv", and "level ii" of "level iii", so a naive I->V order
+    # would score every level as 1.0.
     if "level iii" in lowered or lowered == "iii":
         return 0.6
     if "level iv" in lowered or lowered == "iv":
         return 0.4
+    if "level ii" in lowered or lowered == "ii":
+        return 0.8
     if "level v" in lowered or lowered == "v":
         return 0.2
+    if "level i" in lowered or lowered == "i":
+        return 1.0
     return 0.3
 
 

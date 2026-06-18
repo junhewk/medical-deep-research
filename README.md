@@ -19,13 +19,13 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 
 | Feature | Description |
 |---------|-------------|
-| **Architecture** | Agentic loop — LLM calls 16 tools autonomously via shared-state bridge |
+| **Architecture** | Agentic loop — LLM autonomously calls 25+ tools via shared-state bridge |
 | **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
-| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, Semantic Scholar, Scopus |
-| **Ranking** | Agent-driven: LLM reviews abstracts and ranks by relevance and evidence quality |
+| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, Semantic Scholar, Scopus, ClinicalTrials.gov, medRxiv/bioRxiv preprints — up to 25 results per source |
+| **Ranking** | Deterministic evidence-level pre-ranking → tiered/paged triage → PICO screening → agent ranking, with citation snowballing |
 | **Full-text** | Unpaywall + PubMed Central OA lookup, Java-free PDF parsing, user PDF upload checkpoint |
-| **Evidence** | Level I–V classification, PMID verification against PubMed |
+| **Evidence** | Level I–V classification, GRADE certainty per finding, PMID verification against PubMed |
 | **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
 | **i18n** | English / Korean UI, LLM-powered report translation |
 | **Desktop** | Native PySide6 (Qt) window, PyInstaller packaging, push-based UI, splitter-based layout |
@@ -68,12 +68,15 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.9.3 — Full-Text Workflow Reliability
+### v2.9.5 — EBM Loop, Wider Search & Tiered Triage
 
-- Search coverage now includes PMC, Europe PMC, and Crossref while excluding preprint-only sources for medical deep research.
-- Full-text gathering validates that discovered PDFs are both downloadable and parseable before counting them as available.
-- User PDF uploads are requested in the run trace when publisher PDFs are missing or cannot be parsed.
-- Parsed full text from downloaded PDFs and user uploads is persisted in the run database so later agent tool calls cannot lose it.
+- Searches now return up to **25 results per source** (previously the agent self-limited to ~10), so it casts a wider net before triage.
+- `get_studies` returns a deterministically pre-ranked **top tier grouped by evidence level (I→V)** with facet counts; the new `browse_studies` tool pages or filters the full pool by evidence level or source without re-ranking.
+- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported in the Methods section.
+- New **EBM stages**: PICO screening and GRADE certainty appraisal run as both agentic tools and structured checkpoints, with a soft certainty quality gate and gap-aware rewind. Up to 20 ranked studies now reach the synthesized report.
+- **Citation snowballing** (`get_references`/`get_citations` via Europe PMC + OpenAlex), ClinicalTrials.gov registry search for publication-bias awareness, and Europe PMC full-text-XML-first retrieval.
+- **Monotonic progress** — a shared progress tracker keeps the progress bar from jumping backward when the agent revisits a phase.
+- Fixed an evidence-level scoring bug that scored every level as the highest, so deterministic pre-ranking now reflects true Level I→V quality.
 
 ## Quick Start (from source)
 
@@ -132,18 +135,21 @@ The agent autonomously executes a multi-step research workflow:
 
 ```
  1. plan_search        → Build search strategy (keywords, databases, queries)
- 2. search_*           → Search 3–5 databases (PubMed, Cochrane, OpenAlex, etc.)
- 3. get_studies        → Deduplicate and pre-score all collected studies
- 4. finalize_ranking   → Agent reviews abstracts and ranks by EBM quality
- 5. fetch_fulltext     → Unpaywall + PMC lookup for open-access PDFs
- 6. parse_pdf          → Download and parse full-text PDFs to markdown
- 7. verify_studies     → Validate PMIDs against PubMed
- 8. synthesize_report  → Collect structured evidence data
- 9. submit_report      → Agent writes and submits the final synthesis report
-10. [translate]        → If language is Korean, translate via LLM (English preserved as artifact)
+ 2. search_*           → Search 3–5 databases (up to 25 results per source)
+ 3. get_studies        → Deduplicate and pre-score into evidence-level tiers (I→V)
+ 4. browse_studies     → Page/filter the scored pool by evidence level or source
+ 5. screen_studies     → PICO include/exclude (whitelist — only kept studies survive)
+ 6. finalize_ranking   → Agent orders the included studies, best first
+ 7. get_references / get_citations → Optional citation snowballing for top studies
+ 8. fetch_fulltext / parse_pdf → Unpaywall + PMC lookup, parse PDFs to markdown
+ 9. appraise_evidence  → GRADE certainty (High/Moderate/Low/Very Low) per finding
+10. verify_studies     → Validate PMIDs against PubMed
+11. synthesize_report  → Collect structured evidence data
+12. submit_report      → Agent writes and submits the final synthesis report
+13. [translate]        → If language is Korean, translate via LLM (English preserved as artifact)
 ```
 
-The LLM drives the workflow — it decides what to search, reviews evidence quality, ranks studies using medical knowledge, and writes the synthesis. Tools use a **shared-state bridge** so the agent never passes large JSON blobs as arguments.
+The LLM drives the workflow — it decides what to search, screens and ranks evidence by EBM quality, grades certainty, and writes the synthesis. Tools use a **shared-state bridge** so the agent never passes large JSON blobs as arguments.
 
 ### Domain-Specific Prompts
 

@@ -139,6 +139,36 @@ async def fake_search_source(source: str, query: str, **_kwargs: object) -> Sear
     return SearchProviderResult(source=source, query=query, studies=studies)
 
 
+_LEVELS = ["Level I", "Level II", "Level III", "Level IV", "Level V"]
+
+
+def _make_study(i: int, source: str, level: str) -> EvidenceStudy:
+    return EvidenceStudy(
+        source=source,
+        source_id=f"{source}-{i}",
+        title=f"{source} study {i} on ESPB after cardiac surgery",
+        abstract=f"Abstract {i} reporting postoperative pain outcomes for ESPB versus PCA.",
+        journal="Journal of Test Anesthesia",
+        publication_year="2024",
+        pmid=f"PM{i:06d}" if source == "PubMed" else None,
+        doi=None if source == "PubMed" else f"10.1000/{source.lower()}-{i}",
+        citation_count=50 - i,
+        evidence_level=level,
+        sources=[source],
+    )
+
+
+async def fake_multi_search_source(source: str, query: str, **_kwargs: object) -> SearchProviderResult:
+    """Return a large, evidence-level-varied pool so paging/filtering can be exercised."""
+    if source == "PubMed":
+        studies = [_make_study(i, "PubMed", _LEVELS[i % 5]) for i in range(20)]
+    elif source == "OpenAlex":
+        studies = [_make_study(i, "OpenAlex", "Level III") for i in range(5)]
+    else:
+        studies = []
+    return SearchProviderResult(source=source, query=query, studies=studies)
+
+
 async def fake_verify_studies(studies: list[object], **_kwargs: object) -> VerificationSummary:
     return VerificationSummary(
         total_considered=len(studies),
@@ -269,6 +299,107 @@ class NewToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
             await call_fake_tool(tools, "search_pubmed", query="q", max_results=3)
             await call_fake_tool(tools, "get_studies", context="clinical")
 
+    def _build_tools_with_bridge(self) -> tuple[list[object], Any]:
+        from medical_deep_research.agentic_tools import AgenticEventBridge
+        from medical_deep_research.runtime import _build_langchain_tools
+
+        bridge = AgenticEventBridge()
+        with fake_langgraph_agent(lambda _t, _i: {"messages": []}):
+            return _build_langchain_tools(make_request(), bridge), bridge
+
+    async def _seed_multi(self, tools: list[object], *, sources: tuple[str, ...] = ("PubMed",)) -> None:
+        names = {"PubMed": "search_pubmed", "OpenAlex": "search_openalex"}
+        with (
+            patch("medical_deep_research.agentic_tools.search_source", fake_multi_search_source),
+            patch("medical_deep_research.agentic_tools.verify_studies", fake_verify_studies),
+        ):
+            for src in sources:
+                await call_fake_tool(tools, names[src], query="q", max_results=25)
+            await call_fake_tool(tools, "get_studies", context="clinical")
+
+    async def test_get_studies_returns_top_tier_with_facets(self) -> None:
+        import json
+
+        from medical_deep_research.agentic_tools import STUDY_PAGE_SIZE
+
+        tools = self._build_tools_with_bridge()[0]
+        await self._seed_multi(tools)
+        result = json.loads(await call_fake_tool(tools, "get_studies", context="clinical"))  # type: ignore[arg-type]
+        self.assertEqual(result["total"], 20)
+        self.assertEqual(result["shown"], STUDY_PAGE_SIZE)
+        self.assertTrue(result["has_more"])
+        self.assertEqual(len(result["studies"]), STUDY_PAGE_SIZE)
+        self.assertEqual(sum(result["counts_by_evidence_level"].values()), 20)
+
+    async def test_browse_before_get_studies_errors(self) -> None:
+        import json
+
+        tools = self._build_tools_with_bridge()[0]
+        result = json.loads(await call_fake_tool(tools, "browse_studies", page=1))  # type: ignore[arg-type]
+        self.assertIn("error", result)
+
+    async def test_browse_pages_pool(self) -> None:
+        import json
+
+        from medical_deep_research.agentic_tools import STUDY_PAGE_SIZE
+
+        tools = self._build_tools_with_bridge()[0]
+        await self._seed_multi(tools)
+        page1 = json.loads(await call_fake_tool(tools, "get_studies", context="clinical"))  # type: ignore[arg-type]
+        page2 = json.loads(await call_fake_tool(tools, "browse_studies", page=2))  # type: ignore[arg-type]
+        self.assertEqual(page2["shown"], 20 - STUDY_PAGE_SIZE)
+        self.assertFalse(page2["has_more"])
+        idx1 = {s["idx"] for s in page1["studies"]}
+        idx2 = {s["idx"] for s in page2["studies"]}
+        self.assertEqual(idx1 & idx2, set())  # stable, disjoint indices across pages
+        self.assertEqual(len(idx1 | idx2), 20)
+
+    async def test_browse_filters_by_level_and_source(self) -> None:
+        import json
+
+        tools = self._build_tools_with_bridge()[0]
+        await self._seed_multi(tools, sources=("PubMed", "OpenAlex"))
+        by_level = json.loads(await call_fake_tool(tools, "browse_studies", evidence_level="Level II"))  # type: ignore[arg-type]
+        self.assertTrue(by_level["studies"])
+        self.assertTrue(all(s["evidence_level"] == "Level II" for s in by_level["studies"]))
+        self.assertEqual(by_level["filtered_total"], by_level["counts_by_evidence_level"]["Level II"])
+
+        by_source = json.loads(await call_fake_tool(tools, "browse_studies", source="OpenAlex"))  # type: ignore[arg-type]
+        self.assertEqual(by_source["filtered_total"], 5)
+        self.assertTrue(all("OpenAlex" in s["sources"] for s in by_source["studies"]))
+
+    async def test_browse_does_not_reset_screening(self) -> None:
+        import json
+
+        tools, bridge = self._build_tools_with_bridge()
+        await self._seed_multi(tools)
+        await call_fake_tool(tools, "screen_studies", included_indices=[1, 2])
+        screening_before = dict(bridge.screening)
+        pool_before = len(bridge._pre_scored)
+        await call_fake_tool(tools, "browse_studies", page=1)
+        self.assertEqual(bridge.screening, screening_before)
+        self.assertEqual(len(bridge._pre_scored), pool_before)
+        self.assertEqual(pool_before, 2)
+
+    async def test_screen_whitelist_drops_unlisted(self) -> None:
+        import json
+
+        tools, bridge = self._build_tools_with_bridge()
+        await self._seed_multi(tools)
+        result = json.loads(await call_fake_tool(tools, "screen_studies", included_indices=[1]))  # type: ignore[arg-type]
+        self.assertEqual(result["included"], 1)
+        self.assertEqual(result["not_selected"], 19)
+        self.assertEqual(len(bridge._pre_scored), 1)
+
+    async def test_screen_empty_includes_errors(self) -> None:
+        import json
+
+        tools, bridge = self._build_tools_with_bridge()
+        await self._seed_multi(tools)
+        result = json.loads(await call_fake_tool(tools, "screen_studies", included_indices=[]))  # type: ignore[arg-type]
+        self.assertIn("error", result)
+        self.assertEqual(len(bridge._pre_scored), 20)  # pool untouched
+
     async def test_screen_before_get_studies_errors(self) -> None:
         import json
 
@@ -286,8 +417,10 @@ class NewToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
                 tools, "screen_studies", included_indices=[1], excluded_indices=[1], exclusion_reasons=["wrong population"]
             )  # type: ignore[arg-type]
         )
-        # index 1 is both included and excluded -> inclusion wins; nothing dropped here
+        # Whitelist: index 1 is included so it survives (the excluded_indices entry is
+        # ignored for an included study); the single-study pool yields no exclusions.
         self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["included"], 1)
         self.assertEqual(result["excluded"], 0)
 
     async def test_appraise_normalizes_certainty(self) -> None:

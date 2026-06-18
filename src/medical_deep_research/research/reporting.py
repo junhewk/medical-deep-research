@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from .models import QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
 
+# Maximum number of ranked studies that flow into the synthesized report.
+MAX_REPORT_STUDIES = 20
+
 
 def _render_methods(plan: QueryPlan, results: list[SearchProviderResult]) -> list[str]:
     lines = [
@@ -37,7 +40,7 @@ def render_report(
     provider: str,
     runtime_name: str,
 ) -> str:
-    top_studies = ranked_studies[:8]
+    top_studies = ranked_studies[:MAX_REPORT_STUDIES]
     lines = [
         f"# Research Report: {query[:120]}",
         "",

@@ -19,13 +19,13 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 
 | Feature | Description |
 |---------|-------------|
-| **Architecture** | Agentic loop — LLM autonomously calls 25+ tools via shared-state bridge |
+| **Architecture** | Agentic loop — LLM calls literature, evidence, full-text, and workspace tools via shared-state bridge |
 | **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
-| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, Semantic Scholar, Scopus, ClinicalTrials.gov, medRxiv/bioRxiv preprints — up to 25 results per source |
-| **Ranking** | Deterministic evidence-level pre-ranking → tiered/paged triage → PICO screening → agent ranking, with citation snowballing |
-| **Full-text** | Unpaywall + PubMed Central OA lookup, Java-free PDF parsing, user PDF upload checkpoint |
-| **Evidence** | Level I–V classification, GRADE certainty per finding, PMID verification against PubMed |
+| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, ClinicalTrials.gov, Semantic Scholar, Scopus, citation snowballing — up to 25 results per source |
+| **Ranking** | Agent-driven: evidence-level pre-ranking, tiered/paged triage, PICO/PCC screening, EBM ranking, and GRADE-style appraisal |
+| **Full-text** | Europe PMC XML + Unpaywall + PubMed Central OA lookup, Java-free PDF parsing, user PDF upload checkpoint |
+| **Evidence** | Level I–V classification, GRADE certainty notes, PMID verification against PubMed |
 | **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
 | **i18n** | English / Korean UI, LLM-powered report translation |
 | **Desktop** | Native PySide6 (Qt) window, PyInstaller packaging, push-based UI, splitter-based layout |
@@ -68,15 +68,20 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.9.5 — EBM Loop, Wider Search & Tiered Triage
+### v2.9.5 — Wider Search & Tiered Triage
 
-- Searches now return up to **25 results per source** (previously the agent self-limited to ~10), so it casts a wider net before triage.
-- `get_studies` returns a deterministically pre-ranked **top tier grouped by evidence level (I→V)** with facet counts; the new `browse_studies` tool pages or filters the full pool by evidence level or source without re-ranking.
-- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported in the Methods section.
-- New **EBM stages**: PICO screening and GRADE certainty appraisal run as both agentic tools and structured checkpoints, with a soft certainty quality gate and gap-aware rewind. Up to 20 ranked studies now reach the synthesized report.
-- **Citation snowballing** (`get_references`/`get_citations` via Europe PMC + OpenAlex), ClinicalTrials.gov registry search for publication-bias awareness, and Europe PMC full-text-XML-first retrieval.
-- **Monotonic progress** — a shared progress tracker keeps the progress bar from jumping backward when the agent revisits a phase.
-- Fixed an evidence-level scoring bug that scored every level as the highest, so deterministic pre-ranking now reflects true Level I→V quality.
+- Searches now return up to **25 results per source** (the agent previously self-limited to ~10), casting a wider net before triage.
+- `get_studies` returns a deterministically pre-ranked **top tier grouped by evidence level (I→V)** with facet counts; the new `browse_studies` tool pages or filters the full pool by evidence level or source without re-ranking or resetting screening.
+- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported as "not selected" in Methods. Up to 20 ranked studies now reach the synthesized report.
+- Fixed an evidence-level scoring bug where `"Level I"` matched II–V as a substring (scoring every level as the highest), so deterministic pre-ranking now reflects true Level I→V quality.
+
+### v2.9.4 — Screened Evidence Workflow
+
+- Run progress is now monotonic across repeated phases and rewinds, with pass labels in the trace and 100% reserved for completion.
+- The agent workflow now includes explicit `screen_studies` and `appraise_evidence` checkpoints before report writing.
+- Citation snowballing can expand ranked studies through Europe PMC references/citations and OpenAlex fallbacks, then merge and re-screen candidates.
+- Clinical questions now search ClinicalTrials.gov for registered, ongoing, and completed-but-unpublished trials to surface publication-bias signals.
+- Full-text retrieval tries Europe PMC JATS XML before PDF routes and keeps user PDF checkpoints connected to downstream parsing and appraisal.
 
 ## Quick Start (from source)
 
@@ -135,14 +140,14 @@ The agent autonomously executes a multi-step research workflow:
 
 ```
  1. plan_search        → Build search strategy (keywords, databases, queries)
- 2. search_*           → Search 3–5 databases (up to 25 results per source)
+ 2. search_*           → Search 3–5 databases plus ClinicalTrials.gov (up to 25 results per source)
  3. get_studies        → Deduplicate and pre-score into evidence-level tiers (I→V)
  4. browse_studies     → Page/filter the scored pool by evidence level or source
- 5. screen_studies     → PICO include/exclude (whitelist — only kept studies survive)
- 6. finalize_ranking   → Agent orders the included studies, best first
- 7. get_references / get_citations → Optional citation snowballing for top studies
- 8. fetch_fulltext / parse_pdf → Unpaywall + PMC lookup, parse PDFs to markdown
- 9. appraise_evidence  → GRADE certainty (High/Moderate/Low/Very Low) per finding
+ 5. screen_studies     → PICO include/exclude — whitelist, only included studies survive
+ 6. finalize_ranking   → Agent orders the included studies by relevance and EBM quality
+ 7. [snowball]         → Optionally fetch references/citations and re-screen candidates
+ 8. fetch_fulltext / parse_pdf → Europe PMC XML + Unpaywall + PMC lookup, parse/upload PDFs
+ 9. appraise_evidence  → Record GRADE certainty and rationale per major finding
 10. verify_studies     → Validate PMIDs against PubMed
 11. synthesize_report  → Collect structured evidence data
 12. submit_report      → Agent writes and submits the final synthesis report
@@ -175,20 +180,27 @@ All providers fall back to a deterministic pipeline if SDK/credentials are unava
 | Database | Access | Notes |
 |----------|--------|-------|
 | PubMed | Free (NCBI key optional) | EBM publication type boost, relevance sort |
+| PMC | Free | PubMed Central open-access article discovery |
+| Europe PMC | Free | Broader biomedical coverage, full-text metadata, citation links |
+| Crossref | Free | DOI metadata and publisher coverage |
 | Cochrane | Free (via PubMed) | Systematic reviews only |
-| OpenAlex | Free | Broad academic coverage |
+| OpenAlex | Free | Broad academic coverage and citation fallback |
+| ClinicalTrials.gov | Free | Registered/ongoing trials, phase/status, posted-results flag |
 | Semantic Scholar | API key required | Medicine field filter; skipped without key |
 | Scopus | API key required | Citation counts, broader coverage; STANDARD/COMPLETE view toggle |
+| Snowballing | Free | Europe PMC references/citations with OpenAlex DOI fallback |
 
 The publication-year window is configurable per-app in **New Research** (default: last 5 years).
 
 ### Full-text Pipeline
 
-After ranking, the agent retrieves open-access full-text for Level I & II studies:
+After ranking, the agent retrieves open-access full text for ranked studies:
 
-1. **Unpaywall** — parallel lookup for ranked studies with DOIs
-2. **PubMed Central** — batch PMID→PMCID conversion, OA service
-3. **PDF parsing** — `pdfminer.six` text extraction, no Java runtime required
+1. **Europe PMC XML** — JATS full text for open-access PMC articles when available
+2. **Unpaywall** — parallel lookup for ranked studies with DOIs
+3. **PubMed Central** — batch PMID→PMCID conversion, OA service, and OA archives
+4. **User PDF checkpoint** — prompts for missing publisher PDFs and records uploaded ranks
+5. **PDF parsing** — `pdfminer.six` text extraction, no Java runtime required
 
 ## Architecture
 
@@ -201,13 +213,16 @@ src/medical_deep_research/
 ├── config.py               # Settings (pydantic-settings)
 ├── models.py               # SQLModel data models + RunRequest
 ├── persistence.py          # SQLite database layer
+├── progress.py             # Monotonic progress and phase pass tracking
 ├── service.py              # Run orchestration + push-based UI updates
 ├── runtime.py              # Provider runtimes (Anthropic, OpenAI, Google, Local)
 ├── agentic_tools.py        # Shared tool logic + system prompts + translation
 ├── research/
+│   ├── fulltext.py         # Europe PMC JATS XML full-text retrieval
 │   ├── planning.py         # Query planning, keyword extraction, domain classification
-│   ├── search.py           # PubMed, OpenAlex, Cochrane, Semantic Scholar, Scopus
+│   ├── search.py           # PubMed, PMC, Europe PMC, Crossref, ClinicalTrials.gov, OpenAlex, Scopus
 │   ├── scoring.py          # Evidence level scoring, composite ranking
+│   ├── snowball.py         # Europe PMC/OpenAlex citation-graph traversal
 │   ├── verification.py     # PMID verification via NCBI
 │   ├── reporting.py        # Fallback markdown report rendering
 │   └── models.py           # Research data models

@@ -34,6 +34,7 @@ from .provider_config import (
     local_base_url,
 )
 from .research import (
+    MAX_REPORT_STUDIES,
     build_query_plan,
     empty_verification_summary,
     flatten_studies,
@@ -129,6 +130,7 @@ _BARE_PHASE_MAP: dict[str, str] = {
     "get_references": "searching",
     "get_citations": "searching",
     "get_studies": "ranking",
+    "browse_studies": "ranking",
     "screen_studies": "screening",
     "finalize_ranking": "ranking",
     "appraise_evidence": "appraising",
@@ -234,6 +236,7 @@ class AgenticEventBridge:
         bare = self._bare_name(tool_name)
         if bare in (
             "get_studies",
+            "browse_studies",
             "screen_studies",
             "finalize_ranking",
             "appraise_evidence",
@@ -282,7 +285,7 @@ class AgenticEventBridge:
                     message="Saved ranked evidence artifact",
                     artifact_type=ArtifactType.RANKED_RESULTS,
                     artifact_name="Ranked Results",
-                    artifact_json={"studies": [study.model_dump() for study in self.ranked_studies[:12]]},
+                    artifact_json={"studies": [study.model_dump() for study in self.ranked_studies[:MAX_REPORT_STUDIES]]},
                 )
             )
         if bare == "screen_studies" and self.screening is not None:
@@ -444,7 +447,7 @@ async def tool_suggest_databases(request: RunRequest, bridge: AgenticEventBridge
     return {"databases": dbs}
 
 
-async def tool_search(request: RunRequest, bridge: AgenticEventBridge, source: str, query: str, max_results: int = 8) -> dict[str, Any]:
+async def tool_search(request: RunRequest, bridge: AgenticEventBridge, source: str, query: str, max_results: int = 15) -> dict[str, Any]:
     result = await search_source(
         source, query,
         api_keys=request.api_keys,
@@ -473,6 +476,73 @@ async def tool_search(request: RunRequest, bridge: AgenticEventBridge, source: s
     return {"source": result.source, "count": len(result.studies), "error": result.error, "studies": studies_summary}
 
 
+# Tier/page size for the agent's study triage: get_studies returns the top tier
+# of this many cards; browse_studies pages the rest of the scored pool.
+STUDY_PAGE_SIZE = 15
+
+_EVIDENCE_ORDER = ("Level I", "Level II", "Level III", "Level IV", "Level V")
+
+
+def _evidence_level_rank(level: str | None) -> int:
+    """Map "Level I".."Level V" to 1..5 (unknown -> 6).
+
+    Check the longer substrings (iii/iv/v) before the shorter (ii/i) so that a
+    Level III study is not matched as "level i".
+    """
+    if not level:
+        return 6
+    lo = level.lower()
+    if "level iii" in lo:
+        return 3
+    if "level iv" in lo:
+        return 4
+    if "level v" in lo:
+        return 5
+    if "level ii" in lo:
+        return 2
+    if "level i" in lo:
+        return 1
+    return 6
+
+
+def _study_card(s: ScoredStudy) -> dict[str, Any]:
+    abstract = (s.abstract or "").replace("\n", " ").strip()
+    return {
+        "idx": s.reference_number,  # stable composite-rank index across pages
+        "title": s.title,
+        "abstract": abstract[:500] + "..." if len(abstract) > 500 else abstract,
+        "journal": s.journal,
+        "year": s.publication_year,
+        "pmid": s.pmid,
+        "doi": s.doi,
+        "authors": s.authors[:3],
+        "evidence_level": s.evidence_level,
+        "citation_count": s.citation_count,
+        "sources": s.sources,
+        "source_count": len(s.sources),
+        "pre_score": s.composite_score,
+    }
+
+
+def _facets(pool: list[ScoredStudy]) -> dict[str, Any]:
+    by_level: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    for s in pool:
+        key = s.evidence_level or "Unknown"
+        by_level[key] = by_level.get(key, 0) + 1
+        for src in (s.sources or [s.source]):
+            by_source[src] = by_source.get(src, 0) + 1
+    ordered = {lvl: by_level[lvl] for lvl in _EVIDENCE_ORDER if lvl in by_level}
+    if "Unknown" in by_level:
+        ordered["Unknown"] = by_level["Unknown"]
+    return {"counts_by_evidence_level": ordered, "counts_by_source": by_source}
+
+
+def _tier_ordered(pool: list[ScoredStudy]) -> list[ScoredStudy]:
+    """Group by evidence level I->V, then by composite score (desc) within a level."""
+    return sorted(pool, key=lambda s: (_evidence_level_rank(s.evidence_level), -s.composite_score))
+
+
 async def tool_get_studies(request: RunRequest, bridge: AgenticEventBridge, context: str = "general") -> dict[str, Any]:
     all_studies = flatten_studies(bridge.search_results)
     if not all_studies:
@@ -486,24 +556,68 @@ async def tool_get_studies(request: RunRequest, bridge: AgenticEventBridge, cont
     bridge._pre_scored = pre_scored
     # Re-deriving the pool invalidates any prior screening decision.
     bridge.screening = None
-    studies_out = []
-    for s in pre_scored:
-        abstract = (s.abstract or "").replace("\n", " ").strip()
-        studies_out.append({
-            "idx": s.reference_number,
-            "title": s.title,
-            "abstract": abstract[:500] + "..." if len(abstract) > 500 else abstract,
-            "journal": s.journal,
-            "year": s.publication_year,
-            "pmid": s.pmid,
-            "doi": s.doi,
-            "authors": s.authors[:3],
-            "evidence_level": s.evidence_level,
-            "citation_count": s.citation_count,
-            "source_count": len(s.sources),
-            "pre_score": s.composite_score,
-        })
-    return {"total": len(studies_out), "context": context, "studies": studies_out}
+    display = _tier_ordered(pre_scored)
+    page = display[:STUDY_PAGE_SIZE]
+    return {
+        "total": len(pre_scored),
+        "shown": len(page),
+        "page": 1,
+        "page_size": STUDY_PAGE_SIZE,
+        "has_more": len(pre_scored) > STUDY_PAGE_SIZE,
+        "context": context,
+        **_facets(pre_scored),
+        "studies": [_study_card(s) for s in page],
+        "note": (
+            "Top tier shown, grouped by evidence level I->V. Indices (idx) are stable "
+            "across pages. Call browse_studies(page=2) for the next tier, or "
+            "browse_studies(evidence_level='Level III') / browse_studies(source='PubMed') "
+            "to expand a slice before screening."
+        ),
+    }
+
+
+async def tool_browse_studies(
+    request: RunRequest,
+    bridge: AgenticEventBridge,
+    page: int = 1,
+    evidence_level: str | None = None,
+    source: str | None = None,
+    page_size: int | None = None,
+) -> dict[str, Any]:
+    """Page/expand the already-scored study pool without re-scoring or resetting screening.
+
+    Reads ``bridge._pre_scored`` only — it never writes screening, the pool, or the
+    ranking, so paging cannot clobber an in-progress screening decision.
+    """
+    pool = bridge._pre_scored
+    if not pool:
+        return {"error": "Call get_studies first.", "studies": []}
+    display = _tier_ordered(pool)
+    if evidence_level:
+        want = _evidence_level_rank(evidence_level)
+        display = [s for s in display if _evidence_level_rank(s.evidence_level) == want]
+    if source:
+        src_lo = source.strip().lower()
+        display = [
+            s for s in display
+            if any(src_lo in (x or "").lower() for x in (s.sources or [s.source]))
+        ]
+    ps = max(1, int(page_size or STUDY_PAGE_SIZE))
+    page = max(1, int(page))
+    offset = (page - 1) * ps
+    window = display[offset:offset + ps]
+    return {
+        "total_in_pool": len(pool),
+        "filtered_total": len(display),
+        "page": page,
+        "page_size": ps,
+        "shown": len(window),
+        "has_more": offset + ps < len(display),
+        "evidence_level": evidence_level,
+        "source": source,
+        **_facets(pool),
+        "studies": [_study_card(s) for s in window],
+    }
 
 
 async def tool_finalize_ranking(request: RunRequest, bridge: AgenticEventBridge, ranked_indices: list[int], rationale: str = "") -> dict[str, Any]:
@@ -593,44 +707,60 @@ async def tool_screen_studies(
     excluded_indices: list[int] | None = None,
     exclusion_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Apply explicit PICO-based inclusion/exclusion to the deduped study pool.
+    """Apply explicit PICO-based screening to the deduped study pool (whitelist).
 
-    The agent is the screening judge: it passes which study indices to keep and
-    which to drop (with a reason each). Indices in neither list default to
-    included, so a model that skips screening degrades to "include all".
+    The agent is the screening judge: ONLY the studies whose indices appear in
+    ``included_indices`` survive. Every other study is dropped — recorded as an
+    itemized exclusion when the agent supplied an ``excluded_indices`` reason, or
+    bucketed into ``not_selected`` otherwise (so Methods can report how many were
+    screened out). Passing an empty include-list is rejected rather than nuking
+    the pool.
     """
     pre_scored = bridge._pre_scored
     if not pre_scored:
         return {"error": "Call get_studies first."}
+    included_set = {int(i) for i in included_indices}
     excluded_indices = [int(i) for i in (excluded_indices or [])]
     reasons = list(exclusion_reasons or [])
     reason_map = {
         idx: (reasons[i] if i < len(reasons) else "No reason given")
         for i, idx in enumerate(excluded_indices)
     }
-    included_set = {int(i) for i in included_indices}
-    excluded_set = set(excluded_indices)
+
+    if not included_set:
+        return {
+            "error": (
+                "Whitelist screening: pass at least one included index. Studies not in "
+                "included_indices are dropped."
+            ),
+            "screened": len(pre_scored),
+            "included": 0,
+        }
 
     kept: list[ScoredStudy] = []
     excluded_records: list[dict[str, Any]] = []
+    not_selected: list[dict[str, Any]] = []
     for study in pre_scored:
         ref = study.reference_number
-        # Exclusion wins only when explicitly excluded and not explicitly included.
-        if ref in excluded_set and ref not in included_set:
+        if ref in included_set:
+            kept.append(study)
+        elif ref in reason_map:
             excluded_records.append({
                 "reference_number": ref,
                 "title": study.title,
-                "reason": reason_map.get(ref, "No reason given"),
+                "reason": reason_map[ref],
             })
         else:
-            kept.append(study)
+            not_selected.append({"reference_number": ref, "title": study.title})
 
-    # Keep the full pool so a later get_studies (e.g. after snowballing) rebuilds.
+    # Keep only the survivors so a later get_studies (e.g. after snowballing) rebuilds.
     bridge._pre_scored = kept
     bridge.screening = {
         "screened_count": len(pre_scored),
         "included": len(kept),
         "excluded": excluded_records,
+        "not_selected_count": len(not_selected),
+        "not_selected": not_selected,
     }
     warning = None
     if len(kept) < 3:
@@ -640,6 +770,7 @@ async def tool_screen_studies(
         "screened": len(pre_scored),
         "included": len(kept),
         "excluded": len(excluded_records),
+        "not_selected": len(not_selected),
         "warning": warning,
     }
 
@@ -717,7 +848,7 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
 
     # Return structured data so the LLM writes a real synthesis — NOT a pre-formatted template
     studies_data = []
-    for s in bridge.ranked_studies[:12]:
+    for s in bridge.ranked_studies[:MAX_REPORT_STUDIES]:
         entry: dict[str, Any] = {
             "rank": s.reference_number,
             "title": s.title,
@@ -789,7 +920,7 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         "The report MUST include: "
         "(1) An executive summary that directly answers the research question; "
         "(2) A methods section describing the search strategy"
-        + (" and the number of studies screened out with the dominant exclusion reasons" if bridge.screening else "")
+        + (" and the number of studies screened out (itemized exclusions plus the bulk not_selected_count) with the dominant exclusion reasons" if bridge.screening else "")
         + "; "
         "(3) A findings section that synthesizes evidence across studies — do NOT just list studies, "
         "compare and contrast findings, identify patterns, agreements and contradictions; "
@@ -1528,7 +1659,7 @@ async def _download_pdf_bytes(rank: int, urls: list[str]) -> tuple[bytes | None,
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(30.0, connect=5.0),
                     follow_redirects=True,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.4; academic-research)"},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.5; academic-research)"},
                 ) as client:
                     resp = await client.get(url)
                     resp.raise_for_status()
@@ -2134,8 +2265,9 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
 - get_references(reference_number) — fetch the reference list of a ranked study [n] (backward)
 - get_citations(reference_number) — fetch papers citing a ranked study [n] (forward)
 **Evidence** (reads from shared state — NO large JSON arguments needed):
-- get_studies(context) — deduplicates and pre-scores all collected studies, returns full details for YOUR review
-- screen_studies(included_indices, excluded_indices, exclusion_reasons) — apply PICO inclusion/exclusion; excluded studies are dropped before ranking
+- get_studies(context) — deduplicates and pre-scores all collected studies, returns a pre-ranked TOP TIER grouped by evidence level I->V for YOUR review
+- browse_studies(page, evidence_level, source) — page/expand the scored pool for more candidates by level or source; does NOT re-rank or reset screening
+- screen_studies(included_indices, excluded_indices, exclusion_reasons) — whitelist: ONLY included_indices survive, every other study is dropped (unlisted ones recorded as "not selected"). Pass excluded_indices (+ reasons) only to name notable exclusions in Methods
 - finalize_ranking(ranked_indices, rationale) — submit your ranking. Pass indices best-first.
 - appraise_evidence(findings, certainties, rationales, reference_numbers_csv) — record GRADE certainty per major finding
 - verify_studies() — verifies PMIDs of ranked studies
@@ -2151,8 +2283,9 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
 1. Call `plan_search` with the query.
 2. Call search tools (one per database, use queries from the plan). Search 3-5 databases{" — include search_clinical_trials for registered/ongoing trials" if is_clinical else ""}.
 3. Call `get_studies` with context="{"clinical" if is_clinical else "general"}". \
-Carefully review EVERY abstract. Assess relevance to the query, study design, evidence level, and quality.
-4. Call `screen_studies`: list the indices to include and the indices to exclude (with one reason each — e.g. population mismatch, wrong intervention/comparator, wrong study type, off-topic). Excluded studies are removed before ranking.
+It returns a pre-ranked TOP TIER grouped by evidence level I->V (with facet counts and total). \
+Carefully review EVERY abstract shown. If `has_more` is true and you need wider coverage before screening, call `browse_studies(page=2)` or filter with `browse_studies(evidence_level=...)` / `browse_studies(source=...)`. Assess relevance to the query, study design, evidence level, and quality.
+4. Call `screen_studies`: pass `included_indices` with EVERY index you want to keep — every study you do not include is automatically dropped (recorded as "not selected"). Optionally add `excluded_indices` (+ one reason each — e.g. population mismatch, wrong intervention/comparator, wrong study type, off-topic) to name the notable exclusions in Methods.
 5. Call `finalize_ranking` with your ordered list of included study indices (best first) and a detailed rationale.
 6. (Optional) If 2+ Level I/II studies were ranked and coverage is thin, call `get_references` and/or `get_citations` for the top 1-2 of them (at most 3 snowball calls total), then call `get_studies` and `screen_studies` again to merge and re-screen the new candidates.
 7. Call `fetch_fulltext` to find free full text across all ranked studies. This tool opens the user PDF upload checkpoint itself when publisher PDFs are missing; wait for it to return before continuing.
@@ -2168,10 +2301,10 @@ Do NOT repeat searches. One call per database, then move forward.
 
 ## Search Discipline
 
-- Use at most 3-5 query variants for a source, and only when a source returned fewer than 3 relevant hits.
+- Use at most 3-5 query variants for a source; add variants when a source returned few relevant hits.
 - NEVER fabricate PMIDs, DOIs, or NCT IDs — cite only identifiers that appear in tool results.
 - Verify the spelling of uncommon medical terms (drug names, eponymous syndromes) before searching; prefer the standard term over an abbreviation on the first search.
-- Prefer slim outputs: do not request max_results above 10 unless results are sparse.
+- Search broadly: request up to 20-25 results per source for primary databases (the tools cap at 25). You review a pre-ranked tier from `get_studies` and can page the full pool with `browse_studies`, so cast a wide net first.
 - Only call `search_preprints` when peer-reviewed evidence is sparse or the topic is very recent, and always label preprint findings as not peer reviewed.
 
 ## Report Quality Requirements (CRITICAL)
@@ -2319,7 +2452,7 @@ theoretical frameworks, reviews)
 - Skip ClinicalTrials.gov — the trial registry is for clinical-intervention questions only
 
 ## Screening & Appraisal
-- Still call `screen_studies` to exclude off-topic or out-of-scope studies (with a reason each).
+- Still call `screen_studies` to select the studies to keep: pass `included_indices` for everything in scope (unlisted studies are dropped); add `excluded_indices` + reasons for notable off-topic exclusions.
 - For `appraise_evidence`, describe the strength and limitations of the evidence base (methodological diversity, transferability, saturation). Formal GRADE certainty is optional for non-clinical questions — use it only where an intervention's effect is being judged.
 
 ### Database Coverage
@@ -2417,8 +2550,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "search_preprints": "Search preprint servers (medRxiv/bioRxiv) via Europe PMC. Use ONLY when peer-reviewed evidence is sparse or the topic is very recent; results are labeled preprints and rated Level V.",
     "get_references": "Backward snowballing: fetch the reference list of a ranked study [n]. Candidates merge into the pool on the next get_studies call.",
     "get_citations": "Forward snowballing: fetch papers that cite a ranked study [n]. Candidates merge into the pool on the next get_studies call.",
-    "get_studies": "Deduplicate and pre-score ALL collected studies. Returns full details for your review.",
-    "screen_studies": "Apply PICO inclusion/exclusion to the pre-scored pool. Pass included_indices and excluded_indices (+ a reason per exclusion). Excluded studies are dropped before ranking.",
+    "get_studies": "Deduplicate and pre-score ALL collected studies, then return a pre-ranked TOP TIER grouped by evidence level I->V (with facet counts and a has_more flag). Use browse_studies to page through the rest.",
+    "browse_studies": "Page or filter the already-scored study pool by page number, evidence_level, or source. Reads existing scores — does NOT re-rank or reset screening.",
+    "screen_studies": "Whitelist screening: pass included_indices and ONLY those studies survive; every other study is dropped. Optionally pass excluded_indices (+ a reason each) to name notable exclusions in Methods.",
     "finalize_ranking": "Submit your ranking after reviewing studies. Pass ordered indices (best first).",
     "appraise_evidence": "Record GRADE certainty (High/Moderate/Low/Very Low) for each major finding, with rationale and the supporting reference numbers.",
     "verify_studies": "Verify PMIDs of the ranked studies against PubMed.",

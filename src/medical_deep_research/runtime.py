@@ -40,12 +40,15 @@ from .progress import ProgressTracker
 from .research.models import QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
 from .agentic_tools import (
     AgenticEventBridge,
+    MAX_REPORT_STUDIES,
+    STUDY_PAGE_SIZE,
     TOOL_DESCRIPTIONS,
     agentic_system_prompt,
     recover_report_from_bridge,
     report_quality_issues,
     tool_appraise_evidence,
     tool_await_user_pdfs,
+    tool_browse_studies,
     tool_fetch_fulltext,
     tool_finalize_ranking,
     tool_get_studies,
@@ -71,8 +74,8 @@ GOOGLE_MCP_TIMEOUT_SECONDS = 20.0
 LITERATURE_TOOL_FILTER = ["aggregate_search"]
 EVIDENCE_TOOL_FILTER = ["rank_results", "verify_results"]
 MAX_AGENT_SEARCH_ITERATIONS = 2
-DEFAULT_SEARCH_RESULTS_PER_SOURCE = 8
-MAX_AGENT_SEARCH_RESULTS_PER_SOURCE = 20
+DEFAULT_SEARCH_RESULTS_PER_SOURCE = 15
+MAX_AGENT_SEARCH_RESULTS_PER_SOURCE = 25
 SEARCH_GUIDANCE_TIMEOUT_SECONDS = 20.0
 SCREENING_TIMEOUT_SECONDS = 20.0
 REWIND_DECISION_TIMEOUT_SECONDS = 15.0
@@ -784,7 +787,7 @@ class DeterministicRuntime(ResearchRuntime):
             "Saved ranked evidence artifact",
             artifact_type=ArtifactType.RANKED_RESULTS,
             artifact_name="Ranked Results",
-            artifact_json={"studies": [study.model_dump() for study in ranked[:12]]},
+            artifact_json={"studies": [study.model_dump() for study in ranked[:MAX_REPORT_STUDIES]]},
         )
         yield _ev(
             tracker,
@@ -1228,7 +1231,7 @@ class NativeSDKRuntime(DeterministicRuntime):
                 request.query,
                 "",
                 "Ranked studies JSON:",
-                json.dumps([self._compact_study_summary(study) for study in ranked[:10]], indent=2),
+                json.dumps([self._compact_study_summary(study) for study in ranked[:STUDY_PAGE_SIZE]], indent=2),
                 "",
                 "Return a GRADE certainty assessment per major finding.",
             ]
@@ -1440,7 +1443,7 @@ class NativeSDKRuntime(DeterministicRuntime):
                 f"Saved ranked evidence artifact for cycle {iteration + 1}",
                 artifact_type=ArtifactType.RANKED_RESULTS,
                 artifact_name=f"Ranked Results (Cycle {iteration + 1})",
-                artifact_json={"studies": [study.model_dump() for study in ranked[:12]]},
+                artifact_json={"studies": [study.model_dump() for study in ranked[:MAX_REPORT_STUDIES]]},
             )
         )
 
@@ -2193,10 +2196,10 @@ def _build_openai_tools(request: RunRequest, bridge: AgenticEventBridge) -> list
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "max_results": {"type": "integer", "default": 8},
+                "max_results": {"type": "integer", "default": DEFAULT_SEARCH_RESULTS_PER_SOURCE},
             },
             "required": ["query"],
-        }, lambda a, s=_src: tool_search(request, bridge, s, a["query"], a.get("max_results", 8))))
+        }, lambda a, s=_src: tool_search(request, bridge, s, a["query"], a.get("max_results", DEFAULT_SEARCH_RESULTS_PER_SOURCE))))
 
     # Snowballing tools (citation-graph traversal on ranked studies)
     tools.append(_wrap("get_references", {
@@ -2216,6 +2219,22 @@ def _build_openai_tools(request: RunRequest, bridge: AgenticEventBridge) -> list
         "type": "object",
         "properties": {"context": {"type": "string", "default": "general"}},
     }, lambda a: tool_get_studies(request, bridge, a.get("context", "general"))))
+
+    tools.append(_wrap("browse_studies", {
+        "type": "object",
+        "properties": {
+            "page": {"type": "integer", "default": 1},
+            "evidence_level": {"type": "string"},
+            "source": {"type": "string"},
+            "page_size": {"type": "integer"},
+        },
+    }, lambda a: tool_browse_studies(
+        request, bridge,
+        a.get("page", 1),
+        a.get("evidence_level"),
+        a.get("source"),
+        a.get("page_size"),
+    )))
 
     tools.append(_wrap("screen_studies", {
         "type": "object",
@@ -2449,7 +2468,7 @@ def _build_anthropic_mcp_servers(
     def _make_search_tool(source: str, name: str) -> Any:
         @tool(name, TOOL_DESCRIPTIONS[name], {"query": str, "max_results": int})
         async def _search(args: dict[str, Any]) -> dict[str, Any]:
-            result = await tool_search(request, bridge, source, args["query"], args.get("max_results", 8))
+            result = await tool_search(request, bridge, source, args["query"], args.get("max_results", DEFAULT_SEARCH_RESULTS_PER_SOURCE))
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
         return _search
 
@@ -2471,6 +2490,18 @@ def _build_anthropic_mcp_servers(
     @tool("get_studies", TOOL_DESCRIPTIONS["get_studies"], {"context": str})
     async def get_studies_tool(args: dict[str, Any]) -> dict[str, Any]:
         result = await tool_get_studies(request, bridge, args.get("context", "general"))
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+    @tool("browse_studies", TOOL_DESCRIPTIONS["browse_studies"],
+          {"page": int, "evidence_level": str, "source": str, "page_size": int})
+    async def browse_studies_tool(args: dict[str, Any]) -> dict[str, Any]:
+        result = await tool_browse_studies(
+            request, bridge,
+            args.get("page", 1),
+            args.get("evidence_level"),
+            args.get("source"),
+            args.get("page_size"),
+        )
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     @tool("screen_studies", TOOL_DESCRIPTIONS["screen_studies"],
@@ -2520,6 +2551,7 @@ def _build_anthropic_mcp_servers(
         _make_snowball_tool("get_references", "references"),
         _make_snowball_tool("get_citations", "citations"),
         get_studies_tool,
+        browse_studies_tool,
         screen_studies_tool,
         finalize_ranking_tool,
         appraise_evidence_tool,
@@ -2631,7 +2663,8 @@ class ClaudeSDKAnthropicRuntime(NativeSDKRuntime):
                 "mcp__literature__search_pubmed", "mcp__literature__search_openalex",
                 "mcp__literature__search_cochrane", "mcp__literature__search_semantic_scholar",
                 "mcp__literature__search_scopus",
-                "mcp__evidence__get_studies", "mcp__evidence__finalize_ranking",
+                "mcp__evidence__get_studies", "mcp__evidence__browse_studies",
+                "mcp__evidence__screen_studies", "mcp__evidence__finalize_ranking",
                 "mcp__evidence__verify_studies", "mcp__evidence__synthesize_report",
                 "mcp__evidence__submit_report",
                 "mcp__fulltext__fetch_fulltext", "mcp__fulltext__await_user_pdfs",
@@ -2856,15 +2889,20 @@ def _compact_tool_result(tool_name: str, result: Any) -> Any:
             "count": result.get("count", len(studies)),
             "error": result.get("error"),
             "skipped": result.get("skipped"),
-            "studies": [_compact_study_dict(study, abstract_chars=220) for study in studies[:6]],
-            "truncated_studies": max(0, len(studies) - 6),
+            "studies": [_compact_study_dict(study, abstract_chars=220) for study in studies[:10]],
+            "truncated_studies": max(0, len(studies) - 10),
         }
 
-    if tool_name == "get_studies":
+    if tool_name in ("get_studies", "browse_studies"):
         studies = result.get("studies") if isinstance(result.get("studies"), list) else []
-        payload = {key: result.get(key) for key in ("error", "total", "context") if result.get(key) is not None}
-        payload["studies"] = [_compact_study_dict(study, abstract_chars=240) for study in studies[:20]]
-        payload["truncated_studies"] = max(0, len(studies) - 20)
+        meta_keys = (
+            "error", "total", "shown", "page", "page_size", "has_more", "context",
+            "counts_by_evidence_level", "counts_by_source", "note",
+            "total_in_pool", "filtered_total", "evidence_level", "source",
+        )
+        payload = {key: result.get(key) for key in meta_keys if result.get(key) is not None}
+        payload["studies"] = [_compact_study_dict(study, abstract_chars=240) for study in studies[:STUDY_PAGE_SIZE]]
+        payload["truncated_studies"] = max(0, len(studies) - STUDY_PAGE_SIZE)
         return payload
 
     if tool_name == "verify_studies":
@@ -2877,8 +2915,8 @@ def _compact_tool_result(tool_name: str, result: Any) -> Any:
     if tool_name == "synthesize_report":
         compact = dict(result)
         studies = compact.get("studies") if isinstance(compact.get("studies"), list) else []
-        compact["studies"] = [_compact_study_dict(study, abstract_chars=320) for study in studies[:12]]
-        compact["truncated_studies"] = max(0, len(studies) - 12)
+        compact["studies"] = [_compact_study_dict(study, abstract_chars=320) for study in studies[:MAX_REPORT_STUDIES]]
+        compact["truncated_studies"] = max(0, len(studies) - MAX_REPORT_STUDIES)
         return compact
 
     if tool_name == "fetch_fulltext":
@@ -2980,11 +3018,24 @@ def _build_langchain_tools(
 
     @lc_tool
     async def get_studies(context: str = "general") -> str:
-        """Deduplicate and pre-score ALL collected studies. Returns full details for your review."""
+        """Deduplicate and pre-score ALL collected studies. Returns a pre-ranked top tier grouped by evidence level I->V; use browse_studies to page for more."""
         await bridge.on_tool_start("get_studies", {"context": context})
         result = await tool_get_studies(request, bridge, context)
         await bridge.on_tool_end("get_studies", result)
         return _langchain_tool_json("get_studies", result)
+
+    @lc_tool
+    async def browse_studies(
+        page: int = 1,
+        evidence_level: str | None = None,
+        source: str | None = None,
+        page_size: int | None = None,
+    ) -> str:
+        """Page or filter the already-scored study pool by page, evidence_level, or source. Does not re-rank or reset screening."""
+        await bridge.on_tool_start("browse_studies", {"page": page, "evidence_level": evidence_level, "source": source})
+        result = await tool_browse_studies(request, bridge, page, evidence_level, source, page_size)
+        await bridge.on_tool_end("browse_studies", result)
+        return _langchain_tool_json("browse_studies", result)
 
     @lc_tool
     async def screen_studies(
@@ -2992,7 +3043,7 @@ def _build_langchain_tools(
         excluded_indices: list[int] | None = None,
         exclusion_reasons: list[str] | None = None,
     ) -> str:
-        """Apply PICO inclusion/exclusion to the pre-scored pool. Excluded studies are dropped before ranking."""
+        """Whitelist screening: ONLY included_indices survive; every other study is dropped. Pass excluded_indices (+ reasons) to name notable exclusions."""
         await bridge.on_tool_start("screen_studies", {"included": len(included_indices)})
         result = await tool_screen_studies(
             request, bridge, included_indices, excluded_indices or [], exclusion_reasons or []
@@ -3084,7 +3135,7 @@ def _build_langchain_tools(
         plan_search, suggest_databases, write_todos, update_progress,
         *search_tools,
         get_references, get_citations,
-        get_studies, screen_studies, finalize_ranking, appraise_evidence,
+        get_studies, browse_studies, screen_studies, finalize_ranking, appraise_evidence,
         verify_studies, synthesize_report, submit_report,
         fetch_fulltext, await_user_pdfs, parse_pdf,
     ]

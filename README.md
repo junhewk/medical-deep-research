@@ -22,8 +22,8 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 | **Architecture** | Agentic loop — LLM calls literature, evidence, full-text, and workspace tools via shared-state bridge |
 | **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
-| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, ClinicalTrials.gov, Semantic Scholar, Scopus, citation snowballing |
-| **Ranking** | Agent-driven: PICO/PCC screening, EBM ranking, and GRADE-style appraisal |
+| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, ClinicalTrials.gov, Semantic Scholar, Scopus, citation snowballing — up to 25 results per source |
+| **Ranking** | Agent-driven: evidence-level pre-ranking, tiered/paged triage, PICO/PCC screening, EBM ranking, and GRADE-style appraisal |
 | **Full-text** | Europe PMC XML + Unpaywall + PubMed Central OA lookup, Java-free PDF parsing, user PDF upload checkpoint |
 | **Evidence** | Level I–V classification, GRADE certainty notes, PMID verification against PubMed |
 | **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
@@ -67,6 +67,13 @@ If macOS reports that the app is "damaged", copy **Medical Deep Research.app** t
 xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
+
+### v2.9.5 — Wider Search & Tiered Triage
+
+- Searches now return up to **25 results per source** (the agent previously self-limited to ~10), casting a wider net before triage.
+- `get_studies` returns a deterministically pre-ranked **top tier grouped by evidence level (I→V)** with facet counts; the new `browse_studies` tool pages or filters the full pool by evidence level or source without re-ranking or resetting screening.
+- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported as "not selected" in Methods. Up to 20 ranked studies now reach the synthesized report.
+- Fixed an evidence-level scoring bug where `"Level I"` matched II–V as a substring (scoring every level as the highest), so deterministic pre-ranking now reflects true Level I→V quality.
 
 ### v2.9.4 — Screened Evidence Workflow
 
@@ -133,13 +140,13 @@ The agent autonomously executes a multi-step research workflow:
 
 ```
  1. plan_search        → Build search strategy (keywords, databases, queries)
- 2. search_*           → Search 3–5 databases plus ClinicalTrials.gov for clinical questions
- 3. get_studies        → Deduplicate and pre-score all collected studies
- 4. screen_studies     → Apply inclusion/exclusion decisions with reasons
- 5. finalize_ranking   → Agent ranks included studies by relevance and EBM quality
- 6. [snowball]         → Optionally fetch references/citations and re-screen candidates
- 7. fetch_fulltext     → Europe PMC XML + Unpaywall + PMC lookup for open-access full text
- 8. parse_pdf          → Download, upload, or parse full-text PDFs to markdown
+ 2. search_*           → Search 3–5 databases plus ClinicalTrials.gov (up to 25 results per source)
+ 3. get_studies        → Deduplicate and pre-score into evidence-level tiers (I→V)
+ 4. browse_studies     → Page/filter the scored pool by evidence level or source
+ 5. screen_studies     → PICO include/exclude — whitelist, only included studies survive
+ 6. finalize_ranking   → Agent orders the included studies by relevance and EBM quality
+ 7. [snowball]         → Optionally fetch references/citations and re-screen candidates
+ 8. fetch_fulltext / parse_pdf → Europe PMC XML + Unpaywall + PMC lookup, parse/upload PDFs
  9. appraise_evidence  → Record GRADE certainty and rationale per major finding
 10. verify_studies     → Validate PMIDs against PubMed
 11. synthesize_report  → Collect structured evidence data
@@ -147,7 +154,7 @@ The agent autonomously executes a multi-step research workflow:
 13. [translate]        → If language is Korean, translate via LLM (English preserved as artifact)
 ```
 
-The LLM drives the workflow — it decides what to search, reviews evidence quality, ranks studies using medical knowledge, and writes the synthesis. Tools use a **shared-state bridge** so the agent never passes large JSON blobs as arguments.
+The LLM drives the workflow — it decides what to search, screens and ranks evidence by EBM quality, grades certainty, and writes the synthesis. Tools use a **shared-state bridge** so the agent never passes large JSON blobs as arguments.
 
 ### Domain-Specific Prompts
 

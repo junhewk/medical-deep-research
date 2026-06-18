@@ -3,7 +3,20 @@ from __future__ import annotations
 import unittest
 
 from medical_deep_research.research.models import EvidenceStudy
-from medical_deep_research.research.scoring import score_and_rank_results
+from medical_deep_research.research.scoring import get_evidence_level_score, score_and_rank_results
+
+
+class EvidenceLevelScoreTests(unittest.TestCase):
+    def test_each_level_scores_distinctly(self) -> None:
+        # Regression: "level i" is a substring of "level ii"/"iii"/"iv", so the
+        # checks must run most-specific first or every level collapses to 1.0.
+        self.assertEqual(get_evidence_level_score("Level I"), 1.0)
+        self.assertEqual(get_evidence_level_score("Level II"), 0.8)
+        self.assertEqual(get_evidence_level_score("Level III"), 0.6)
+        self.assertEqual(get_evidence_level_score("Level IV"), 0.4)
+        self.assertEqual(get_evidence_level_score("Level V"), 0.2)
+        self.assertEqual(get_evidence_level_score(None), 0.3)
+        self.assertEqual(get_evidence_level_score("unknown"), 0.3)
 
 
 class ScoringTests(unittest.TestCase):

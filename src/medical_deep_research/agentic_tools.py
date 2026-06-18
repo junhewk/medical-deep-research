@@ -285,7 +285,7 @@ class AgenticEventBridge:
                     message="Saved ranked evidence artifact",
                     artifact_type=ArtifactType.RANKED_RESULTS,
                     artifact_name="Ranked Results",
-                    artifact_json={"studies": [study.model_dump() for study in self.ranked_studies[:MAX_REPORT_STUDIES]]},
+                    artifact_json={"studies": [study.model_dump() for study in self.ranked_studies]},
                 )
             )
         if bare == "screen_studies" and self.screening is not None:
@@ -847,8 +847,9 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
     verification = bridge.verification or empty_verification_summary("Verification was not run.")
 
     # Return structured data so the LLM writes a real synthesis — NOT a pre-formatted template
+    report_studies = bridge.ranked_studies[:MAX_REPORT_STUDIES]
     studies_data = []
-    for s in bridge.ranked_studies[:MAX_REPORT_STUDIES]:
+    for s in report_studies:
         entry: dict[str, Any] = {
             "rank": s.reference_number,
             "title": s.title,
@@ -899,6 +900,10 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         },
         "search_summary": search_summary,
         "total_ranked": len(bridge.ranked_studies),
+        "report_reference_numbers": [
+            s.reference_number for s in report_studies if s.reference_number is not None
+        ],
+        "omitted_ranked": max(0, len(bridge.ranked_studies) - len(report_studies)),
         "studies": studies_data,
         "verification": {
             "verified_pmids": verification.verified_pmids,
@@ -930,6 +935,11 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         "(5) A conclusion with clear takeaways; "
         "(6) A numbered references section. "
         "Cite studies by [number] throughout the text. "
+        "Use only rank values present in the studies array as citable reference numbers; "
+        "do not cite numbers from screening exclusions, not_selected items, browse_studies output, "
+        "or ranking rationale unless that same number appears in the studies array. "
+        "If omitted_ranked is greater than 0, mention the omitted lower-priority count in Methods "
+        "without citing omitted studies. "
         "In Results/Findings, present evidence levels from highest to lowest: Level I, Level II, Level III, Level IV, Level V. "
         "Number references sequentially as [1], [2], [3] with no gaps, and use only those same numbers in text citations. "
         "Write in the language specified by the query language setting."

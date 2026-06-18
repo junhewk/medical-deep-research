@@ -787,7 +787,7 @@ class DeterministicRuntime(ResearchRuntime):
             "Saved ranked evidence artifact",
             artifact_type=ArtifactType.RANKED_RESULTS,
             artifact_name="Ranked Results",
-            artifact_json={"studies": [study.model_dump() for study in ranked[:MAX_REPORT_STUDIES]]},
+            artifact_json={"studies": [study.model_dump() for study in ranked]},
         )
         yield _ev(
             tracker,
@@ -1443,7 +1443,7 @@ class NativeSDKRuntime(DeterministicRuntime):
                 f"Saved ranked evidence artifact for cycle {iteration + 1}",
                 artifact_type=ArtifactType.RANKED_RESULTS,
                 artifact_name=f"Ranked Results (Cycle {iteration + 1})",
-                artifact_json={"studies": [study.model_dump() for study in ranked[:MAX_REPORT_STUDIES]]},
+                artifact_json={"studies": [study.model_dump() for study in ranked]},
             )
         )
 

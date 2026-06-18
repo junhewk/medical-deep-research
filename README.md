@@ -72,7 +72,7 @@ open "/Applications/Medical Deep Research.app"
 
 - Searches now return up to **25 results per source** (the agent previously self-limited to ~10), casting a wider net before triage.
 - `get_studies` returns a deterministically pre-ranked **top tier grouped by evidence level (I→V)** with facet counts; the new `browse_studies` tool pages or filters the full pool by evidence level or source without re-ranking or resetting screening.
-- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported as "not selected" in Methods. Up to 20 ranked studies now reach the synthesized report.
+- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported as "not selected" in Methods. Up to 30 ranked studies now reach the synthesized report.
 - Fixed an evidence-level scoring bug where `"Level I"` matched II–V as a substring (scoring every level as the highest), so deterministic pre-ranking now reflects true Level I→V quality.
 
 ### v2.9.4 — Screened Evidence Workflow

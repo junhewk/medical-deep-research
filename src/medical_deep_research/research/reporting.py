@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from .models import QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
 
-# Maximum number of ranked studies that flow into the synthesized report.
-MAX_REPORT_STUDIES = 20
+# Maximum number of ranked studies that flow into synthesized reports.
+#
+# v2.9.5 widened database searches to 25 results/source, so the post-screened
+# evidence set can exceed the old 20-study report window. Keep this high enough
+# that a typical expanded run, such as 26 ranked studies, reaches synthesis
+# without silently dropping citable references.
+MAX_REPORT_STUDIES = 30
 
 
 def _render_methods(plan: QueryPlan, results: list[SearchProviderResult]) -> list[str]:

@@ -206,14 +206,14 @@ ESPB may be a useful analgesic adjunct after cardiac surgery, but conclusions sh
 limited evidence retrieved in this run.
 
 ## References
-[1] Test AB. Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia.
-2024. PMID: 12345678.
+
+[1] Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia. 2024. PMID: 12345678.
 """
 
 
 def make_out_of_order_evidence_report() -> str:
     synthesis = " ".join(
-        "The evidence summary compares study designs, outcomes, limitations, and clinical applicability [1] [2]."
+        "The evidence summary compares study designs, outcomes, limitations, and clinical applicability [1]."
         for _ in range(90)
     )
     return f"""# Research Report
@@ -233,17 +233,17 @@ Observational evidence suggested a possible signal from lower-certainty studies 
 {synthesis}
 
 ### Level I Evidence
-Systematic review evidence should have appeared before lower-level evidence [2].
+Systematic review evidence should have appeared before lower-level evidence [1].
 
 ## Discussion
-The interpretation should be proportional to the evidence base and its limitations [1] [2].
+The interpretation should be proportional to the evidence base and its limitations [1].
 
 ## Conclusions
 Higher-level evidence should be presented before lower-level evidence.
 
 ## References
-[1] Test AB. Observational ESPB study. Journal. 2023.
-[2] Test CD. Systematic review of ESPB. Journal. 2024.
+
+[1] Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia. 2024. PMID: 12345678.
 """
 
 
@@ -287,12 +287,13 @@ ESPB may reduce pain, but confidence depends on study design and directness.
 """
 
 
-def make_ranked_study() -> ScoredStudy:
+def make_ranked_study(reference_number: int = 1) -> ScoredStudy:
     return ScoredStudy(
         source="PubMed",
         source_id="12345678",
         title="Erector spinae plane block after cardiac surgery randomized trial",
         abstract="A randomized trial evaluating ESPB after cardiac surgery reported reduced pain scores.",
+        authors=["Test AB"],
         journal="Journal of Clinical Anesthesia",
         publication_year="2024",
         pmid="12345678",
@@ -304,7 +305,7 @@ def make_ranked_study() -> ScoredStudy:
         citation_score=1.2,
         recency_score=1.0,
         composite_score=6.2,
-        reference_number=1,
+        reference_number=reference_number,
     )
 
 
@@ -643,7 +644,7 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
                 studies=[make_ranked_study()],
             )
         )
-        bridge.ranked_studies = [make_ranked_study()]
+        bridge.ranked_studies = [make_ranked_study(1), make_ranked_study(2)]
         report = make_ordered_evidence_report_with_late_prose_reference()
 
         result = await tool_submit_report(make_request(), bridge, report)
@@ -661,13 +662,14 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         bridge.ranked_studies = [make_ranked_study()]
-        report = make_valid_report().replace("[1] Test AB.", "[1] Test AB.\n[3] Test CD.")
-        report = report.replace("limited evidence retrieved in this run.", "limited evidence retrieved in this run [3].")
+        # Cite [3] when only one study was ranked. With deterministic references the
+        # bibliography is always [1]; the dangling [3] citation is what gets rejected.
+        report = make_valid_report().replace("limited evidence retrieved in this run.", "limited evidence retrieved in this run [3].")
 
         result = await tool_submit_report(make_request(), bridge, report)
 
         self.assertIn("error", result)
-        self.assertTrue(any("ordered sequentially" in issue for issue in result["issues"]))
+        self.assertTrue(any("[3]" in issue for issue in result["issues"]))
         self.assertNotIn("submitted_report", bridge._intermediate)
 
 

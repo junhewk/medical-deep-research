@@ -220,7 +220,8 @@ The overall GRADE certainty of evidence for the pain outcome is Low, rated down 
 ESPB may be a useful analgesic adjunct after cardiac surgery.
 
 ## References
-[1] Test AB. Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia. 2024. PMID: 12345678.
+
+[1] Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia. 2024. PMID: 12345678.
 """
 
 

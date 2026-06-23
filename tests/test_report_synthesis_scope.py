@@ -17,7 +17,7 @@ def make_request() -> RunRequest:
         provider="local",
         model="test-model",
         language="en",
-        offline_mode=False,
+        offline_mode=True,
     )
 
 

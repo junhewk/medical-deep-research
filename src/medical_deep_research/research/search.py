@@ -23,7 +23,7 @@ SEMANTIC_SCHOLAR_FIELDS = (
 )
 HTTP_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 POLITE_EMAIL = "medical-deep-research@users.noreply.github.com"
-USER_AGENT = f"MedicalDeepResearch/2.9.5 (mailto:{POLITE_EMAIL})"
+USER_AGENT = f"MedicalDeepResearch/2.9.6 (mailto:{POLITE_EMAIL})"
 LANDMARK_JOURNALS = {
     "new england journal of medicine",
     "nejm",
@@ -260,10 +260,32 @@ async def search_pubmed(
                 if name:
                     authors.append(name)
             journal = _get_text(article.find(".//Journal/Title")) or "Unknown"
+            journal_abbrev = _get_text(article.find(".//Journal/ISOAbbreviation"))
+            volume = _get_text(article.find(".//JournalIssue/Volume"))
+            issue = _get_text(article.find(".//JournalIssue/Issue"))
+            pages = _get_text(article.find(".//Pagination/MedlinePgn")) or _get_text(
+                article.find(".//MedlinePgn")
+            )
+            if not pages:
+                start_page = _get_text(article.find(".//Pagination/StartPage")) or _get_text(
+                    article.find(".//StartPage")
+                )
+                end_page = _get_text(article.find(".//Pagination/EndPage")) or _get_text(
+                    article.find(".//EndPage")
+                )
+                if start_page:
+                    pages = f"{start_page}-{end_page}" if end_page else start_page
             year = (
                 _get_text(article.find(".//ArticleDate/Year"))
                 or _get_text(article.find(".//JournalIssue/PubDate/Year"))
             )
+            if not year:
+                # MedlineDate holds free-text dates like "2024 Nov-Dec" with no <Year> element.
+                medline_date = _get_text(article.find(".//JournalIssue/PubDate/MedlineDate"))
+                if medline_date:
+                    year_match = re.search(r"\b(\d{4})\b", medline_date)
+                    if year_match:
+                        year = year_match.group(1)
             month = _get_text(article.find(".//ArticleDate/Month")) or _get_text(
                 article.find(".//JournalIssue/PubDate/Month")
             )
@@ -292,6 +314,10 @@ async def search_pubmed(
                     abstract=" ".join(abstract_parts) or None,
                     authors=authors,
                     journal=journal,
+                    journal_abbrev=journal_abbrev or None,
+                    volume=volume or None,
+                    issue=issue or None,
+                    pages=pages or None,
                     publication_date=publication_date,
                     publication_year=year or None,
                     doi=doi,

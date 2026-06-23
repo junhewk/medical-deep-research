@@ -68,6 +68,12 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
+### v2.9.6 — Verified Citations
+
+- The References section is now **rendered deterministically from verified bibliographic metadata** instead of being written freehand by the model, so fabricated authors, journals, volumes, issues, pages, and years are no longer possible (a frequent failure with local LLM runtimes).
+- Cited studies are re-fetched from their **authoritative record** — PubMed `esummary` (by PMID) and Crossref (by DOI) — and the canonical values win over search-time metadata, correcting wrong volumes/issues/pages, ISO journal abbreviations, publication years, and even mismatched DOIs.
+- The PubMed parser now captures **volume, issue, pages, and ISO journal abbreviation** (`EvidenceStudy` gained the corresponding fields), with a `MedlineDate` fallback for publication year.
+
 ### v2.9.5 — Wider Search & Tiered Triage
 
 - Searches now return up to **25 results per source** (the agent previously self-limited to ~10), casting a wider net before triage.

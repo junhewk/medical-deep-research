@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -13,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
@@ -103,6 +106,11 @@ class WorkspaceTabs(QTabWidget):
         self._pcc_p: QLineEdit | None = None
         self._pcc_c: QLineEdit | None = None
         self._pcc_ctx: QLineEdit | None = None
+        self._codex_auth_title_label: QLabel | None = None
+        self._codex_status_label: QLabel | None = None
+        self._codex_login_btn: QPushButton | None = None
+        self._codex_device_btn: QPushButton | None = None
+        self._codex_logout_btn: QPushButton | None = None
 
         self._install_corner_file_menu()
 
@@ -528,7 +536,10 @@ class WorkspaceTabs(QTabWidget):
         self._model_combo.clear()
         models = PROVIDER_MODELS.get(self._provider, {})
         api_keys = self._service.get_api_keys()
-        has_key = self._provider in api_keys and bool(api_keys[self._provider].strip())
+        if self._provider == "codex":
+            has_key = self._service.has_codex_auth_cache()
+        else:
+            has_key = self._provider in api_keys and bool(api_keys[self._provider].strip())
         default = self._model_by_provider.get(self._provider) or DEFAULT_MODELS.get(self._provider, self._model)
         if models:
             for code, label in models.items():
@@ -549,7 +560,7 @@ class WorkspaceTabs(QTabWidget):
         disabled = not has_key and self._provider != "local"
         self._model_combo.setEnabled(not disabled)
         self._model_warning.setVisible(disabled)
-        self._model_warning.setText(self._t("set_api_key"))
+        self._model_warning.setText(self._t("set_codex_auth") if self._provider == "codex" else self._t("set_api_key"))
         self._model_combo.blockSignals(False)
 
     def _on_start_clicked(self) -> None:
@@ -678,6 +689,7 @@ class WorkspaceTabs(QTabWidget):
         self._api_keys_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         self._api_keys_desc_label.setWordWrap(True)
         v.addWidget(self._api_keys_desc_label)
+        self._add_codex_auth_controls(v)
 
         self._key_fields: dict[str, QLineEdit] = {}
         stored = self._service.get_api_keys()
@@ -701,6 +713,147 @@ class WorkspaceTabs(QTabWidget):
         self._save_keys_btn.clicked.connect(self._on_save_keys)
         v.addWidget(self._save_keys_btn, alignment=Qt.AlignmentFlag.AlignRight)
         return group
+
+    def _add_codex_auth_controls(self, parent: QVBoxLayout) -> None:
+        self._codex_auth_title_label = QLabel(self._t("codex_auth"))
+        self._codex_auth_title_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-weight: 700;")
+        parent.addWidget(self._codex_auth_title_label)
+
+        self._codex_status_label = QLabel(
+            self._t("codex_auth_ready_unknown")
+            if self._service.has_codex_auth_cache()
+            else self._t("codex_auth_missing")
+        )
+        self._codex_status_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._codex_status_label.setWordWrap(True)
+        parent.addWidget(self._codex_status_label)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self._codex_login_btn = QPushButton(self._t("codex_login_browser"))
+        self._codex_device_btn = QPushButton(self._t("codex_login_device"))
+        self._codex_logout_btn = QPushButton(self._t("codex_logout"))
+        self._codex_login_btn.clicked.connect(self._on_codex_login_browser)
+        self._codex_device_btn.clicked.connect(self._on_codex_login_device)
+        self._codex_logout_btn.clicked.connect(self._on_codex_logout)
+        row.addWidget(self._codex_login_btn)
+        row.addWidget(self._codex_device_btn)
+        row.addWidget(self._codex_logout_btn)
+        row.addStretch(1)
+        parent.addLayout(row)
+        self._refresh_codex_auth_status()
+
+    def _schedule_async(self, coro: Any) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            close = getattr(coro, "close", None)
+            if callable(close):
+                close()
+            return
+        loop.create_task(coro)
+
+    def _set_codex_auth_buttons_enabled(self, enabled: bool) -> None:
+        for button in (self._codex_login_btn, self._codex_device_btn):
+            if button is not None:
+                button.setEnabled(enabled)
+        if self._codex_logout_btn is not None:
+            self._codex_logout_btn.setEnabled(enabled and self._service.has_codex_auth_cache())
+
+    def _apply_codex_auth_status(self, status: Any) -> None:
+        if self._codex_status_label is None:
+            return
+        if status.error:
+            text = self._t("codex_auth_error").format(error=status.error)
+            self._codex_status_label.setStyleSheet(f"color: {ERROR}; font-size: 12px;")
+        elif status.account_email:
+            plan = status.plan_type or "unknown"
+            text = self._t("codex_auth_ready").format(email=status.account_email, plan=plan)
+            self._codex_status_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        elif status.configured:
+            text = self._t("codex_auth_ready_unknown")
+            self._codex_status_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        else:
+            text = self._t("codex_auth_missing")
+            self._codex_status_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        self._codex_status_label.setText(text)
+        if self._codex_logout_btn is not None:
+            self._codex_logout_btn.setEnabled(bool(status.configured))
+
+    def _codex_error_status(self, exc: Exception) -> SimpleNamespace:
+        return SimpleNamespace(
+            configured=self._service.has_codex_auth_cache(),
+            account_email=None,
+            plan_type=None,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+    def _refresh_codex_auth_status(self) -> None:
+        if self._codex_status_label is not None:
+            self._codex_status_label.setText(self._t("codex_auth_checking"))
+        self._schedule_async(self._load_codex_auth_status())
+
+    async def _load_codex_auth_status(self) -> None:
+        status = await self._service.get_codex_auth_status(refresh=False)
+        self._apply_codex_auth_status(status)
+        self._refresh_provider_status_cards()
+        self._refresh_model_combo()
+
+    def _on_codex_login_browser(self) -> None:
+        self._schedule_async(self._login_codex_browser())
+
+    def _on_codex_login_device(self) -> None:
+        self._schedule_async(self._login_codex_device())
+
+    def _on_codex_logout(self) -> None:
+        self._schedule_async(self._logout_codex())
+
+    async def _login_codex_browser(self) -> None:
+        self._set_codex_auth_buttons_enabled(False)
+        try:
+            status = await self._service.login_codex_browser(
+                open_url=lambda url: QDesktopServices.openUrl(QUrl(url))
+            )
+            self._apply_codex_auth_status(status)
+        except Exception as exc:
+            self._apply_codex_auth_status(self._codex_error_status(exc))
+        finally:
+            self._set_codex_auth_buttons_enabled(True)
+            self._refresh_provider_status_cards()
+            self._refresh_model_combo()
+
+    async def _login_codex_device(self) -> None:
+        self._set_codex_auth_buttons_enabled(False)
+
+        def show_code(url: str, code: str) -> None:
+            QDesktopServices.openUrl(QUrl(url))
+            QMessageBox.information(
+                self,
+                self._t("codex_device_title"),
+                self._t("codex_device_message").format(url=url, code=code),
+            )
+
+        try:
+            status = await self._service.login_codex_device_code(on_code=show_code)
+            self._apply_codex_auth_status(status)
+        except Exception as exc:
+            self._apply_codex_auth_status(self._codex_error_status(exc))
+        finally:
+            self._set_codex_auth_buttons_enabled(True)
+            self._refresh_provider_status_cards()
+            self._refresh_model_combo()
+
+    async def _logout_codex(self) -> None:
+        self._set_codex_auth_buttons_enabled(False)
+        try:
+            status = await self._service.logout_codex()
+            self._apply_codex_auth_status(status)
+        except Exception as exc:
+            self._apply_codex_auth_status(self._codex_error_status(exc))
+        finally:
+            self._set_codex_auth_buttons_enabled(True)
+            self._refresh_provider_status_cards()
+            self._refresh_model_combo()
 
     def _on_save_keys(self) -> None:
         for svc, field in self._key_fields.items():
@@ -733,6 +886,14 @@ class WorkspaceTabs(QTabWidget):
         self._provider_label.setText(self._t("provider"))
         self._model_label.setText(self._t("model"))
         self._api_keys_desc_label.setText(self._t("api_keys_desc"))
+        if self._codex_auth_title_label is not None:
+            self._codex_auth_title_label.setText(self._t("codex_auth"))
+        if self._codex_login_btn is not None:
+            self._codex_login_btn.setText(self._t("codex_login_browser"))
+        if self._codex_device_btn is not None:
+            self._codex_device_btn.setText(self._t("codex_login_device"))
+        if self._codex_logout_btn is not None:
+            self._codex_logout_btn.setText(self._t("codex_logout"))
         self._settings_title_label.setText(self._t("research_settings"))
         self._years_label.setText(self._t("years_lookback"))
         self._years_desc_label.setText(self._t("years_lookback_desc"))
@@ -742,6 +903,7 @@ class WorkspaceTabs(QTabWidget):
         self._start_btn.setText(self._t("start_run"))
         self._save_keys_btn.setText(self._t("save_keys"))
         self._rebuild_structured()
+        self._refresh_codex_auth_status()
         self._run_list.retranslate()
 
 

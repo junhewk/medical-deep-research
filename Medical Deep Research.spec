@@ -27,6 +27,7 @@ hiddenimports = [
     'medical_deep_research.persistence',
     'medical_deep_research.service',
     'medical_deep_research.runtime',
+    'medical_deep_research.codex_auth',
     'medical_deep_research.agentic_tools',
     'medical_deep_research.tools',
     'medical_deep_research.research',
@@ -59,6 +60,8 @@ for _pkg in (
     'langchain_openai',
     'langchain_google_genai',
     'langgraph',
+    'openai_codex',
+    'codex_cli_bin',
     'pdfminer',
     'unpywall',
 ):

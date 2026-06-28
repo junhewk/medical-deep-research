@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlmodel import col, desc, select
 
+from .codex_auth import CodexAuthManager, CodexAuthStatus
 from .models import (
     ApprovalRequest,
     ApprovalStatus,
@@ -27,6 +28,7 @@ from .runtime import RunRequest, build_runtime, describe_provider_runtime
 
 DEFAULT_MODELS = {
     "openai": "gpt-5-mini",
+    "codex": "gpt-5.4-mini",
     "anthropic": "claude-haiku-4-5-20251001",
     "deepseek": DEEPSEEK_DEFAULT_MODEL,
     "google": "gemini-2.5-flash",
@@ -39,6 +41,7 @@ _UICallback = Callable[[str, str], None]  # (run_id, change_type)
 class ResearchService:
     def __init__(self, database: AppDatabase) -> None:
         self.database = database
+        self.codex_auth = CodexAuthManager(database.settings)
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._ui_listeners: list[_UICallback] = []
 
@@ -162,6 +165,24 @@ class ResearchService:
                 session.add(ApiKey(service=service, api_key=api_key))
             session.commit()
 
+    def has_codex_auth_cache(self) -> bool:
+        return self.codex_auth.cache_present()
+
+    async def get_codex_auth_status(self, *, refresh: bool = False) -> CodexAuthStatus:
+        return await self.codex_auth.status(refresh=refresh)
+
+    async def login_codex_browser(self, open_url: Callable[[str], None] | None = None) -> CodexAuthStatus:
+        return await self.codex_auth.login_browser(open_url=open_url)
+
+    async def login_codex_device_code(
+        self,
+        on_code: Callable[[str, str], None] | None = None,
+    ) -> CodexAuthStatus:
+        return await self.codex_auth.login_device_code(on_code=on_code)
+
+    async def logout_codex(self) -> CodexAuthStatus:
+        return await self.codex_auth.logout()
+
     def get_provider_diagnostics(self) -> list[dict[str, Any]]:
         api_keys = self.get_api_keys()
         offline_mode = self.database.settings.offline_mode
@@ -173,6 +194,7 @@ class ResearchService:
                     api_keys=api_keys,
                     offline_mode=offline_mode,
                     default_model=default_model,
+                    codex_home_path=str(self.database.settings.codex_home_path),
                 ).model_dump()
             )
         return diagnostics
@@ -356,6 +378,7 @@ class ResearchService:
             recent_years_lookback=self.get_recent_years_lookback(),
             scopus_view=self.get_scopus_view(),
             database_path=str(self.database.settings.db_path),
+            codex_home_path=str(self.database.settings.codex_home_path),
         )
 
         with self.database.session() as session:

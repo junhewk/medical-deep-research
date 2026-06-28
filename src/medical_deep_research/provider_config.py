@@ -20,6 +20,11 @@ MODEL_ALIASES_BY_PROVIDER: dict[str, dict[str, str]] = {
         "GPT-5": "gpt-5",
         "GPT-5.2": "gpt-5.2",
     },
+    "codex": {
+        "GPT-5.4 Codex": "gpt-5.4",
+        "GPT-5.4 Mini Codex": "gpt-5.4-mini",
+        "GPT-5.3 Codex Spark": "gpt-5.3-codex-spark",
+    },
     "deepseek": {
         "DeepSeek V4 Pro": "deepseek-v4-pro",
         "DeepSeek V4 Flash": "deepseek-v4-flash",

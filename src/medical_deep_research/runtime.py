@@ -84,6 +84,7 @@ FINAL_SYNTHESIS_TIMEOUT_SECONDS = 25.0
 ANTHROPIC_AGENTIC_TIMEOUT_SECONDS = 300.0
 ANTHROPIC_AGENTIC_MAX_TURNS = 25
 LOCAL_AGENTIC_TIMEOUT_SECONDS = 600.0
+CODEX_AGENTIC_TIMEOUT_SECONDS = 600.0
 TModel = TypeVar("TModel", bound=BaseModel)
 _log = logging.getLogger(__name__)
 
@@ -331,9 +332,25 @@ def _search_credentials_present(api_keys: dict[str, str]) -> dict[str, bool]:
     }
 
 
-def _has_native_credentials(provider: str, api_keys: dict[str, str]) -> bool:
+def _codex_auth_cache_present(codex_home_path: str | None = None) -> bool:
+    home = Path(codex_home_path) if codex_home_path else Path(os.getenv("CODEX_HOME") or Path.home() / ".codex")
+    auth_path = home / "auth.json"
+    try:
+        return auth_path.is_file() and auth_path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _has_native_credentials(
+    provider: str,
+    api_keys: dict[str, str],
+    *,
+    codex_home_path: str | None = None,
+) -> bool:
     if provider == "local":
         return True
+    if provider == "codex":
+        return _codex_auth_cache_present(codex_home_path)
     return bool(_provider_api_env(provider, api_keys))
 
 
@@ -366,7 +383,9 @@ def provider_fallback_reason(runtime: ResearchRuntime, request: RunRequest) -> s
         dependency_reason = _legacy_claude_sdk_dependency_reason()
         if dependency_reason:
             return dependency_reason
-    if not _has_native_credentials(runtime.provider, request.api_keys):
+    if not _has_native_credentials(runtime.provider, request.api_keys, codex_home_path=request.codex_home_path):
+        if runtime.provider == "codex":
+            return "Codex ChatGPT OAuth is not configured."
         return f"{runtime.provider} API key is not configured."
     return None
 
@@ -377,9 +396,14 @@ def describe_provider_runtime(
     api_keys: dict[str, str],
     offline_mode: bool,
     default_model: str | None = None,
+    codex_home_path: str | None = None,
 ) -> ProviderDiagnostics:
     runtime = build_runtime(provider)
-    provider_credentials_present = _has_native_credentials(provider, api_keys)
+    provider_credentials_present = _has_native_credentials(
+        provider,
+        api_keys,
+        codex_home_path=codex_home_path,
+    )
     request = RunRequest(
         run_id="diagnostics",
         query="diagnostics",
@@ -389,6 +413,7 @@ def describe_provider_runtime(
         model=default_model or "",
         api_keys=api_keys,
         offline_mode=offline_mode,
+        codex_home_path=codex_home_path,
     )
     fallback_reason = provider_fallback_reason(runtime, request)
     return ProviderDiagnostics(
@@ -462,6 +487,7 @@ def _native_agent_instructions(request: RunRequest, runtime_name: str) -> str:
             "Set `ranked_studies` to the ranked studies from `rank_results`, truncated to the top 8 items if needed.",
             "Set `verification` to the verification summary from `verify_results`.",
             "Write `final_report` as concise markdown with sections for Executive Summary, Methods, Ranked Evidence, Verification, and References.",
+            f"Write `final_report` in the requested language: {request.language}.",
             "Return only valid JSON matching the structured schema. Do not wrap the JSON in markdown fences or prose.",
         ]
     )
@@ -474,6 +500,7 @@ def _native_user_prompt(request: RunRequest) -> str:
             f"Query type: {request.query_type}",
             f"Provider: {request.provider}",
             f"Preferred model: {request.model}",
+            f"Report language: {request.language}",
             f"Offline mode: {'enabled' if request.offline_mode else 'disabled'}",
             "Build the literature review through MCP tools and return the structured output.",
         ]
@@ -638,7 +665,11 @@ class DeterministicRuntime(ResearchRuntime):
             "offline_mode": request.offline_mode,
             "execution_mode": self._execution_mode(request),
             "runtime_engine": self.runtime_engine,
-            "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
+            "provider_credentials_present": _has_native_credentials(
+                self.provider,
+                request.api_keys,
+                codex_home_path=request.codex_home_path,
+            ),
             "search_credentials_present": _search_credentials_present(request.api_keys),
         }
 
@@ -956,7 +987,11 @@ class NativeSDKRuntime(DeterministicRuntime):
                     "offline_mode": request.offline_mode,
                     "execution_mode": "native_sdk",
                     "runtime_engine": self.runtime_engine,
-                    "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
+                    "provider_credentials_present": _has_native_credentials(
+                        self.provider,
+                        request.api_keys,
+                        codex_home_path=request.codex_home_path,
+                    ),
                     "search_credentials_present": _search_credentials_present(request.api_keys),
                 },
             ),
@@ -1865,7 +1900,11 @@ class NativeSDKRuntime(DeterministicRuntime):
                 "sdk_available": self.sdk_available,
                 "offline_mode": request.offline_mode,
                 "execution_mode": "native_sdk",
-                "provider_credentials_present": _has_native_credentials(self.provider, request.api_keys),
+                "provider_credentials_present": _has_native_credentials(
+                    self.provider,
+                    request.api_keys,
+                    codex_home_path=request.codex_home_path,
+                ),
                 "ranked_results": len(final_ranked),
             },
         )
@@ -1904,7 +1943,11 @@ def _agentic_run_started(
             "offline_mode": request.offline_mode,
             "execution_mode": "native_sdk_agentic",
             "runtime_engine": runtime.runtime_engine,
-            "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
+            "provider_credentials_present": _has_native_credentials(
+                runtime.provider,
+                request.api_keys,
+                codex_home_path=request.codex_home_path,
+            ),
             "search_credentials_present": _search_credentials_present(request.api_keys),
         },
     )
@@ -1932,7 +1975,15 @@ async def _maybe_translate_report(
         bridge._intermediate["translation_status"] = "skipped"
         bridge._intermediate["translation_error"] = "Offline mode is enabled."
         return report, []
-    if request.provider != "local" and not _has_native_credentials(request.provider, request.api_keys):
+    if request.provider == "codex":
+        bridge._intermediate["translation_status"] = "skipped"
+        bridge._intermediate["translation_error"] = "Codex reports are requested in the target language during generation."
+        return report, []
+    if request.provider != "local" and not _has_native_credentials(
+        request.provider,
+        request.api_keys,
+        codex_home_path=request.codex_home_path,
+    ):
         bridge._intermediate["translation_status"] = "skipped"
         bridge._intermediate["translation_error"] = f"{request.provider} API key is not configured."
         return report, []
@@ -2032,7 +2083,11 @@ def _agentic_final_events(
         "offline_mode": request.offline_mode,
         "execution_mode": "native_sdk_agentic",
         "runtime_engine": runtime.runtime_engine,
-        "provider_credentials_present": _has_native_credentials(runtime.provider, request.api_keys),
+        "provider_credentials_present": _has_native_credentials(
+            runtime.provider,
+            request.api_keys,
+            codex_home_path=request.codex_home_path,
+        ),
         "search_credentials_present": _search_credentials_present(request.api_keys),
         "tool_calls": bridge._tool_call_count,
         "had_error": bridge._error is not None,
@@ -2437,6 +2492,316 @@ class OpenAIRuntime(NativeSDKRuntime):
             )
             result = await Runner.run(agent, prompt, max_turns=4)
         return _coerce_model_output(result.final_output, output_model)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Codex SDK — ChatGPT OAuth-backed runtime
+# ---------------------------------------------------------------------------
+
+def _codex_home_for_request(request: RunRequest) -> Path:
+    home = Path(request.codex_home_path) if request.codex_home_path else Path(os.getenv("CODEX_HOME") or Path.home() / ".codex")
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def _codex_mcp_server_config(server_name: str, request: RunRequest, *, enabled_tools: list[str]) -> dict[str, Any]:
+    return {
+        "command": _python_executable(),
+        "args": ["-m", "medical_deep_research.mcp.servers", server_name, "--transport", "stdio"],
+        "env": _build_mcp_server_env(request),
+        "cwd": str(REPO_ROOT),
+        "startup_timeout_sec": OPENAI_MCP_TIMEOUT_SECONDS,
+        "tool_timeout_sec": 180.0,
+        "required": True,
+        "enabled_tools": enabled_tools,
+    }
+
+
+def _codex_thread_config(request: RunRequest) -> dict[str, Any]:
+    reasoning_effort = os.getenv("MDR_CODEX_REASONING_EFFORT", "high").strip().lower() or "high"
+    return {
+        "model_reasoning_effort": reasoning_effort,
+        "mcp_servers.medical_literature": _codex_mcp_server_config(
+            "literature",
+            request,
+            enabled_tools=["aggregate_search"],
+        ),
+        "mcp_servers.medical_evidence": _codex_mcp_server_config(
+            "evidence",
+            request,
+            enabled_tools=["rank_results", "verify_results", "synthesize_report"],
+        ),
+    }
+
+
+def _codex_usage_payload(result: Any) -> dict[str, Any]:
+    usage = getattr(result, "usage", None)
+    if usage is None:
+        return {}
+    if hasattr(usage, "model_dump"):
+        return {"token_usage": usage.model_dump(mode="json")}
+    return {"token_usage": str(usage)}
+
+
+def _native_output_artifact_events(
+    runtime: ResearchRuntime,
+    request: RunRequest,
+    output: AgentResearchOutput,
+    tracker: ProgressTracker,
+    *,
+    completion_extra: dict[str, Any] | None = None,
+) -> list[RuntimeEventPayload]:
+    events: list[RuntimeEventPayload] = []
+    events.append(
+        _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "planning",
+            "Saved provider search plan artifact",
+            artifact_type=ArtifactType.SEARCH_PLAN,
+            artifact_name="Search Plan",
+            artifact_json=output.plan.model_dump(),
+        )
+    )
+    if output.plan.todos:
+        events.append(
+            _ev(
+                tracker,
+                EventType.ARTIFACT_CREATED,
+                "planning",
+                "Created provider todo list",
+                artifact_type=ArtifactType.TODO_LIST,
+                artifact_name="Research TODOs",
+                artifact_text="\n".join(f"- {todo}" for todo in output.plan.todos),
+            )
+        )
+    for result in output.search_results:
+        events.append(
+            _ev(
+                tracker,
+                EventType.ARTIFACT_CREATED,
+                "searching",
+                f"Captured {result.source} search results",
+                artifact_type=ArtifactType.SEARCH_RESULTS,
+                artifact_name=f"{result.source} Results",
+                artifact_json=result.model_dump(),
+            )
+        )
+    events.append(
+        _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "searching",
+            "Captured source execution summary",
+            artifact_type=ArtifactType.SOURCE_PLAN,
+            artifact_name="Source Execution Summary",
+            artifact_json={
+                "sources": [result.source for result in output.search_results],
+                "counts": {result.source: len(result.studies) for result in output.search_results},
+                "errors": {result.source: result.error for result in output.search_results if result.error},
+            },
+        )
+    )
+    events.append(
+        _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "ranking",
+            "Saved ranked evidence artifact",
+            artifact_type=ArtifactType.RANKED_RESULTS,
+            artifact_name="Ranked Results",
+            artifact_json={"studies": [study.model_dump() for study in output.ranked_studies[:MAX_REPORT_STUDIES]]},
+        )
+    )
+    events.append(
+        _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "verifying",
+            "Saved verification artifact",
+            artifact_type=ArtifactType.VERIFICATION_REPORT,
+            artifact_name="Verification Report",
+            artifact_text=render_verification_report(output.verification),
+        )
+    )
+    events.append(
+        _ev(
+            tracker,
+            EventType.REPORT_DELTA,
+            "synthesizing",
+            "Report assembled from provider-native research workflow",
+            report_markdown=output.final_report,
+        )
+    )
+    events.append(
+        _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "complete",
+            "Saved final report artifact",
+            complete=True,
+            artifact_type=ArtifactType.FINAL_REPORT,
+            artifact_name="Final Report",
+            artifact_text=output.final_report,
+        )
+    )
+    completed_extra = {
+        "sdk_available": runtime.sdk_available,
+        "offline_mode": request.offline_mode,
+        "execution_mode": "codex_sdk" if runtime.provider == "codex" else "native_sdk",
+        "runtime_engine": runtime.runtime_engine,
+        "provider_credentials_present": _has_native_credentials(
+            runtime.provider,
+            request.api_keys,
+            codex_home_path=request.codex_home_path,
+        ),
+        "search_credentials_present": _search_credentials_present(request.api_keys),
+        "ranked_results": len(output.ranked_studies),
+        **(completion_extra or {}),
+    }
+    events.append(
+        _ev(
+            tracker,
+            EventType.RUN_COMPLETED,
+            "complete",
+            f"{runtime.runtime_name} run completed",
+            complete=True,
+            report_markdown=output.final_report,
+            extra=completed_extra,
+        )
+    )
+    return events
+
+
+class CodexRuntime(DeterministicRuntime):
+    provider = "codex"
+    runtime_name = "OpenAI Codex SDK"
+    sdk_module = "openai_codex"
+    runtime_engine = "openai_codex"
+    planner_name = "Codex Planner"
+    search_agent_name = "Codex Search Agent"
+    synthesis_agent_name = "Codex Synthesis Agent"
+    verifier_name = "Codex Verification Agent"
+    native_agent_name = "Codex Research Agent"
+
+    @property
+    def sdk_available(self) -> bool:
+        required = ("openai_codex", "codex_cli_bin")
+        return all(importlib.util.find_spec(module) is not None for module in required)
+
+    def _execution_mode(self, request: RunRequest) -> str:
+        return "deterministic_fallback" if provider_fallback_reason(self, request) else "codex_sdk"
+
+    def _run_start_extra(self, request: RunRequest) -> dict[str, Any]:
+        extra = super()._run_start_extra(request)
+        fallback_reason = provider_fallback_reason(self, request)
+        if fallback_reason:
+            extra["fallback_reason"] = fallback_reason
+        return extra
+
+    async def stream_run(self, request: RunRequest) -> AsyncIterator[RuntimeEventPayload]:
+        fallback_reason = provider_fallback_reason(self, request)
+        if fallback_reason:
+            async for event in DeterministicRuntime.stream_run(self, request):
+                yield event
+            return
+
+        tracker = ProgressTracker()
+        yield _ev(
+            tracker,
+            EventType.RUN_STARTED,
+            "planning",
+            f"Starting native {self.runtime_name} research run",
+            extra=self._run_start_extra(request),
+        )
+        yield _ev(
+            tracker,
+            EventType.AGENT_STARTED,
+            "planning",
+            f"{self.native_agent_name} is orchestrating the MCP research workflow",
+            agent_name=self.native_agent_name,
+        )
+        yield _ev(
+            tracker,
+            EventType.TOOL_CALLED,
+            "planning",
+            "Starting Codex thread with Medical Deep Research MCP tools",
+            tool_name="codex.thread_start",
+            extra={"mcp_servers": ["medical_literature", "medical_evidence"]},
+        )
+
+        try:
+            output, result = await asyncio.wait_for(
+                self._run_codex_research(request),
+                timeout=CODEX_AGENTIC_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            diagnostics = _exception_diagnostics(exc)
+            yield _ev(
+                tracker,
+                EventType.TOOL_RESULT,
+                "planning",
+                "Codex runtime failed; continuing with deterministic fallback",
+                tool_name="codex.thread_start",
+                extra={"error": _format_exception(exc), **diagnostics},
+            )
+            fallback = AgenticFailureFallbackRuntime(
+                self,
+                _format_exception(exc) or "Codex runtime failed.",
+                failure_diagnostics=diagnostics,
+                tracker=tracker,
+            )
+            async for event in fallback.stream_run(request):
+                yield event
+            return
+
+        yield _ev(
+            tracker,
+            EventType.TOOL_RESULT,
+            "synthesizing",
+            "Codex returned structured research output",
+            tool_name="codex.thread_run",
+            extra={"status": str(getattr(result, "status", "")), **_codex_usage_payload(result)},
+        )
+        for event in _native_output_artifact_events(
+            self,
+            request,
+            output,
+            tracker,
+            completion_extra=_codex_usage_payload(result),
+        ):
+            yield event
+
+    async def _run_codex_research(self, request: RunRequest) -> tuple[AgentResearchOutput, Any]:
+        from openai_codex import AsyncCodex, CodexConfig, Sandbox
+
+        codex_home = _codex_home_for_request(request)
+        config = CodexConfig(
+            env={"CODEX_HOME": str(codex_home)},
+            config_overrides=('cli_auth_credentials_store="file"',),
+            cwd=str(REPO_ROOT),
+            client_name="medical_deep_research",
+            client_title="Medical Deep Research",
+        )
+        async with AsyncCodex(config=config) as codex:
+            thread = await codex.thread_start(
+                base_instructions=_native_agent_instructions(request, self.runtime_name),
+                config=_codex_thread_config(request),
+                cwd=str(REPO_ROOT),
+                ephemeral=True,
+                model=request.model,
+                sandbox=Sandbox.read_only,
+                service_name="medical_deep_research",
+            )
+            result = await thread.run(
+                _native_user_prompt(request),
+                model=request.model,
+                output_schema=AgentResearchOutput.model_json_schema(),
+                sandbox=Sandbox.read_only,
+            )
+        if not result.final_response:
+            raise RuntimeError("Codex did not return a final response.")
+        return _coerce_native_output(result.final_response), result
 
 
 # ---------------------------------------------------------------------------
@@ -3588,6 +3953,8 @@ class GoogleRuntime(LangChainLocalRuntime):
 # ---------------------------------------------------------------------------
 
 def build_runtime(provider: str) -> ResearchRuntime:
+    if provider == "codex":
+        return CodexRuntime()
     if provider == "anthropic":
         if os.getenv("MDR_ANTHROPIC_RUNTIME", "").strip().lower() == "claude_sdk":
             return ClaudeSDKAnthropicRuntime()

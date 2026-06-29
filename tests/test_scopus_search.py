@@ -8,9 +8,11 @@ import httpx
 from medical_deep_research.research.search import (
     SCOPUS_BASE_URL,
     SEMANTIC_SCHOLAR_BASE_URL,
+    search_cochrane,
     search_scopus,
     search_semantic_scholar,
 )
+from medical_deep_research.research.models import EvidenceStudy, SearchProviderResult
 
 
 def response(status_code: int, payload: dict[str, object] | None = None) -> httpx.Response:
@@ -119,6 +121,56 @@ class ScopusSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("date", params)
         self.assertIn("PUBYEAR > 2019", str(params.get("query", "")))
         self.assertIn("PUBYEAR <", str(params.get("query", "")))
+
+    async def test_cochrane_wraps_query_and_passes_ncbi_key(self) -> None:
+        captured: dict[str, object] = {}
+
+        async def fake_search_pubmed(
+            query: str,
+            *,
+            max_results: int,
+            api_key: str | None = None,
+            offline_mode: bool = False,
+            start_year: int | None = None,
+        ) -> SearchProviderResult:
+            captured.update(
+                {
+                    "query": query,
+                    "max_results": max_results,
+                    "api_key": api_key,
+                    "offline_mode": offline_mode,
+                    "start_year": start_year,
+                }
+            )
+            return SearchProviderResult(
+                source="PubMed",
+                query=query,
+                studies=[
+                    EvidenceStudy(
+                        source="pubmed",
+                        source_id="1",
+                        title="Cochrane review",
+                    )
+                ],
+            )
+
+        with patch("medical_deep_research.research.search.search_pubmed", side_effect=fake_search_pubmed):
+            result = await search_cochrane(
+                '"artificial intelligence"[tiab] AND "shared decision making"[tiab]',
+                max_results=3,
+                api_key="ncbi-key",
+                offline_mode=True,
+                start_year=2022,
+            )
+
+        self.assertIn('"Cochrane Database Syst Rev"[Journal]', str(captured["query"]))
+        self.assertEqual(captured["api_key"], "ncbi-key")
+        self.assertEqual(captured["max_results"], 3)
+        self.assertEqual(captured["offline_mode"], True)
+        self.assertEqual(captured["start_year"], 2022)
+        self.assertEqual(result.source, "Cochrane")
+        self.assertEqual(result.studies[0].source, "cochrane")
+        self.assertEqual(result.studies[0].evidence_level, "Level I")
 
 
 class SemanticScholarSearchTests(unittest.IsolatedAsyncioTestCase):

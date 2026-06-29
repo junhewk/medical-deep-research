@@ -12,26 +12,34 @@ from pathlib import Path
 
 multiprocessing.freeze_support()
 
+_MCP_SERVER_ARG = "--mdr-mcp-server"
+
+
+def _is_mcp_server_invocation() -> bool:
+    return len(sys.argv) > 1 and sys.argv[1] == _MCP_SERVER_ARG
+
+
 if getattr(sys, "frozen", False):
     bundle_dir = os.path.dirname(sys.executable)
     if bundle_dir not in sys.path:
         sys.path.insert(0, bundle_dir)
-    # When launched from Finder, CWD is "/" — change to a writable user directory
-    os.chdir(os.path.expanduser("~"))
+    if not _is_mcp_server_invocation():
+        # When launched from Finder, CWD is "/" — change to a writable user directory
+        os.chdir(os.path.expanduser("~"))
 
-    # When launched from Finder, stdout/stderr may be invalid file descriptors.
-    # Redirect them to a log file so libraries that write to them don't crash.
-    if sys.platform == "darwin":
-        _log_dir = os.path.expanduser("~/Library/Logs/MedicalDeepResearch")
-    elif sys.platform == "win32":
-        _log_dir = os.path.expanduser(r"~\AppData\Local\MedicalDeepResearch\Logs")
-    else:
-        _log_dir = os.path.expanduser("~/.local/share/MedicalDeepResearch/logs")
-    os.makedirs(_log_dir, exist_ok=True)
-    _log_path = os.path.join(_log_dir, "app.log")
-    _log_file = open(_log_path, "a")  # noqa: SIM115
-    sys.stdout = _log_file
-    sys.stderr = _log_file
+        # When launched from Finder, stdout/stderr may be invalid file descriptors.
+        # Redirect them to a log file so libraries that write to them don't crash.
+        if sys.platform == "darwin":
+            _log_dir = os.path.expanduser("~/Library/Logs/MedicalDeepResearch")
+        elif sys.platform == "win32":
+            _log_dir = os.path.expanduser(r"~\AppData\Local\MedicalDeepResearch\Logs")
+        else:
+            _log_dir = os.path.expanduser("~/.local/share/MedicalDeepResearch/logs")
+        os.makedirs(_log_dir, exist_ok=True)
+        _log_path = os.path.join(_log_dir, "app.log")
+        _log_file = open(_log_path, "a")  # noqa: SIM115
+        sys.stdout = _log_file
+        sys.stderr = _log_file
 
 
 def _safe_download_target(filename: str) -> Path:
@@ -59,6 +67,13 @@ def _safe_download_target(filename: str) -> Path:
 
 
 def main() -> int:
+    if _is_mcp_server_invocation():
+        from medical_deep_research.mcp.servers import main as _mcp_main
+
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        _mcp_main()
+        return 0
+
     from medical_deep_research.main import main as _main
     return _main()
 

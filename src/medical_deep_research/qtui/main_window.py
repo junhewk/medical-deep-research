@@ -34,11 +34,11 @@ from .tabs.studies_tab import StudiesTab
 from .tabs.trace_tab import TraceTab
 from .theme import (
     APP_BG,
-    APP_QSS,
     BORDER_DIM,
     SURFACE,
     TEXT_MUTED,
     adjusted_point_size,
+    apply_light_theme,
     default_font,
     load_embedded_fonts,
 )
@@ -397,7 +397,7 @@ def run_app(
     app.setApplicationName(settings.app_name)
     load_embedded_fonts()
     app.setFont(default_font())
-    app.setStyleSheet(APP_QSS)
+    apply_light_theme(app)
 
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)

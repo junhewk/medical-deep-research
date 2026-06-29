@@ -205,31 +205,111 @@ def quote_term(term: str) -> str:
     return f'"{term}"' if " " in term else term
 
 
-def build_pubmed_query(query: str, keywords: list[str]) -> str:
-    # Use the most specific keywords (skip generic ones) for title/abstract search
-    specificity_keywords = [kw for kw in keywords if kw not in {"what", "current", "evidence", "using", "role", "best", "recent", "effect", "impact"}]
-    terms = specificity_keywords[:10] or keywords[:10]
-    tagged_terms = [f"{quote_term(term)}[tiab]" for term in terms]
-    if tagged_terms:
-        return " AND ".join(tagged_terms)
+def _split_structured_terms(value: str, *, limit: int = 8) -> list[str]:
+    normalized = sanitize_pubmed_query(value)
+    normalized = re.sub(r"\b(or|and)\b", ",", normalized, flags=re.I)
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"[,;/]", normalized):
+        term = raw.strip(" .")
+        if not term:
+            continue
+        lowered = term.lower()
+        if lowered in STOP_WORDS or lowered in seen:
+            continue
+        seen.add(lowered)
+        terms.append(term)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _expanded_pubmed_terms(term: str) -> list[str]:
+    lowered = term.lower().strip()
+    expansions = {
+        "ai": ["AI", "artificial intelligence"],
+        "ai-supported": ["AI", "artificial intelligence"],
+        "ai supported": ["AI", "artificial intelligence"],
+        "machine learning": ["machine learning"],
+        "patient-centered": ["patient-centered", "patient-centred"],
+        "patient centered": ["patient-centered", "patient-centred"],
+    }
+    return expansions.get(lowered, [term])
+
+
+def _pubmed_group(terms: list[str]) -> str:
+    tagged_terms: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        for expanded in _expanded_pubmed_terms(term):
+            lowered = expanded.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            tagged_terms.append(f"{quote_term(expanded)}[tiab]")
+    if not tagged_terms:
+        return ""
+    if len(tagged_terms) == 1:
+        return tagged_terms[0]
+    return "(" + " OR ".join(tagged_terms) + ")"
+
+
+def _structured_pubmed_query(structured_fields: dict[str, str]) -> str:
+    groups: list[str] = []
+    concept_text = structured_fields.get("concept") or structured_fields.get("intervention") or ""
+    context_text = " ".join(
+        value
+        for value in (
+            structured_fields.get("comparison"),
+            structured_fields.get("context"),
+            structured_fields.get("outcome"),
+        )
+        if value
+    )
+    population_text = structured_fields.get("population", "")
+
+    concept_terms = _split_structured_terms(concept_text, limit=8)
+    context_terms = _split_structured_terms(context_text, limit=6)
+    population_terms = _split_structured_terms(population_text, limit=3)
+
+    if concept_terms:
+        groups.append(_pubmed_group(concept_terms))
+    if context_terms:
+        groups.append(_pubmed_group(context_terms))
+    if not groups and population_terms:
+        groups.append(_pubmed_group(population_terms))
+    return " AND ".join(group for group in groups if group)
+
+
+def build_pubmed_query(
+    query: str,
+    keywords: list[str],
+    structured_fields: dict[str, str] | None = None,
+) -> str:
+    if structured_fields:
+        structured = _structured_pubmed_query(structured_fields)
+        if structured:
+            return structured
+
+    # Use a small OR bundle rather than requiring every extracted word to appear.
+    specificity_keywords = [
+        kw
+        for kw in keywords
+        if kw not in {"what", "current", "evidence", "using", "role", "best", "recent", "effect", "impact"}
+    ]
+    terms = specificity_keywords[:6] or keywords[:6]
+    group = _pubmed_group(terms)
+    if group:
+        return group
     return sanitize_pubmed_query(query)
 
 
 def convert_to_scopus_query(pubmed_query: str) -> str:
     query = re.sub(r"\[(tiab|mh|pt|tw|majr|mesh|all)\]", "", pubmed_query, flags=re.I)
     query = re.sub(r"\s+", " ", query).strip()
-    terms = [token.strip('" ') for token in re.split(r"\bAND\b|\bOR\b|\bNOT\b|[()]", query) if token.strip('" ')]
-    unique_terms: list[str] = []
-    seen: set[str] = set()
-    for term in terms:
-        lowered = term.lower()
-        if lowered in STOP_WORDS or lowered in seen:
-            continue
-        seen.add(lowered)
-        unique_terms.append(quote_term(term))
-    if not unique_terms:
+    if not query:
         return ""
-    return f"TITLE-ABS-KEY({' AND '.join(unique_terms)})"
+    return f"TITLE-ABS-KEY({query})"
 
 
 def build_query_plan(
@@ -244,7 +324,7 @@ def build_query_plan(
     classification_query = normalize_query(f"{query} {normalized_query}")
     domain = classify_domain(classification_query)
     databases = suggest_databases(classification_query, provider)
-    pubmed_query = build_pubmed_query(normalized_query, keywords)
+    pubmed_query = build_pubmed_query(normalized_query, keywords, structured_fields)
 
     source_queries = {
         "PubMed": pubmed_query,
@@ -253,7 +333,7 @@ def build_query_plan(
         "OpenAlex": normalized_query,
         "Crossref": normalized_query,
         "Semantic Scholar": normalized_query,
-        "Cochrane": f"{normalized_query} AND systematic review",
+        "Cochrane": pubmed_query,
         "ClinicalTrials.gov": normalized_query,
     }
     scopus_query = convert_to_scopus_query(pubmed_query)
@@ -262,7 +342,7 @@ def build_query_plan(
 
     notes = [
         f"Domain classified as `{domain}`.",
-        "PubMed query uses title/abstract terms only in the deterministic pipeline.",
+        "PubMed query uses title/abstract term groups and avoids requiring every PCC/PICO term simultaneously.",
     ]
     if structured_fields:
         notes.append("Structured query fields were used to remove PICO/PCC labels from source searches.")

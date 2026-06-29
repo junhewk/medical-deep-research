@@ -49,7 +49,7 @@ class CodexAuthManager:
 
     @property
     def codex_home_path(self) -> Path:
-        return self._settings.codex_home_path
+        return self._settings.codex_home_path.expanduser().resolve()
 
     @property
     def auth_json_path(self) -> Path:
@@ -73,6 +73,9 @@ class CodexAuthManager:
         )
 
     async def status(self, *, refresh: bool = False) -> CodexAuthStatus:
+        if self.cache_present() and not refresh:
+            return CodexAuthStatus(configured=True)
+
         try:
             AsyncCodex, _CodexConfig = _codex_sdk()
         except RuntimeError as exc:

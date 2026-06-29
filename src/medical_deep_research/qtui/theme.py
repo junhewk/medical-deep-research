@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from importlib import resources
 
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
+from PySide6.QtWidgets import QApplication
 
 
 # A restrained contemporary clinical palette: warm paper, teal primary,
@@ -261,6 +262,53 @@ def default_font() -> QFont:
     f.setStyleHint(QFont.StyleHint.SansSerif)
     f.setPointSizeF(11.0)
     return f
+
+
+def light_palette() -> QPalette:
+    """Return a complete light palette so native widgets ignore OS dark mode."""
+    palette = QPalette()
+
+    palette.setColor(QPalette.ColorRole.Window, QColor(APP_BG))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.Base, QColor(SURFACE))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(SURFACE_SOFT))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(SURFACE))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.Text, QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.Button, QColor(SURFACE))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT_SECONDARY))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.Link, QColor(ACCENT))
+    palette.setColor(QPalette.ColorRole.LinkVisited, QColor(SECONDARY))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(ACCENT))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(TEXT_MUTED))
+
+    disabled = QPalette.ColorGroup.Disabled
+    palette.setColor(disabled, QPalette.ColorRole.WindowText, QColor("#98a2b3"))
+    palette.setColor(disabled, QPalette.ColorRole.Text, QColor("#98a2b3"))
+    palette.setColor(disabled, QPalette.ColorRole.ButtonText, QColor("#98a2b3"))
+    palette.setColor(disabled, QPalette.ColorRole.Button, QColor("#f2f4f7"))
+    palette.setColor(disabled, QPalette.ColorRole.Base, QColor("#f8fafc"))
+    palette.setColor(disabled, QPalette.ColorRole.Highlight, QColor("#9db8b4"))
+    palette.setColor(disabled, QPalette.ColorRole.HighlightedText, QColor("#f8fafc"))
+    return palette
+
+
+def apply_light_theme(app: QApplication) -> None:
+    """Apply the app stylesheet and a stable light palette across OS themes."""
+    try:
+        hints = app.styleHints()
+        set_color_scheme = getattr(hints, "setColorScheme", None)
+        if callable(set_color_scheme):
+            from PySide6.QtCore import Qt
+
+            set_color_scheme(Qt.ColorScheme.Light)
+    except Exception:
+        pass
+    app.setStyle("Fusion")
+    app.setPalette(light_palette())
+    app.setStyleSheet(APP_QSS)
 
 
 def report_font() -> QFont:

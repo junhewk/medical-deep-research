@@ -11,7 +11,9 @@ from sqlmodel import select
 from ..config import load_settings
 from ..persistence import AppDatabase
 from ..research import (
+    MAX_REPORT_STUDIES,
     build_query_plan,
+    deduplicate_studies,
     empty_verification_summary,
     flatten_studies,
     render_report,
@@ -21,7 +23,14 @@ from ..research import (
     verify_studies,
 )
 from ..research.models import EvidenceStudy, ScoredStudy, SearchProviderResult, VerificationSummary
-from ..research.planning import extract_keywords, suggest_databases
+from ..research.planning import (
+    build_pubmed_query,
+    convert_to_scopus_query,
+    extract_keywords,
+    parse_structured_query,
+    suggest_databases,
+    structured_query_text,
+)
 from ..tools import score_study_metadata
 
 
@@ -94,6 +103,225 @@ def _parse_verification_summary(verification_json: str | dict[str, object] | Non
     if not payload:
         return empty_verification_summary("Verification was not provided to the MCP report tool.")
     return VerificationSummary.model_validate(payload)
+
+
+def _source_queries_for_text(plan: Any, text: str, fields: dict[str, str] | None = None) -> dict[str, str]:
+    keywords = extract_keywords(text, limit=10)
+    pubmed_query = build_pubmed_query(text, keywords, fields)
+    queries = {source: text for source in plan.databases}
+    if "PubMed" in queries:
+        queries["PubMed"] = pubmed_query
+    if "PMC" in queries:
+        queries["PMC"] = pubmed_query
+    if "Cochrane" in queries:
+        queries["Cochrane"] = pubmed_query
+    scopus_query = convert_to_scopus_query(pubmed_query)
+    if scopus_query and "Scopus" in queries:
+        queries["Scopus"] = scopus_query
+    return queries
+
+
+def _same_source_queries(left: dict[str, str], right: dict[str, str]) -> bool:
+    return {key: " ".join(value.split()) for key, value in left.items()} == {
+        key: " ".join(value.split()) for key, value in right.items()
+    }
+
+
+def _incremental_search_variants(query: str, query_type: str, provider: str) -> tuple[Any, list[dict[str, object]]]:
+    plan = build_query_plan(query, query_type, provider)
+    variants: list[dict[str, object]] = [
+        {
+            "round": 1,
+            "strategy": "focused",
+            "reason": "Initial source-specific query plan.",
+            "source_queries": dict(plan.source_queries),
+        }
+    ]
+
+    fields = parse_structured_query(query)
+    candidates: list[tuple[str, str, dict[str, str]]] = []
+    if fields:
+        concept_context = {
+            key: value
+            for key, value in fields.items()
+            if key in {"concept", "intervention", "context", "outcome"}
+        }
+        if concept_context:
+            candidates.append(
+                (
+                    "concept_context",
+                    "Removed population terms after sparse first-round retrieval.",
+                    concept_context,
+                )
+            )
+        concept_only = {
+            key: value
+            for key, value in fields.items()
+            if key in {"concept", "intervention"}
+        }
+        if concept_only and concept_only != concept_context:
+            candidates.append(
+                (
+                    "concept_only",
+                    "Removed context terms after sparse concept/context retrieval.",
+                    concept_only,
+                )
+            )
+    else:
+        keyword_text = " ".join(plan.keywords[:6])
+        if keyword_text:
+            candidates.append(
+                (
+                    "keyword_bundle",
+                    "Fallback keyword bundle after sparse first-round retrieval.",
+                    {"concept": keyword_text},
+                )
+            )
+
+    seen_queries = [dict(plan.source_queries)]
+    for strategy, reason, candidate_fields in candidates:
+        candidate_text = structured_query_text(query, candidate_fields)
+        if not candidate_text:
+            continue
+        source_queries = _source_queries_for_text(plan, candidate_text, candidate_fields)
+        if any(_same_source_queries(source_queries, seen) for seen in seen_queries):
+            continue
+        seen_queries.append(source_queries)
+        variants.append(
+            {
+                "round": len(variants) + 1,
+                "strategy": strategy,
+                "reason": reason,
+                "source_queries": source_queries,
+            }
+        )
+    return plan, variants
+
+
+def _needs_search_widening(
+    *,
+    unique_count: int,
+    min_unique_studies: int,
+) -> bool:
+    return unique_count < min_unique_studies
+
+
+def _merge_incremental_source_results(
+    plan: Any,
+    per_source_results: dict[str, list[SearchProviderResult]],
+    per_source_queries: dict[str, list[tuple[str, str]]],
+) -> list[SearchProviderResult]:
+    merged: list[SearchProviderResult] = []
+    for source in plan.databases:
+        source_results = per_source_results.get(source, [])
+        studies = deduplicate_studies(flatten_studies(source_results))
+        queries = per_source_queries.get(source, [])
+        query_text = " | ".join(
+            f"{strategy}: {query}"
+            for strategy, query in queries
+        ) or plan.source_queries.get(source, plan.normalized_query)
+        errors = [result.error for result in source_results if result.error]
+        any_success = any(not result.error and not result.skipped for result in source_results)
+        skipped = bool(source_results) and all(result.skipped for result in source_results)
+        merged.append(
+            SearchProviderResult(
+                source=source,
+                query=query_text,
+                studies=studies,
+                error=None if any_success or not errors else "; ".join(dict.fromkeys(errors)),
+                skipped=skipped and not studies,
+            )
+        )
+    return merged
+
+
+def _synthesis_payload(
+    *,
+    query: str,
+    query_type: str,
+    provider: str,
+    search_results: list[SearchProviderResult],
+    ranked_studies: list[ScoredStudy],
+    verification: VerificationSummary,
+    fulltext: dict[str, object] | None = None,
+) -> dict[str, object]:
+    plan = build_query_plan(query, query_type, provider)
+    search_summary = {
+        result.source: {
+            "hits": len(result.studies),
+            "query": result.query,
+            "error": result.error,
+            "skipped": result.skipped,
+        }
+        for result in search_results
+    }
+    studies: list[dict[str, object]] = []
+    for study in ranked_studies[:MAX_REPORT_STUDIES]:
+        entry: dict[str, object] = {
+            "rank": study.reference_number,
+            "title": study.title,
+            "authors": study.authors[:3] if study.authors else [],
+            "year": study.publication_year,
+            "journal": study.journal,
+            "source": study.source,
+            "sources": study.sources,
+            "doi": study.doi,
+            "pmid": study.pmid,
+            "pmcid": study.pmcid,
+            "evidence_level": study.evidence_level,
+            "citation_count": study.citation_count,
+            "score": study.composite_score,
+        }
+        if study.abstract:
+            entry["abstract"] = study.abstract[:900]
+        studies.append(entry)
+
+    fulltext_payload = fulltext or {}
+    fulltext_available = fulltext_payload.get("available") if isinstance(fulltext_payload, dict) else None
+    available_ranks = [
+        item.get("rank")
+        for item in fulltext_available
+        if isinstance(item, dict) and item.get("rank") is not None
+    ] if isinstance(fulltext_available, list) else []
+    return {
+        "query": query,
+        "query_type": query_type,
+        "language": "from run settings",
+        "plan": {
+            "domain": plan.domain,
+            "keywords": plan.keywords,
+            "databases": plan.databases,
+            "notes": plan.notes,
+        },
+        "search_summary": search_summary,
+        "total_ranked": len(ranked_studies),
+        "studies": studies,
+        "verification": {
+            "verified_pmids": verification.verified_pmids,
+            "missing_pmids": verification.missing_pmids,
+            "missing_from_pubmed": verification.missing_from_pubmed,
+            "notes": verification.notes,
+        },
+        "fulltext": {
+            "attempted": bool(fulltext_payload),
+            "pdfs_found": fulltext_payload.get("pdfs_found") if isinstance(fulltext_payload, dict) else None,
+            "available_ranks": available_ranks,
+            "parsed_fulltext": fulltext_payload.get("parsed_fulltext") if isinstance(fulltext_payload, dict) else None,
+            "requested_upload_ranks": fulltext_payload.get("requested_upload_ranks") if isinstance(fulltext_payload, dict) else None,
+            "unavailable_pdf_ranks": fulltext_payload.get("unavailable_pdf_ranks") if isinstance(fulltext_payload, dict) else None,
+            "manual_upload_needed": fulltext_payload.get("manual_upload_needed") if isinstance(fulltext_payload, dict) else None,
+            "user_pdf_checkpoint": fulltext_payload.get("user_pdf_checkpoint") if isinstance(fulltext_payload, dict) else None,
+        },
+        "instructions": (
+            "Write the final report in markdown using these sections exactly: Executive Summary, Background, "
+            "Methods, Results/Findings, Discussion, Conclusions, References. The report must synthesize across "
+            "studies rather than list them. Cite ranked studies as [1], [2], etc. throughout the text and keep "
+            "the References section sequential with no gaps. In Results/Findings, discuss evidence by level from "
+            "Level I/II before lower-level evidence. Include a concise certainty/limitations paragraph: if full "
+            "text was unavailable for key studies, say the appraisal is abstract-limited. Do not include runtime "
+            "metadata bullets, database hit tables, tool status messages, or phrases saying the report is above/below."
+        ),
+    }
 
 
 def create_literature_server() -> FastMCP:
@@ -268,7 +496,9 @@ def create_literature_server() -> FastMCP:
         query: str,
         query_type: str = "free",
         provider: str = "openai",
-        max_results_per_source: int = 6,
+        max_results_per_source: int = 25,
+        min_unique_studies: int = 24,
+        max_search_rounds: int = 3,
         ncbi_api_key: str | None = None,
         scopus_api_key: str | None = None,
         semantic_scholar_api_key: str | None = None,
@@ -276,11 +506,14 @@ def create_literature_server() -> FastMCP:
         recent_years_lookback: int | None = None,
         scopus_view: str | None = None,
     ) -> dict[str, object]:
-        """Execute the deterministic search plan across all configured sources."""
-        plan = build_query_plan(query, query_type, provider)
+        """Execute an incremental search plan across all configured sources."""
+        plan, variants = _incremental_search_variants(query, query_type, provider)
         resolved_offline_mode = _resolve_offline_mode(offline_mode)
         start_year = _start_year_from_lookback(_resolve_lookback(recent_years_lookback))
         resolved_view = _resolve_scopus_view(scopus_view)
+        max_rounds = max(1, min(max_search_rounds, len(variants)))
+        result_limit = max(1, min(max_results_per_source, 25))
+        min_unique = max(1, min_unique_studies)
         api_keys = {
             key: value
             for key, value in {
@@ -293,27 +526,70 @@ def create_literature_server() -> FastMCP:
             }.items()
             if value
         }
-        results = []
-        for source in plan.databases:
-            results.append(
-                await search_source(
+
+        per_source_results: dict[str, list[SearchProviderResult]] = {source: [] for source in plan.databases}
+        per_source_queries: dict[str, list[tuple[str, str]]] = {source: [] for source in plan.databases}
+        iterations: list[dict[str, object]] = []
+
+        for variant in variants[:max_rounds]:
+            strategy = str(variant["strategy"])
+            source_queries = variant["source_queries"]
+            assert isinstance(source_queries, dict)
+            round_results: list[SearchProviderResult] = []
+            for source in plan.databases:
+                source_query = str(source_queries.get(source) or plan.source_queries.get(source) or plan.normalized_query)
+                per_source_queries[source].append((strategy, source_query))
+                result = await search_source(
                     source,
-                    plan.source_queries.get(source, plan.normalized_query),
+                    source_query,
                     api_keys=api_keys,
-                    max_results=max_results_per_source,
+                    max_results=result_limit,
                     offline_mode=resolved_offline_mode,
                     domain=plan.domain,
                     start_year=start_year,
                     scopus_view=resolved_view,
                 )
+                per_source_results[source].append(result)
+                round_results.append(result)
+
+            merged_so_far = _merge_incremental_source_results(plan, per_source_results, per_source_queries)
+            unique_after_round = len(deduplicate_studies(flatten_studies(merged_so_far)))
+            iterations.append(
+                {
+                    "round": variant["round"],
+                    "strategy": strategy,
+                    "reason": variant["reason"],
+                    "counts": {result.source: len(result.studies) for result in round_results},
+                    "errors": {result.source: result.error for result in round_results if result.error},
+                    "queries": {
+                        source: str(source_queries.get(source) or plan.source_queries.get(source) or plan.normalized_query)
+                        for source in plan.databases
+                    },
+                    "unique_after_round": unique_after_round,
+                }
             )
-        flattened = flatten_studies(results)
+            if not _needs_search_widening(
+                unique_count=unique_after_round,
+                min_unique_studies=min_unique,
+            ):
+                break
+
+        results = _merge_incremental_source_results(plan, per_source_results, per_source_queries)
+        flattened = deduplicate_studies(flatten_studies(results))
         return {
             "plan": plan.model_dump(),
             "results": [result.model_dump() for result in results],
             "studies": [study.model_dump() for study in flattened],
             "counts": {result.source: len(result.studies) for result in results},
             "errors": {result.source: result.error for result in results if result.error},
+            "iterations": iterations,
+            "max_results_per_source": result_limit,
+            "min_unique_studies": min_unique,
+            "credentials_present": {
+                "ncbi": "ncbi" in api_keys,
+                "scopus": "scopus" in api_keys,
+                "semantic_scholar": "semantic_scholar" in api_keys,
+            },
         }
 
     @server.resource("literature://keywords/{query}")
@@ -393,18 +669,20 @@ def create_evidence_server() -> FastMCP:
         search_results_json: str | list[dict[str, object]] = "[]",
         ranked_studies_json: str | list[dict[str, object]] = "[]",
         verification_json: str | dict[str, object] | None = None,
+        fulltext_json: str | dict[str, object] | None = None,
         runtime_name: str = "Deterministic Python Runtime",
-    ) -> str:
-        """Render the final research report from normalized search, ranking, and verification data."""
-        plan = build_query_plan(query, query_type, provider)
-        return render_report(
+    ) -> dict[str, object]:
+        """Return structured evidence data and final report instructions."""
+        del runtime_name
+        fulltext_payload = _decode_payload(fulltext_json)
+        return _synthesis_payload(
             query=query,
-            plan=plan,
+            query_type=query_type,
+            provider=provider,
             search_results=_parse_search_results(search_results_json),
             ranked_studies=_parse_scored_studies(ranked_studies_json),
             verification=_parse_verification_summary(verification_json),
-            provider=provider,
-            runtime_name=runtime_name,
+            fulltext=fulltext_payload if isinstance(fulltext_payload, dict) else None,
         )
 
     return server

@@ -492,10 +492,10 @@ async def search_cochrane(
     offline_mode: bool = False,
     start_year: int | None = None,
 ) -> SearchProviderResult:
-    del api_key
     result = await search_pubmed(
-        f'{query} AND ("Cochrane Database Syst Rev"[Journal])',
+        f'({query}) AND "Cochrane Database Syst Rev"[Journal]',
         max_results=max_results,
+        api_key=api_key,
         offline_mode=offline_mode,
         start_year=start_year,
     )

@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
 def load_settings() -> Settings:
     settings = Settings()
+    settings.data_dir = settings.data_dir.expanduser().resolve()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.codex_home_path.mkdir(parents=True, exist_ok=True)
     return settings

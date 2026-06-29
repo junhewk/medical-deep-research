@@ -280,7 +280,8 @@ class LocalRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("error", submit_results[0].extra["full_tool_output"])
         self.assertFalse(final.extra["had_error"])
         self.assertEqual(final.extra["report_source"], "recovered_agentic_state")
-        self.assertIn("Local LLM (fallback)", final.report_markdown or "")
+        self.assertIn("## Results/Findings", final.report_markdown or "")
+        self.assertIn("Erector spinae plane block", final.report_markdown or "")
 
 
 class NewToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
@@ -369,8 +370,6 @@ class NewToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all("OpenAlex" in s["sources"] for s in by_source["studies"]))
 
     async def test_browse_does_not_reset_screening(self) -> None:
-        import json
-
         tools, bridge = self._build_tools_with_bridge()
         await self._seed_multi(tools)
         await call_fake_tool(tools, "screen_studies", included_indices=[1, 2])

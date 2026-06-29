@@ -788,7 +788,19 @@ class WorkspaceTabs(QTabWidget):
             error=f"{type(exc).__name__}: {exc}",
         )
 
-    def _refresh_codex_auth_status(self) -> None:
+    def _refresh_codex_auth_status(self, *, force: bool = False) -> None:
+        if self._service.has_codex_auth_cache() and not force:
+            self._apply_codex_auth_status(
+                SimpleNamespace(
+                    configured=True,
+                    account_email=None,
+                    plan_type=None,
+                    error=None,
+                )
+            )
+            self._refresh_provider_status_cards()
+            self._refresh_model_combo()
+            return
         if self._codex_status_label is not None:
             self._codex_status_label.setText(self._t("codex_auth_checking"))
         self._schedule_async(self._load_codex_auth_status())

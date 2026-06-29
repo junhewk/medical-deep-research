@@ -209,6 +209,19 @@ class ResearchService:
             (event for event in reversed(events) if event.event_type == EventType.RUN_COMPLETED.value),
             None,
         )
+        failed_event = next(
+            (event for event in reversed(events) if event.event_type == EventType.RUN_FAILED.value),
+            None,
+        )
+        failure_tool_event = next(
+            (
+                event for event in reversed(events)
+                if event.event_type == EventType.TOOL_RESULT.value
+                and event.payload_json
+                and "sdk_error_type" in event.payload_json
+            ),
+            None,
+        )
 
         def parse_payload(raw: str | None) -> dict[str, Any]:
             if not raw:
@@ -221,11 +234,15 @@ class ResearchService:
 
         start_payload = parse_payload(start_event.payload_json if start_event else None)
         completed_payload = parse_payload(completed_event.payload_json if completed_event else None)
-        payload = {**start_payload, **completed_payload}
+        failed_payload = parse_payload(failed_event.payload_json if failed_event else None)
+        failure_tool_payload = parse_payload(failure_tool_event.payload_json if failure_tool_event else None)
+        payload = {**start_payload, **completed_payload, **failure_tool_payload, **failed_payload}
         execution_mode = payload.get("execution_mode")
         if not execution_mode and start_event:
             lowered = start_event.message.lower()
-            if lowered.startswith("starting native"):
+            if run.provider == "codex" and "codex" in lowered:
+                execution_mode = "codex_sdk"
+            elif lowered.startswith("starting native"):
                 execution_mode = "native_sdk"
             elif "deterministic" in lowered:
                 execution_mode = "deterministic_fallback"
@@ -242,6 +259,8 @@ class ResearchService:
             "provider_credentials_present": payload.get("provider_credentials_present"),
             "search_credentials_present": payload.get("search_credentials_present"),
             "fallback_reason": payload.get("fallback_reason"),
+            "startup_error": payload.get("startup_error"),
+            "error": payload.get("error"),
             "ranked_results": payload.get("ranked_results"),
             "tool_calls": payload.get("tool_calls"),
             "had_error": payload.get("had_error"),

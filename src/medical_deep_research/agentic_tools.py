@@ -1702,23 +1702,32 @@ async def tool_fetch_fulltext(
     *,
     allow_user_checkpoint: bool = True,
 ) -> dict[str, Any]:
+    ranked_candidates = [
+        s for s in bridge.ranked_studies
+        if s.reference_number is not None
+    ]
     high_evidence_candidates = [
         s for s in bridge.ranked_studies
         if (
             s.evidence_level in _EBM_HIGH_EVIDENCE
             and s.reference_number is not None
-            and (s.doi or s.pmid or s.pmcid)
         )
     ]
-    relevance_scores_present = any(s.relevance_score > 0 for s in high_evidence_candidates)
+    candidate_pool = high_evidence_candidates or ranked_candidates[:10]
+    relevance_scores_present = any(s.relevance_score > 0 for s in candidate_pool)
     candidates = [
-        s for s in high_evidence_candidates
+        s for s in candidate_pool
         if not relevance_scores_present or s.relevance_score >= 0.35
     ][:10]
     if not candidates:
-        if high_evidence_candidates and relevance_scores_present:
-            return {"error": "No relevant Level I/II ranked studies with DOI, PMID, or PMCID found."}
-        return {"error": "No Level I/II ranked studies with DOI, PMID, or PMCID found."}
+        candidates = candidate_pool[:10]
+    if not candidates:
+        return {"error": "No ranked studies available for full-text lookup or PDF upload."}
+
+    auto_fetch_candidates = [
+        s for s in candidates
+        if s.doi or s.pmid or s.pmcid
+    ]
 
     try:
         from unpywall.utils import UnpywallCredentials
@@ -1753,7 +1762,7 @@ async def tool_fetch_fulltext(
     # Resolve PMIDs to PMCIDs once, up front, so both the Europe PMC XML pass
     # and the PMC OA pass can reuse it.
     pmid_to_pmcid: dict[str, str] = {}
-    ids_param = ",".join(s.pmid for s in candidates if s.pmid and s.reference_number is not None)
+    ids_param = ",".join(s.pmid for s in auto_fetch_candidates if s.pmid and s.reference_number is not None)
     if ids_param:
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
@@ -1771,7 +1780,7 @@ async def tool_fetch_fulltext(
     # Pass 0: Europe PMC full-text XML for OA articles (cleaner and more
     # reliable than the PDF chain). Hits skip the PDF pipeline entirely.
     xml_candidates = [
-        s for s in candidates
+        s for s in auto_fetch_candidates
         if s.reference_number is not None
         and s.reference_number not in found_ranks
         and (s.pmcid or (s.pmid and pmid_to_pmcid.get(s.pmid)))
@@ -1822,12 +1831,12 @@ async def tool_fetch_fulltext(
                 except Exception:
                     pass
 
-        await asyncio.gather(*[_lookup(s) for s in candidates])
+        await asyncio.gather(*[_lookup(s) for s in auto_fetch_candidates])
 
     # Pass 2: PMC for ALL candidates with PMIDs (PMC tgz downloads are more
     # reliable than Unpaywall URLs which often return 403 from publishers)
     remaining = [
-        s for s in candidates
+        s for s in auto_fetch_candidates
         if s.reference_number is not None
         and (s.pmid or s.pmcid)
         and s.reference_number not in found_ranks
@@ -1935,11 +1944,14 @@ async def tool_fetch_fulltext(
     found_rank_ids = {int(r["rank"]) for r in available}
     missing_pdf_ranks = [rank for rank in candidate_ranks if rank not in found_rank_ids]
     _log.info(
-        "[FULLTEXT] %d full texts found (europe_pmc_xml=%d, unpaywall=%d, pmc=%d, failed_download=%d, failed_parse=%d) from %d Level I/II studies",
-        len(available), europe_pmc_xml_hits, unpywall_hits, pmc_hits, len(download_failed_ranks), len(parse_failed_ranks), len(candidates),
+        "[FULLTEXT] %d full texts found (europe_pmc_xml=%d, unpywall=%d, pmc=%d, failed_download=%d, failed_parse=%d) from %d candidate studies (%d auto-fetchable)",
+        len(available), europe_pmc_xml_hits, unpywall_hits, pmc_hits, len(download_failed_ranks), len(parse_failed_ranks), len(candidates), len(auto_fetch_candidates),
     )
     result = {
-        "level_I_II_studies": len(candidates),
+        "level_I_II_studies": len(high_evidence_candidates),
+        "candidate_studies": len(candidates),
+        "high_evidence_candidate_studies": len(high_evidence_candidates),
+        "auto_fetchable_studies": len(auto_fetch_candidates),
         "pdfs_found": len(available),
         "discovered_pdf_ranks": sorted(_url_map),
         "validated_pdf_ranks": sorted(bridge._pdf_bytes),
@@ -2561,7 +2573,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "translate_report": "Translate the submitted report to the target language.",
     "write_todos": "Create a research TODO list to plan the workflow.",
     "update_progress": "Signal a phase transition or progress update to the user.",
-    "fetch_fulltext": "Look up free full-text PDFs via Unpaywall + PMC for Level I & II ranked studies.",
+    "fetch_fulltext": "Look up free full text via Europe PMC, Unpaywall, and PMC for ranked studies; asks for user PDFs when automated fetches are missing.",
     "await_user_pdfs": "Pause until the user uploads PDFs and clicks Continue, or clicks Skip.",
     "parse_pdf": "Parse a user-uploaded or discovered full-text PDF to markdown.",
 }

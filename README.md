@@ -68,11 +68,17 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
+### v2.9.6 — Verified Citations
+
+- The References section is now **rendered deterministically from verified bibliographic metadata** instead of being written freehand by the model, so fabricated authors, journals, volumes, issues, pages, and years are no longer possible (a frequent failure with local LLM runtimes).
+- Cited studies are re-fetched from their **authoritative record** — PubMed `esummary` (by PMID) and Crossref (by DOI) — and the canonical values win over search-time metadata, correcting wrong volumes/issues/pages, ISO journal abbreviations, publication years, and even mismatched DOIs.
+- The PubMed parser now captures **volume, issue, pages, and ISO journal abbreviation** (`EvidenceStudy` gained the corresponding fields), with a `MedlineDate` fallback for publication year.
+
 ### v2.9.5 — Wider Search & Tiered Triage
 
 - Searches now return up to **25 results per source** (the agent previously self-limited to ~10), casting a wider net before triage.
 - `get_studies` returns a deterministically pre-ranked **top tier grouped by evidence level (I→V)** with facet counts; the new `browse_studies` tool pages or filters the full pool by evidence level or source without re-ranking or resetting screening.
-- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported as "not selected" in Methods. Up to 20 ranked studies now reach the synthesized report.
+- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported as "not selected" in Methods. Up to 30 ranked studies now reach the synthesized report.
 - Fixed an evidence-level scoring bug where `"Level I"` matched II–V as a substring (scoring every level as the highest), so deterministic pre-ranking now reflects true Level I→V quality.
 
 ### v2.9.4 — Screened Evidence Workflow

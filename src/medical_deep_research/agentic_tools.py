@@ -37,7 +37,9 @@ from .research import (
     MAX_REPORT_STUDIES,
     build_query_plan,
     empty_verification_summary,
+    enrich_report_citations,
     flatten_studies,
+    render_reference_entries,
     render_report,
     render_verification_report,
     score_and_rank_results,
@@ -288,7 +290,7 @@ class AgenticEventBridge:
                     message="Saved ranked evidence artifact",
                     artifact_type=ArtifactType.RANKED_RESULTS,
                     artifact_name="Ranked Results",
-                    artifact_json={"studies": [study.model_dump() for study in self.ranked_studies[:MAX_REPORT_STUDIES]]},
+                    artifact_json={"studies": [study.model_dump() for study in self.ranked_studies]},
                 )
             )
         if bare == "screen_studies" and self.screening is not None:
@@ -894,14 +896,33 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
     verification = bridge.verification or empty_verification_summary("Verification was not run.")
 
     # Return structured data so the LLM writes a real synthesis — NOT a pre-formatted template
+    report_studies = bridge.ranked_studies[:MAX_REPORT_STUDIES]
+
+    # Re-fetch canonical bibliographic metadata (volume/issue/pages/year/journal abbrev/authors)
+    # for the cited studies so the deterministic References section is complete and correct.
+    # Guarded so retries of synthesize_report do not repeat the network calls.
+    if not bridge._intermediate.get("_citation_metadata_enriched"):
+        try:
+            await enrich_report_citations(
+                report_studies,
+                api_keys=request.api_keys,
+                offline_mode=request.offline_mode,
+            )
+        except Exception:  # pragma: no cover - defensive network path
+            pass
+        bridge._intermediate["_citation_metadata_enriched"] = True
+
     studies_data = []
-    for s in bridge.ranked_studies[:MAX_REPORT_STUDIES]:
+    for s in report_studies:
         entry: dict[str, Any] = {
             "rank": s.reference_number,
             "title": s.title,
             "authors": s.authors[:3] if s.authors else [],
             "year": s.publication_year,
-            "journal": s.journal,
+            "journal": s.journal_abbrev or s.journal,
+            "volume": s.volume,
+            "issue": s.issue,
+            "pages": s.pages,
             "source": s.source,
             "doi": s.doi,
             "pmid": s.pmid,
@@ -946,6 +967,10 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         },
         "search_summary": search_summary,
         "total_ranked": len(bridge.ranked_studies),
+        "report_reference_numbers": [
+            s.reference_number for s in report_studies if s.reference_number is not None
+        ],
+        "omitted_ranked": max(0, len(bridge.ranked_studies) - len(report_studies)),
         "studies": studies_data,
         "verification": {
             "verified_pmids": verification.verified_pmids,
@@ -1003,8 +1028,18 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         "(4c) Use available full-text excerpts to add specific detail for key studies; "
         "(4d) If appraisal was based on abstracts only, say so under Limitations and distinguish it from full-text-appraised findings; "
         "(5) A conclusion with clear takeaways; "
-        "(6) A numbered references section. "
+        "(6) A '## 7. References' section listing each cited study by [number]. "
+        "IMPORTANT: the system finalizes the References section from verified bibliographic "
+        "metadata after you submit — do NOT invent or guess authors, journal names, year, "
+        "volume, issue, or page numbers. List references by their [number] using only the "
+        "title and identifiers from the studies array; the system replaces them with the "
+        "canonical citation. Never fabricate citation details not present in the studies array. "
         "Cite studies by [number] throughout the text. "
+        "Use only rank values present in the studies array as citable reference numbers; "
+        "do not cite numbers from screening exclusions, not_selected items, browse_studies output, "
+        "or ranking rationale unless that same number appears in the studies array. "
+        "If omitted_ranked is greater than 0, mention the omitted lower-priority count in Methods "
+        "without citing omitted studies. "
         "In Results/Findings, present evidence levels from highest to lowest: Level I, Level II, Level III, Level IV, Level V. "
         "For PCC communication/SDM education topics, synthesize direct AI communication/SDM training evidence first, "
         "then adjacent virtual-patient/interview/empathy/breaking-bad-news evidence, then broader AI-health-professions education context. "
@@ -1189,6 +1224,23 @@ def _extract_references_section(report_markdown: str) -> tuple[str, str]:
     return report_markdown, ""
 
 
+def _inject_reference_list(report_markdown: str, studies: list[ScoredStudy]) -> str:
+    """Replace the model-written References section with a deterministic one rendered from
+    verified structured metadata, preserving the original heading style when present."""
+    entries = render_reference_entries(studies)
+    if not entries:
+        return report_markdown
+    lines = report_markdown.splitlines()
+    references_aliases = _REPORT_SECTION_GROUPS["references"]
+    for index, line in enumerate(lines):
+        if _heading_matches(line, references_aliases):
+            heading = line.rstrip()
+            body = "\n".join(lines[:index]).rstrip()
+            return f"{body}\n\n{heading}\n\n{entries}".strip()
+    body = report_markdown.rstrip()
+    return f"{body}\n\n## 7. References\n\n{entries}".strip()
+
+
 def _reference_number_issues(report_markdown: str) -> list[str]:
     body, references = _extract_references_section(report_markdown)
     ref_numbers = [
@@ -1344,8 +1396,20 @@ async def tool_submit_report(request: RunRequest, bridge: AgenticEventBridge, re
     report_markdown = str(report_markdown).strip()
     if not report_markdown:
         return {"error": "Report is empty. Write the full report and submit again."}
+
+    # Finalize the bibliography deterministically: replace whatever the model wrote in its
+    # References section with verified citations rendered from structured metadata (enriched
+    # during synthesize_report). This makes fabricated/incomplete citations structurally
+    # impossible — the model can no longer invent authors/journal/year/volume/issue/pages.
+    # The model's original text is kept for rejection traces; the finalized text is what we
+    # validate and store on acceptance.
+    report_studies = bridge.ranked_studies[:MAX_REPORT_STUDIES]
+    finalized_report = (
+        _inject_reference_list(report_markdown, report_studies) if report_studies else report_markdown
+    )
+
     quality_issues = report_quality_issues(
-        report_markdown,
+        finalized_report,
         ranked_count=len(bridge.ranked_studies),
         search_count=sum(len(result.studies) for result in bridge.search_results),
     )
@@ -1353,13 +1417,13 @@ async def tool_submit_report(request: RunRequest, bridge: AgenticEventBridge, re
         rejection_count = _record_submit_report_rejection(bridge, report_markdown, quality_issues)
         if rejection_count >= MAX_SUBMIT_REPORT_REJECTIONS:
             if _only_soft_report_quality_issues(quality_issues):
-                bridge._intermediate["submitted_report"] = report_markdown
+                bridge._intermediate["submitted_report"] = finalized_report
                 bridge._intermediate["submitted_report_warnings"] = list(quality_issues)
                 bridge._intermediate["submitted_report_accepted_after_rejections"] = rejection_count
-                bridge.set_result(report_markdown)
+                bridge.set_result(finalized_report)
                 return {
                     "status": "ok",
-                    "length": len(report_markdown),
+                    "length": len(finalized_report),
                     "warnings": quality_issues,
                     "accepted_after_rejections": rejection_count,
                 }
@@ -1390,9 +1454,9 @@ async def tool_submit_report(request: RunRequest, bridge: AgenticEventBridge, re
                 "include numbered references in strict [1], [2], [3] order, and organize evidence levels from Level I to Level V."
             ),
         }
-    bridge._intermediate["submitted_report"] = report_markdown
-    bridge.set_result(report_markdown)
-    return {"status": "ok", "length": len(report_markdown)}
+    bridge._intermediate["submitted_report"] = finalized_report
+    bridge.set_result(finalized_report)
+    return {"status": "ok", "length": len(finalized_report)}
 
 
 async def tool_translate_report(
@@ -1795,7 +1859,7 @@ async def _download_pdf_bytes(rank: int, urls: list[str]) -> tuple[bytes | None,
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(30.0, connect=5.0),
                     follow_redirects=True,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.5; academic-research)"},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.6; academic-research)"},
                 ) as client:
                     resp = await client.get(url)
                     resp.raise_for_status()

@@ -23,6 +23,10 @@ class EvidenceStudy(BaseModel):
     abstract: str | None = None
     authors: list[str] = Field(default_factory=list)
     journal: str | None = None
+    journal_abbrev: str | None = None
+    volume: str | None = None
+    issue: str | None = None
+    pages: str | None = None
     publication_date: str | None = None
     publication_year: str | None = None
     doi: str | None = None

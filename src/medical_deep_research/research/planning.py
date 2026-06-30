@@ -52,6 +52,57 @@ STOP_WORDS = {
     "this",
     "with",
 }
+
+AI_EDUCATION_TERMS = (
+    "AI",
+    "artificial intelligence",
+    "generative AI",
+    "generative artificial intelligence",
+    "large language model",
+    "large language models",
+    "LLM",
+    "LLMs",
+    "ChatGPT",
+    "GPT",
+    "chatbot",
+    "chatbots",
+    "conversational agent",
+    "conversational agents",
+    "virtual patient",
+    "virtual patients",
+    "simulated patient",
+    "simulated patients",
+)
+
+AI_EDUCATION_ACTIVITY_TERMS = (
+    "education",
+    "medical education",
+    "health professions education",
+    "training",
+    "simulation",
+    "coaching",
+    "assessment",
+    "feedback",
+)
+
+COMMUNICATION_SDM_TERMS = (
+    "shared decision making",
+    "shared decision-making",
+    "SDM",
+    "communication skills",
+    "communication training",
+    "medical interview",
+    "history taking",
+    "breaking bad news",
+    "empathy",
+    "empathetic communication",
+    "patient-centered",
+    "patient-centred",
+    "patient centered",
+    "patient centred",
+    "doctor-patient communication",
+    "physician-patient communication",
+)
 FRAMEWORK_LABELS = {
     "population",
     "intervention",
@@ -237,6 +288,11 @@ def _expanded_pubmed_terms(term: str) -> list[str]:
     return expansions.get(lowered, [term])
 
 
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(term.lower() in lowered for term in terms)
+
+
 def _pubmed_group(terms: list[str]) -> str:
     tagged_terms: list[str] = []
     seen: set[str] = set()
@@ -252,6 +308,65 @@ def _pubmed_group(terms: list[str]) -> str:
     if len(tagged_terms) == 1:
         return tagged_terms[0]
     return "(" + " OR ".join(tagged_terms) + ")"
+
+
+def is_ai_communication_education_query(
+    query: str,
+    query_type: str | None = None,
+    structured_fields: dict[str, str] | None = None,
+) -> bool:
+    fields = structured_fields or parse_structured_query(query)
+    text = " ".join(
+        part
+        for part in (
+            query,
+            fields.get("concept", ""),
+            fields.get("intervention", ""),
+            fields.get("context", ""),
+            fields.get("outcome", ""),
+        )
+        if part
+    )
+    if query_type and query_type.lower() == "pcc":
+        return _contains_any(text, AI_EDUCATION_TERMS) and _contains_any(text, COMMUNICATION_SDM_TERMS)
+    return (
+        _contains_any(text, AI_EDUCATION_TERMS)
+        and _contains_any(text, AI_EDUCATION_ACTIVITY_TERMS)
+        and _contains_any(text, COMMUNICATION_SDM_TERMS)
+    )
+
+
+def _ai_communication_pubmed_query() -> str:
+    groups = [
+        _pubmed_group(list(AI_EDUCATION_TERMS)),
+        _pubmed_group(list(AI_EDUCATION_ACTIVITY_TERMS)),
+        _pubmed_group(list(COMMUNICATION_SDM_TERMS)),
+    ]
+    return " AND ".join(group for group in groups if group)
+
+
+def _ai_communication_general_query() -> str:
+    terms = (
+        "artificial intelligence",
+        "generative AI",
+        "large language model",
+        "ChatGPT",
+        "chatbot",
+        "virtual patient",
+        "simulated patient",
+        "medical education",
+        "health professions education",
+        "training",
+        "simulation",
+        "communication skills",
+        "communication training",
+        "medical interview",
+        "shared decision making",
+        "empathy",
+        "breaking bad news",
+        "patient-centered",
+    )
+    return " ".join(terms)
 
 
 def _structured_pubmed_query(structured_fields: dict[str, str]) -> str:
@@ -285,7 +400,11 @@ def build_pubmed_query(
     query: str,
     keywords: list[str],
     structured_fields: dict[str, str] | None = None,
+    query_type: str | None = None,
 ) -> str:
+    if is_ai_communication_education_query(query, query_type, structured_fields):
+        return _ai_communication_pubmed_query()
+
     if structured_fields:
         structured = _structured_pubmed_query(structured_fields)
         if structured:
@@ -324,17 +443,22 @@ def build_query_plan(
     classification_query = normalize_query(f"{query} {normalized_query}")
     domain = classify_domain(classification_query)
     databases = suggest_databases(classification_query, provider)
-    pubmed_query = build_pubmed_query(normalized_query, keywords, structured_fields)
+    pubmed_query = build_pubmed_query(normalized_query, keywords, structured_fields, query_type)
+    general_query = (
+        _ai_communication_general_query()
+        if is_ai_communication_education_query(query, query_type, structured_fields)
+        else normalized_query
+    )
 
     source_queries = {
         "PubMed": pubmed_query,
         "PMC": pubmed_query,
-        "Europe PMC": normalized_query,
-        "OpenAlex": normalized_query,
-        "Crossref": normalized_query,
-        "Semantic Scholar": normalized_query,
+        "Europe PMC": general_query,
+        "OpenAlex": general_query,
+        "Crossref": general_query,
+        "Semantic Scholar": general_query,
         "Cochrane": pubmed_query,
-        "ClinicalTrials.gov": normalized_query,
+        "ClinicalTrials.gov": general_query,
     }
     scopus_query = convert_to_scopus_query(pubmed_query)
     if scopus_query:

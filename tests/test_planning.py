@@ -60,6 +60,36 @@ class PlanningTests(unittest.TestCase):
         self.assertNotIn("medRxiv", plan.databases)
         self.assertNotIn("bioRxiv", plan.databases)
 
+    def test_pcc_ai_communication_query_requires_ai_and_communication_terms(self) -> None:
+        plan = build_query_plan(
+            (
+                "Population: health professions learners, trainees, clinicians, educators; "
+                "Concept: AI-supported education, training, simulation, coaching, assessment, feedback; "
+                "Context: shared decision making education, communication training, patient-centered decision conversations"
+            ),
+            "pcc",
+            "codex",
+            {
+                "population": "health professions learners, trainees, clinicians, educators",
+                "concept": "AI-supported education, training, simulation, coaching, assessment, feedback",
+                "context": "shared decision making education, communication training, patient-centered decision conversations",
+            },
+        )
+
+        pubmed = plan.source_queries["PubMed"].lower()
+        self.assertIn('"artificial intelligence"[tiab]', pubmed)
+        self.assertIn('"large language model"[tiab]', pubmed)
+        self.assertIn('"virtual patient"[tiab]', pubmed)
+        self.assertIn('"communication skills"[tiab]', pubmed)
+        self.assertIn('"shared decision making"[tiab]', pubmed)
+        self.assertIn(") and (", pubmed)
+        self.assertNotIn('"ai-supported education"[tiab] or training[tiab]', pubmed)
+
+        openalex = plan.source_queries["OpenAlex"].lower()
+        self.assertIn("chatgpt", openalex)
+        self.assertIn("medical interview", openalex)
+        self.assertIn("breaking bad news", openalex)
+
 
 if __name__ == "__main__":
     unittest.main()

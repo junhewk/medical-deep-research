@@ -48,8 +48,11 @@ from .research import (
 from .progress import ProgressTracker
 from .research.models import QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
 from .research.fulltext import fetch_europe_pmc_fulltext_xml
-from .research.planning import suggest_databases as _suggest_databases
-from .research.search import POLITE_EMAIL
+from .research.planning import (
+    is_ai_communication_education_query,
+    suggest_databases as _suggest_databases,
+)
+from .research.search import POLITE_EMAIL, USER_AGENT
 from .models import RunRequest
 
 _log = logging.getLogger(__name__)
@@ -479,8 +482,22 @@ async def tool_search(request: RunRequest, bridge: AgenticEventBridge, source: s
 # Tier/page size for the agent's study triage: get_studies returns the top tier
 # of this many cards; browse_studies pages the rest of the scored pool.
 STUDY_PAGE_SIZE = 15
+FULLTEXT_CANDIDATE_LIMIT = 10
+FULLTEXT_SYNTHESIS_EXCERPT_CHARS = 3000
+PMC_ID_CONVERTER_URLS = (
+    "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/",
+    "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+)
 
 _EVIDENCE_ORDER = ("Level I", "Level II", "Level III", "Level IV", "Level V")
+_PCC_AI_COMMUNICATION_REQUIRED_SOURCES = (
+    "PubMed",
+    "PMC",
+    "Europe PMC",
+    "OpenAlex",
+    "Crossref",
+    "ClinicalTrials.gov",
+)
 
 
 def _evidence_level_rank(level: str | None) -> int:
@@ -543,7 +560,37 @@ def _tier_ordered(pool: list[ScoredStudy]) -> list[ScoredStudy]:
     return sorted(pool, key=lambda s: (_evidence_level_rank(s.evidence_level), -s.composite_score))
 
 
+def _source_attempts(bridge: AgenticEventBridge) -> set[str]:
+    return {result.source for result in bridge.search_results}
+
+
+def _missing_required_source_attempts(request: RunRequest, bridge: AgenticEventBridge) -> list[str]:
+    if request.provider != "codex" or request.query_type.lower() != "pcc":
+        return []
+    plan = bridge.plan or build_query_plan(request.query, request.query_type, request.provider, request.query_payload)
+    if not is_ai_communication_education_query(request.query, request.query_type, request.query_payload or {}):
+        return []
+    required = [
+        source for source in _PCC_AI_COMMUNICATION_REQUIRED_SOURCES
+        if source in plan.databases or source == "ClinicalTrials.gov"
+    ]
+    attempted = _source_attempts(bridge)
+    return [source for source in required if source not in attempted]
+
+
 async def tool_get_studies(request: RunRequest, bridge: AgenticEventBridge, context: str = "general") -> dict[str, Any]:
+    missing_sources = _missing_required_source_attempts(request, bridge)
+    if missing_sources:
+        return {
+            "error": (
+                "Search coverage is incomplete for this PCC AI communication/SDM education query. "
+                "Attempt these sources before triage: " + ", ".join(missing_sources) + ". "
+                "Source attempts count even if the source returns zero records or an API error."
+            ),
+            "missing_sources": missing_sources,
+            "attempted_sources": sorted(_source_attempts(bridge)),
+        }
+
     all_studies = flatten_studies(bridge.search_results)
     if not all_studies:
         return {"error": "No studies collected yet. Run search tools first.", "studies": []}
@@ -913,10 +960,37 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
     if registry_trials:
         data["registry_trials"] = registry_trials
 
+    fulltext_excerpts: list[dict[str, Any]] = []
+    for s in bridge.ranked_studies[:MAX_REPORT_STUDIES]:
+        rank = s.reference_number
+        if rank is None:
+            continue
+        stored = _stored_fulltext_for_rank(request, int(rank))
+        if not stored:
+            continue
+        text, source = stored
+        fulltext_excerpts.append({
+            "rank": rank,
+            "title": s.title,
+            "source": source,
+            "text_length": len(text),
+            "excerpt": text[:FULLTEXT_SYNTHESIS_EXCERPT_CHARS],
+        })
+    if fulltext_excerpts:
+        data["fulltext"] = {
+            "available_ranks": [item["rank"] for item in fulltext_excerpts],
+            "excerpts": fulltext_excerpts,
+            "excerpt_chars_per_study": FULLTEXT_SYNTHESIS_EXCERPT_CHARS,
+        }
+
     instructions = (
         "Write a comprehensive research synthesis report in markdown. "
         "Submit the report itself, not a completion/status message. "
-        "For non-empty evidence, target 1,200-2,000 words. "
+        "For non-empty evidence, target 1,800-2,600 words when at least 10 studies are ranked, otherwise 1,200-2,000 words. "
+        "The first non-empty line MUST be a level-1 markdown title beginning with '# '. "
+        "The top-level section headings MUST be numbered exactly as: "
+        "## 1. Executive Summary, ## 2. Background, ## 3. Methods, "
+        "## 4. Results/Findings, ## 5. Discussion, ## 6. Conclusions, ## 7. References. "
         "The report MUST include: "
         "(1) An executive summary that directly answers the research question; "
         "(2) A methods section describing the search strategy"
@@ -926,11 +1000,14 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         "compare and contrast findings, identify patterns, agreements and contradictions; "
         "(4) A discussion section interpreting the evidence, noting limitations, gaps, and quality of evidence; "
         "(4b) State the GRADE certainty of evidence (High/Moderate/Low/Very Low) for each major finding using the appraisal data; "
-        "(4c) If appraisal was based on abstracts only, say so under Limitations; "
+        "(4c) Use available full-text excerpts to add specific detail for key studies; "
+        "(4d) If appraisal was based on abstracts only, say so under Limitations and distinguish it from full-text-appraised findings; "
         "(5) A conclusion with clear takeaways; "
         "(6) A numbered references section. "
         "Cite studies by [number] throughout the text. "
         "In Results/Findings, present evidence levels from highest to lowest: Level I, Level II, Level III, Level IV, Level V. "
+        "For PCC communication/SDM education topics, synthesize direct AI communication/SDM training evidence first, "
+        "then adjacent virtual-patient/interview/empathy/breaking-bad-news evidence, then broader AI-health-professions education context. "
         "Number references sequentially as [1], [2], [3] with no gaps, and use only those same numbers in text citations. "
         "Write in the language specified by the query language setting."
     )
@@ -966,6 +1043,13 @@ _REPORT_SECTION_GROUPS: dict[str, tuple[str, ...]] = {
         "요약",
         "핵심 요약",
     ),
+    "background": (
+        "background",
+        "background & context",
+        "background and context",
+        "context",
+        "배경",
+    ),
     "methods": (
         "methods",
         "search strategy",
@@ -996,6 +1080,16 @@ _REPORT_SECTION_GROUPS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_NUMBERED_REPORT_SECTIONS: tuple[tuple[int, str], ...] = (
+    (1, "executive_summary"),
+    (2, "background"),
+    (3, "methods"),
+    (4, "results"),
+    (5, "discussion"),
+    (6, "conclusions"),
+    (7, "references"),
+)
+
 
 def _report_word_count(text: str) -> int:
     """Approximate report length across English and common CJK report text."""
@@ -1014,6 +1108,45 @@ def _has_report_section(text_lower: str, aliases: tuple[str, ...]) -> bool:
         if re.search(rf"(^|\n)\s*(?:\d+[.)]\s*)?{escaped}\s*$", text_lower):
             return True
     return False
+
+
+def _has_report_title(report_markdown: str) -> bool:
+    for line in report_markdown.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        return stripped.startswith("# ") and not stripped.startswith("##")
+    return False
+
+
+def _has_numbered_report_section(report_markdown: str, number: int, aliases: tuple[str, ...]) -> bool:
+    for line in report_markdown.splitlines():
+        stripped = line.strip().lower()
+        if not stripped:
+            continue
+        heading = re.sub(r"^#{1,6}\s*", "", stripped)
+        match = re.match(rf"^{number}[.)]\s*(.+)$", heading)
+        if not match:
+            continue
+        stripped = match.group(1).strip()
+        if any(re.search(rf"^{re.escape(alias.lower())}\b", stripped) for alias in aliases):
+            return True
+    return False
+
+
+def _numbered_report_section_issues(report_markdown: str) -> list[str]:
+    missing = [
+        f"{number}. {section.replace('_', ' ')}"
+        for number, section in _NUMBERED_REPORT_SECTIONS
+        if not _has_numbered_report_section(report_markdown, number, _REPORT_SECTION_GROUPS[section])
+    ]
+    if not missing:
+        return []
+    return [
+        "Report must use numbered top-level sections: "
+        + ", ".join(missing)
+        + "."
+    ]
 
 
 def _heading_matches(line: str, aliases: tuple[str, ...]) -> bool:
@@ -1181,6 +1314,9 @@ def report_quality_issues(report_markdown: str, ranked_count: int = 0, search_co
             break
 
     if has_evidence:
+        if not _has_report_title(report_markdown):
+            issues.append("Report must start with a level-1 markdown title like '# <report title>'.")
+        issues.extend(_numbered_report_section_issues(report_markdown))
         missing_sections = [
             section
             for section, aliases in _REPORT_SECTION_GROUPS.items()
@@ -1713,7 +1849,22 @@ async def tool_fetch_fulltext(
             and s.reference_number is not None
         )
     ]
-    candidate_pool = high_evidence_candidates or ranked_candidates[:10]
+    candidate_pool: list[ScoredStudy] = []
+    seen_candidate_ranks: set[int] = set()
+
+    def _add_candidate(study: ScoredStudy) -> None:
+        rank = study.reference_number
+        if rank is None or int(rank) in seen_candidate_ranks:
+            return
+        seen_candidate_ranks.add(int(rank))
+        candidate_pool.append(study)
+
+    for s in ranked_candidates[:FULLTEXT_CANDIDATE_LIMIT]:
+        _add_candidate(s)
+    for s in high_evidence_candidates[:FULLTEXT_CANDIDATE_LIMIT]:
+        _add_candidate(s)
+
+    candidate_pool = candidate_pool[:FULLTEXT_CANDIDATE_LIMIT]
     relevance_scores_present = any(s.relevance_score > 0 for s in candidate_pool)
     candidates = [
         s for s in candidate_pool
@@ -1765,15 +1916,31 @@ async def tool_fetch_fulltext(
     ids_param = ",".join(s.pmid for s in auto_fetch_candidates if s.pmid and s.reference_number is not None)
     if ids_param:
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
-                resp = await client.get(
-                    "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
-                    params={"ids": ids_param, "format": "json", "tool": "medical-deep-research", "email": POLITE_EMAIL},
-                )
-                resp.raise_for_status()
-            for r in resp.json().get("records", []):
-                if r.get("pmcid") and r.get("pmid"):
-                    pmid_to_pmcid[r["pmid"]] = r["pmcid"]
+            records: list[dict[str, Any]] = []
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, connect=5.0),
+                follow_redirects=True,
+                headers={"User-Agent": USER_AGENT},
+            ) as client:
+                for converter_url in PMC_ID_CONVERTER_URLS:
+                    resp = await client.get(
+                        converter_url,
+                        params={
+                            "ids": ids_param,
+                            "format": "json",
+                            "tool": "medical-deep-research",
+                            "email": POLITE_EMAIL,
+                        },
+                    )
+                    resp.raise_for_status()
+                    records = resp.json().get("records", [])
+                    if records:
+                        break
+            for r in records:
+                pmid = str(r.get("pmid") or "").strip()
+                pmcid = str(r.get("pmcid") or "").strip()
+                if pmcid and pmid:
+                    pmid_to_pmcid[pmid] = pmcid
         except Exception as exc:
             _log.info("[FULLTEXT] PMC ID converter failed: %s", exc)
 
@@ -2301,7 +2468,7 @@ Carefully review EVERY abstract shown. If `has_more` is true and you need wider 
 5. Call `finalize_ranking` with your ordered list of included study indices (best first) and a detailed rationale.
 6. (Optional) If 2+ Level I/II studies were ranked and coverage is thin, call `get_references` and/or `get_citations` for the top 1-2 of them (at most 3 snowball calls total), then call `get_studies` and `screen_studies` again to merge and re-screen the new candidates.
 7. Call `fetch_fulltext` to find free full text across all ranked studies. This tool opens the user PDF upload checkpoint itself when publisher PDFs are missing; wait for it to return before continuing.
-8. Call `parse_pdf` for 1-3 studies that have full text available or were uploaded by the user — read the full text.
+8. Call `parse_pdf` for up to 6-10 key studies that have full text available or were uploaded by the user — prioritize direct evidence, high-evidence reviews/trials, and articles central to the conclusion.
 9. Call `appraise_evidence`: for each major finding state a GRADE certainty (High/Moderate/Low/Very Low) with a short rationale and the supporting reference numbers. {"Start High for findings from RCTs/meta-analyses and Low for observational studies; rate down for risk of bias, imprecision, indirectness, or inconsistency." if is_clinical else "Describe the strength and limitations of the evidence base; formal GRADE is optional for non-clinical questions."}
 10. Call `verify_studies` to validate PMIDs.
 11. Call `synthesize_report` — this returns the structured evidence data.
@@ -2322,8 +2489,9 @@ Do NOT repeat searches. One call per database, then move forward.
 ## Report Quality Requirements (CRITICAL)
 
 - The submitted report must be the report itself, not a completion note or summary of what you did.
-- If any studies are ranked, write a comprehensive 1,200-2,000 word report unless the evidence base is genuinely empty.
-- Use these markdown sections: Executive Summary, Background, Methods, Results/Findings, Discussion, Conclusions, References.
+- If any studies are ranked, write a comprehensive 1,800-2,600 word report when at least 10 studies are ranked, otherwise 1,200-2,000 words unless the evidence base is genuinely empty.
+- Start with a level-1 markdown title (`# ...`).
+- Use these numbered markdown sections exactly: `## 1. Executive Summary`, `## 2. Background`, `## 3. Methods`, `## 4. Results/Findings`, `## 5. Discussion`, `## 6. Conclusions`, `## 7. References`.
 - Synthesize across studies; compare findings, study designs, populations, agreement, contradictions, and evidence quality.
 - Cite only searched studies as [1], [2], etc. Do not cite unsearched sources.
 - In Results/Findings, order evidence levels from Level I to Level V. Never put Level IV/V evidence before Level I/II evidence.
@@ -2398,19 +2566,19 @@ Rate the certainty of evidence for each major finding/outcome, not just the stud
 ## Report Format (Markdown) — YOU MUST WRITE THIS
 
 Your final submitted report MUST be the complete research report itself, not a status update. \
-For non-empty evidence, write 1,200-2,000 words and include these sections:
+For non-empty evidence, write 1,800-2,600 words when at least 10 studies are ranked, otherwise 1,200-2,000 words. Start with a level-1 markdown title, then include these numbered top-level sections exactly:
 
-### 1. Executive Summary
+## 1. Executive Summary
 Directly answer the clinical question in 2-3 paragraphs. Highlight the key finding and \
 cite the landmark trial. State the strength of evidence and bottom-line conclusion.
 
-### 2. Background
+## 2. Background
 Why this question matters clinically. What is the current state of knowledge.
 
-### 3. Methods
+## 3. Methods
 Search strategy, databases searched with hit counts, population criteria, inclusion/exclusion reasoning.
 
-### 4. Results
+## 4. Results/Findings
 Organize by evidence level, with [n] citations throughout:
 - Level I evidence (systematic reviews, meta-analyses)
 - Level II evidence (RCTs)
@@ -2420,7 +2588,7 @@ Organize by evidence level, with [n] citations throughout:
 - State the GRADE certainty (High/Moderate/Low/Very Low) for each major finding
 Do not present Level IV/V evidence before Level I/II evidence.
 
-### 5. Discussion
+## 5. Discussion
 - Address population-specific considerations
 - Clinical implications and applicability
 - Limitations of the available evidence (including whether appraisal was abstract-only)
@@ -2428,10 +2596,10 @@ Do not present Level IV/V evidence before Level I/II evidence.
 - Note how many studies were screened out and why
 - Gaps in the literature
 
-### 6. Conclusions
+## 6. Conclusions
 Clear clinical takeaways. What the evidence supports, what remains uncertain.
 
-### 7. References
+## 7. References
 Vancouver format with PMIDs/DOIs: [n] Authors. Title. Journal. Year;Vol(Issue):Pages. DOI/PMID.
 Number references sequentially from [1] with no gaps, and do not cite numbers that are absent here.
 
@@ -2479,20 +2647,20 @@ Search multiple databases for comprehensive coverage:
 ## Report Format (Markdown) — YOU MUST WRITE THIS
 
 Your final submitted report MUST be the complete research report itself, not a status update. \
-For non-empty evidence, write 1,200-2,000 words and include these sections:
+For non-empty evidence, write 1,800-2,600 words when at least 10 studies are ranked, otherwise 1,200-2,000 words. Start with a level-1 markdown title, then include these numbered top-level sections exactly:
 
-### 1. Executive Summary
+## 1. Executive Summary
 Directly answer the research question in 2-3 paragraphs. Summarize the state of knowledge, \
 the strength of the evidence base, and the key takeaway.
 
-### 2. Background & Context
+## 2. Background
 Why this topic matters. The current landscape and knowledge gaps.
 
-### 3. Methods
+## 3. Methods
 Search strategy: databases searched, query terms used, hit counts per source, \
 inclusion/exclusion reasoning.
 
-### 4. Findings
+## 4. Results/Findings
 Organize thematically — do NOT just list studies one by one. Instead:
 - Group related findings by theme, approach, or outcome
 - Compare and contrast what different studies found
@@ -2500,13 +2668,13 @@ Organize thematically — do NOT just list studies one by one. Instead:
 - Note where the literature agrees, disagrees, or shows gaps
 - Cite sources as [n] throughout
 
-### 5. Implications for Practice and Policy
-What do these findings mean for practitioners, educators, or policymakers?
+## 5. Discussion
+Interpret what these findings mean for practitioners, educators, or policymakers, including limitations and gaps.
 
-### 6. Recommendations & Future Directions
-What should be done next? Where are the gaps in knowledge?
+## 6. Conclusions
+Clear takeaways and future directions.
 
-### 7. References
+## 7. References
 Vancouver format with DOIs: [n] Authors. Title. Journal. Year;Vol(Issue):Pages. DOI.
 Number references sequentially from [1] with no gaps, and do not cite numbers that are absent here.
 

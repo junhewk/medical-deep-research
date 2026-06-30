@@ -87,6 +87,8 @@ ANTHROPIC_AGENTIC_MAX_TURNS = 25
 LOCAL_AGENTIC_TIMEOUT_SECONDS = 600.0
 CODEX_AGENTIC_TIMEOUT_SECONDS = 1800.0
 CODEX_AGENTIC_HEARTBEAT_SECONDS = 15.0
+CODEX_AGENTIC_MAX_TOOL_TURNS = 50
+CODEX_FULLTEXT_PARSE_LIMIT = 8
 CODEX_REQUIRED_MCP_TOOLS = {"aggregate_search", "rank_results", "verify_results", "synthesize_report"}
 CODEX_PHASE1_MCP_TOOLS = {"aggregate_search", "rank_results"}
 CODEX_PHASE2_MCP_TOOLS = {"verify_results", "synthesize_report"}
@@ -561,8 +563,10 @@ def _native_synthesis_prompt(
             "- ranked_studies_json set to the ranked `studies` JSON below",
             "- verification_json set to the `summary` returned by `verify_results`",
             "- fulltext_json set to the full-text JSON below",
-            "After `synthesize_report` returns, write the final markdown report yourself using its structured evidence data and instructions.",
-            "The final report must use sections: Executive Summary, Background, Methods, Results/Findings, Discussion, Conclusions, References.",
+            "After `synthesize_report` returns, write the final markdown report yourself using its structured evidence data, full-text excerpts, and instructions.",
+            "The final report must start with a level-1 markdown title and use numbered sections exactly: "
+            "## 1. Executive Summary, ## 2. Background, ## 3. Methods, ## 4. Results/Findings, "
+            "## 5. Discussion, ## 6. Conclusions, ## 7. References.",
             "Do not include runtime metadata bullets, provider/tool status, raw database hit tables, or the phrase 'Study screening and GRADE certainty appraisal were not performed by this report renderer.'",
             "Return JSON only: {\"final_report\":\"...markdown report...\"}.",
             "",
@@ -3090,7 +3094,7 @@ async def _codex_fetch_fulltext_for_ranked_studies(
         if isinstance(item, dict) and str(item.get("rank") or "").isdigit()
     ] if isinstance(available, list) else []
     parsed_fulltext: list[dict[str, Any]] = []
-    for rank in parse_ranks[:3]:
+    for rank in parse_ranks[:CODEX_FULLTEXT_PARSE_LIMIT]:
         await bridge.on_tool_start("parse_pdf", {"rank": rank})
         parse_result = await tool_parse_pdf(request, bridge, rank, allow_user_checkpoint=False)
         await bridge.on_tool_end("parse_pdf", parse_result)
@@ -3152,6 +3156,9 @@ def _codex_agentic_instructions(request: RunRequest, runtime_name: str) -> str:
         "search pool is sparse or off-topic, widen incrementally by adding a focused synonym, "
         "adjacent database, or snowball step based on the returned results, then call "
         "`get_studies` again. Do not merely loosen screening criteria to inflate counts.\n"
+        f"You have at most {CODEX_AGENTIC_MAX_TOOL_TURNS} local tool-decision turns. "
+        "Do not spend extra turns on optional browsing once the evidence base is sufficient; "
+        "move to ranking, appraisal, synthesis, and submit_report.\n"
         "After `fetch_fulltext`, if the result asks for user PDFs, wait for that tool to return; "
         "then parse the uploaded/available full texts before appraisal when possible.\n\n"
         "Available local tools and argument JSON shapes:\n"
@@ -3177,13 +3184,20 @@ def _codex_state_summary(bridge: AgenticEventBridge) -> dict[str, Any]:
 
 def _codex_decision_prompt(request: RunRequest, bridge: AgenticEventBridge, observations: list[str], turn_index: int) -> str:
     recent_observations = "\n\n".join(observations[-8:]) if observations else "No tool observations yet."
+    remaining_turns = max(CODEX_AGENTIC_MAX_TOOL_TURNS - turn_index + 1, 0)
+    urgency = (
+        "You are near the tool-turn limit: stop optional exploration and call synthesize_report or submit_report next."
+        if remaining_turns <= 5
+        else "Continue the workflow without repeating completed steps."
+    )
     return (
         f"Research question:\n{request.query}\n\n"
         f"Query type: {request.query_type}\n"
         f"Target language: {request.language}\n\n"
         f"Current app state:\n{json.dumps(_codex_state_summary(bridge), ensure_ascii=False, default=str)}\n\n"
         f"Recent tool observations:\n{recent_observations}\n\n"
-        f"Turn {turn_index}: choose the next single local app tool to call. "
+        f"Turn {turn_index} of {CODEX_AGENTIC_MAX_TOOL_TURNS} "
+        f"({remaining_turns} remaining): choose the next single local app tool to call. {urgency} "
         "Return only the structured JSON object. Use an empty JSON object string \"{}\" for no-argument tools."
     )
 
@@ -3708,7 +3722,7 @@ class CodexRuntime(DeterministicRuntime):
                         extra={"codex_thread_id": thread.id, "tool_execution": "app_local"},
                     )
                 )
-                for turn_index in range(1, ANTHROPIC_AGENTIC_MAX_TURNS + 1):
+                for turn_index in range(1, CODEX_AGENTIC_MAX_TOOL_TURNS + 1):
                     decision, turn_result = await self._run_codex_decision_turn(
                         thread,
                         request,
@@ -3735,7 +3749,7 @@ class CodexRuntime(DeterministicRuntime):
                         return
                     observations.append(_codex_tool_observation(decision.tool_name, result))
                 raise RuntimeError(
-                    f"Codex exceeded {ANTHROPIC_AGENTIC_MAX_TURNS} tool-decision turns before submit_report."
+                    f"Codex exceeded {CODEX_AGENTIC_MAX_TOOL_TURNS} tool-decision turns before submit_report."
                 )
         except asyncio.CancelledError:
             raise

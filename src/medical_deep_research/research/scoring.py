@@ -65,6 +65,10 @@ _SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
         "chatbots",
         "virtual assistant",
         "virtual assistants",
+        "virtual patient",
+        "virtual patients",
+        "simulated patient",
+        "simulated patients",
     ),
     (
         "artificial intelligence",
@@ -87,6 +91,26 @@ _SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
         "randomised controlled trial",
         "rct",
         "trial",
+    ),
+    (
+        "shared decision making",
+        "shared decision-making",
+        "sdm",
+        "decision aid",
+        "decision aids",
+    ),
+    (
+        "communication skills",
+        "communication training",
+        "medical interview",
+        "history taking",
+        "breaking bad news",
+        "empathy",
+        "empathetic communication",
+        "patient-centered",
+        "patient-centred",
+        "doctor-patient communication",
+        "physician-patient communication",
     ),
 )
 
@@ -170,12 +194,16 @@ def _query_fields(query: str | None, query_payload: dict[str, Any] | None) -> di
     return _structured_fields_from_payload(query_payload) or parse_structured_query(query)
 
 
+def _contains_synonym_term(text: str, term: str) -> bool:
+    return re.search(rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])", text) is not None
+
+
 def _synonym_hits(needles: str, haystack: str) -> float | None:
     lowered_needles = needles.lower()
     for group in _SYNONYM_GROUPS:
-        if not any(term in lowered_needles for term in group):
+        if not any(_contains_synonym_term(lowered_needles, term) for term in group):
             continue
-        return 1.0 if any(term in haystack for term in group) else 0.0
+        return 1.0 if any(_contains_synonym_term(haystack, term) for term in group) else 0.0
     return None
 
 
@@ -216,7 +244,8 @@ def get_relevance_score(
 
     focus_text = fields.get("intervention") or fields.get("concept") or ""
     population_text = fields.get("population") or ""
-    outcome_text = fields.get("outcome") or ""
+    outcome_text = fields.get("outcome") or fields.get("context") or ""
+    is_pcc_like = bool(fields.get("concept") and fields.get("context") and not fields.get("intervention"))
 
     query_tokens = _tokenize(normalized_query)
     query_score = (
@@ -228,14 +257,16 @@ def get_relevance_score(
     population_score = _term_match_score(population_text, haystack, haystack_tokens) if population_text else 0.5
     outcome_score = _term_match_score(outcome_text, haystack, haystack_tokens) if outcome_text else 0.5
 
-    if focus_text:
+    if is_pcc_like and focus_text:
+        relevance = focus_score * 0.40 + outcome_score * 0.35 + population_score * 0.10 + query_score * 0.15
+    elif focus_text:
         relevance = focus_score * 0.50 + population_score * 0.20 + outcome_score * 0.10 + query_score * 0.20
     else:
         relevance = query_score * 0.65 + population_score * 0.20 + outcome_score * 0.15
 
     if focus_text and focus_score == 0.0:
         relevance = min(relevance, 0.28)
-    if population_text and population_score == 0.0:
+    if population_text and population_score == 0.0 and not (is_pcc_like and outcome_score >= 0.7):
         relevance = min(relevance, 0.60)
     return max(0.0, min(relevance, 1.0))
 

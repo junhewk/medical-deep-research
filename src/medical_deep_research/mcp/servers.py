@@ -313,9 +313,11 @@ def _synthesis_payload(
             "user_pdf_checkpoint": fulltext_payload.get("user_pdf_checkpoint") if isinstance(fulltext_payload, dict) else None,
         },
         "instructions": (
-            "Write the final report in markdown using these sections exactly: Executive Summary, Background, "
-            "Methods, Results/Findings, Discussion, Conclusions, References. The report must synthesize across "
-            "studies rather than list them. Cite ranked studies as [1], [2], etc. throughout the text and keep "
+            "Write the final report in markdown. The first non-empty line must be a level-1 title beginning with '# '. "
+            "Use these numbered sections exactly: ## 1. Executive Summary, ## 2. Background, ## 3. Methods, "
+            "## 4. Results/Findings, ## 5. Discussion, ## 6. Conclusions, ## 7. References. "
+            "The report must synthesize across studies rather than list them, and must use available full-text excerpts "
+            "for key study detail when present. Cite ranked studies as [1], [2], etc. throughout the text and keep "
             "the References section sequential with no gaps. In Results/Findings, discuss evidence by level from "
             "Level I/II before lower-level evidence. Include a concise certainty/limitations paragraph: if full "
             "text was unavailable for key studies, say the appraisal is abstract-limited. Do not include runtime "

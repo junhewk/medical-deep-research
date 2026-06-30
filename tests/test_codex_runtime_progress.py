@@ -11,7 +11,10 @@ import medical_deep_research.runtime as runtime_module
 from medical_deep_research.agentic_tools import AgenticEventBridge
 from medical_deep_research.runtime import (
     AgentResearchOutput,
+    CODEX_AGENTIC_MAX_TOOL_TURNS,
+    CODEX_FULLTEXT_PARSE_LIMIT,
     CodexRuntime,
+    _codex_decision_prompt,
     _codex_fetch_fulltext_for_ranked_studies,
     _codex_mcp_completion_extra,
     _codex_output_from_mcp_payloads,
@@ -98,6 +101,22 @@ class FailingCodexRuntime(CodexRuntime):
 
 
 class CodexRuntimeProgressTests(unittest.IsolatedAsyncioTestCase):
+    async def test_codex_tool_turn_budget_covers_required_local_workflow(self) -> None:
+        self.assertGreaterEqual(
+            CODEX_AGENTIC_MAX_TOOL_TURNS,
+            runtime_module.ANTHROPIC_AGENTIC_MAX_TURNS + CODEX_FULLTEXT_PARSE_LIMIT + 5,
+        )
+
+        prompt = _codex_decision_prompt(
+            make_request(),
+            AgenticEventBridge(),
+            [],
+            CODEX_AGENTIC_MAX_TOOL_TURNS - 4,
+        )
+
+        self.assertIn(f"of {CODEX_AGENTIC_MAX_TOOL_TURNS}", prompt)
+        self.assertIn("near the tool-turn limit", prompt)
+
     async def test_codex_stream_emits_tool_progress_while_native_task_runs(self) -> None:
         with (
             patch("medical_deep_research.runtime.provider_fallback_reason", return_value=None),
@@ -296,6 +315,56 @@ class CodexRuntimeProgressTests(unittest.IsolatedAsyncioTestCase):
             queued_events.append(progress_queue.get_nowait())
         self.assertTrue(any(getattr(event, "tool_name", None) == "fetch_fulltext" for event in queued_events))
         self.assertTrue(any(getattr(event, "tool_name", None) == "parse_pdf" for event in queued_events))
+
+    async def test_codex_fulltext_bridge_parses_up_to_eight_available_texts(self) -> None:
+        request = make_request()
+        plan = minimal_output().plan
+        ranked = [
+            ScoredStudy(
+                source="pubmed",
+                source_id=str(i),
+                title=f"AI communication study {i}",
+                evidence_level="Level III",
+                doi=f"10.1000/example-{i}",
+                evidence_level_score=0.6,
+                citation_score=0.0,
+                recency_score=0.0,
+                composite_score=1.0,
+                reference_number=i,
+            )
+            for i in range(1, 11)
+        ]
+        parsed_ranks: list[int] = []
+
+        async def fake_fetch(_request, _bridge, *, allow_user_checkpoint: bool = True):
+            return {
+                "pdfs_found": 10,
+                "available": [{"rank": i, "title": f"AI communication study {i}"} for i in range(1, 11)],
+            }
+
+        async def fake_parse(_request, _bridge, rank: int, *, allow_user_checkpoint: bool = True):
+            parsed_ranks.append(rank)
+            return {
+                "rank": rank,
+                "source": "downloaded_pdf",
+                "text_length": 20,
+                "fulltext": f"Full text body {rank}.",
+            }
+
+        with (
+            patch("medical_deep_research.runtime.tool_fetch_fulltext", side_effect=fake_fetch),
+            patch("medical_deep_research.runtime.tool_parse_pdf", side_effect=fake_parse),
+        ):
+            result = await _codex_fetch_fulltext_for_ranked_studies(
+                request,
+                plan=plan,
+                search_results=[],
+                ranked_studies=ranked,
+                progress_queue=None,
+            )
+
+        self.assertEqual(parsed_ranks, list(range(1, 9)))
+        self.assertEqual(len(result["parsed_fulltext"]), 8)
 
 
 if __name__ == "__main__":

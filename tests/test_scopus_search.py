@@ -6,9 +6,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from medical_deep_research.research.search import (
+    NCBI_BASE_URL,
     SCOPUS_BASE_URL,
     SEMANTIC_SCHOLAR_BASE_URL,
     search_cochrane,
+    search_pmc,
+    search_pubmed,
     search_scopus,
     search_semantic_scholar,
 )
@@ -33,6 +36,22 @@ def semantic_response(
         request=httpx.Request("GET", SEMANTIC_SCHOLAR_BASE_URL),
         json=payload or {"data": []},
         headers=headers,
+    )
+
+
+def ncbi_response(status_code: int, payload: dict[str, object] | None = None) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        request=httpx.Request("GET", f"{NCBI_BASE_URL}/esearch.fcgi"),
+        json=payload or {"esearchresult": {"idlist": []}},
+    )
+
+
+def ncbi_xml_response(status_code: int, text: str) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        request=httpx.Request("GET", f"{NCBI_BASE_URL}/efetch.fcgi"),
+        text=text,
     )
 
 
@@ -171,6 +190,110 @@ class ScopusSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.source, "Cochrane")
         self.assertEqual(result.studies[0].source, "cochrane")
         self.assertEqual(result.studies[0].evidence_level, "Level I")
+
+    async def test_pubmed_retries_transient_ncbi_502(self) -> None:
+        FakeAsyncClient.responses = [
+            ncbi_response(502),
+            ncbi_response(200, {"esearchresult": {"idlist": []}}),
+        ]
+
+        with (
+            patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient),
+            patch("medical_deep_research.research.search.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await search_pubmed("AI communication training", max_results=5)
+
+        self.assertEqual(result.source, "PubMed")
+        self.assertIsNone(result.error)
+        self.assertEqual(len(FakeAsyncClient.calls), 2)
+        self.assertIn("User-Agent", FakeAsyncClient.last_headers)
+        self.assertEqual(FakeAsyncClient.calls[0]["tool"], "medical-deep-research")
+        self.assertIn("email", FakeAsyncClient.calls[0])
+
+    async def test_pubmed_uses_article_ids_not_reference_ids(self) -> None:
+        FakeAsyncClient.responses = [
+            ncbi_response(200, {"esearchresult": {"idlist": ["123"]}}),
+            ncbi_xml_response(
+                200,
+                """
+                <PubmedArticleSet>
+                  <PubmedArticle>
+                    <MedlineCitation>
+                      <PMID>123</PMID>
+                      <Article>
+                        <Journal><Title>Journal</Title></Journal>
+                        <ArticleTitle>AI communication training article</ArticleTitle>
+                        <Abstract><AbstractText>Abstract text.</AbstractText></Abstract>
+                      </Article>
+                    </MedlineCitation>
+                    <PubmedData>
+                      <ReferenceList>
+                        <Reference>
+                          <ArticleIdList>
+                            <ArticleId IdType="doi">10.1000/reference</ArticleId>
+                            <ArticleId IdType="pmc">PMCREF</ArticleId>
+                          </ArticleIdList>
+                        </Reference>
+                      </ReferenceList>
+                      <ArticleIdList>
+                        <ArticleId IdType="pubmed">123</ArticleId>
+                        <ArticleId IdType="doi">10.1000/article</ArticleId>
+                        <ArticleId IdType="pmc">PMCARTICLE</ArticleId>
+                      </ArticleIdList>
+                    </PubmedData>
+                  </PubmedArticle>
+                </PubmedArticleSet>
+                """,
+            ),
+        ]
+
+        with patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient):
+            result = await search_pubmed("AI communication training", max_results=1)
+
+        self.assertEqual(result.studies[0].doi, "10.1000/article")
+        self.assertEqual(result.studies[0].pmcid, "PMCARTICLE")
+
+    async def test_pmc_uses_per_record_articleids_for_pmid_mapping(self) -> None:
+        FakeAsyncClient.responses = [
+            ncbi_response(200, {"esearchresult": {"idlist": ["11364946", "12816013"]}}),
+            ncbi_response(
+                200,
+                {
+                    "result": {
+                        "uids": ["11364946", "12816013"],
+                        "11364946": {
+                            "title": "Simulated patient study",
+                            "fulljournalname": "JMIR Medical Education",
+                            "pubdate": "2024",
+                            "articleids": [
+                                {"idtype": "pmid", "value": "39150749"},
+                                {"idtype": "pmcid", "value": "PMC11364946"},
+                                {"idtype": "doi", "value": "10.2196/59213"},
+                            ],
+                        },
+                        "12816013": {
+                            "title": "Coaching messages study",
+                            "fulljournalname": "Journal",
+                            "pubdate": "2025",
+                            "articleids": [
+                                {"idtype": "pmid", "value": "41568066"},
+                                {"idtype": "pmcid", "value": "PMC12816013"},
+                                {"idtype": "doi", "value": "10.1007/s41347-025-00491-5"},
+                            ],
+                        },
+                    }
+                },
+            ),
+        ]
+
+        with patch("medical_deep_research.research.search.httpx.AsyncClient", FakeAsyncClient):
+            result = await search_pmc("large language model simulated patient", max_results=2)
+
+        self.assertEqual([(s.pmcid, s.pmid) for s in result.studies], [
+            ("PMC11364946", "39150749"),
+            ("PMC12816013", "41568066"),
+        ])
+        self.assertEqual(len(FakeAsyncClient.calls), 2)
 
 
 class SemanticScholarSearchTests(unittest.IsolatedAsyncioTestCase):

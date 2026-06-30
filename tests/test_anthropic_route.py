@@ -181,31 +181,31 @@ def make_valid_report() -> str:
     )
     return f"""# Research Report
 
-## Executive Summary
+## 1. Executive Summary
 ESPB after cardiac surgery was evaluated against PCA in the searched evidence. The key finding is that
 regional analgesia may reduce pain scores when added to conventional analgesic care [1].
 
-## Background
+## 2. Background
 Postoperative pain after cardiac surgery affects mobilization, pulmonary recovery, and patient satisfaction.
 The clinical question asks whether ESPB improves analgesic outcomes compared with PCA alone.
 
-## Methods
+## 3. Methods
 The agent searched PubMed and screened the retrieved study for population, intervention, comparator, and
 outcome alignment. The included evidence was ranked by relevance, evidence level, recency, and source quality.
 
-## Results
+## 4. Results/Findings
 {synthesis}
 
-## Discussion
+## 5. Discussion
 The evidence should be interpreted cautiously because the available ranked set is small. Still, the study design
 is relevant to the clinical question and supports further focused comparison of ESPB with PCA-based strategies [1].
 The overall GRADE certainty of evidence for the pain outcome is Low, rated down for imprecision and risk of bias [1].
 
-## Conclusions
+## 6. Conclusions
 ESPB may be a useful analgesic adjunct after cardiac surgery, but conclusions should remain proportional to the
 limited evidence retrieved in this run.
 
-## References
+## 7. References
 [1] Test AB. Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia.
 2024. PMID: 12345678.
 """
@@ -218,16 +218,16 @@ def make_out_of_order_evidence_report() -> str:
     )
     return f"""# Research Report
 
-## Executive Summary
+## 1. Executive Summary
 ESPB may reduce pain after cardiac surgery, but certainty varies by study design [1].
 
-## Background
+## 2. Background
 The clinical question compares regional analgesia with PCA-only strategies.
 
-## Methods
+## 3. Methods
 The search reviewed PubMed and ranked evidence by relevance and study quality.
 
-## Results
+## 4. Results/Findings
 ### Level IV Evidence
 Observational evidence suggested a possible signal from lower-certainty studies [1].
 {synthesis}
@@ -235,13 +235,13 @@ Observational evidence suggested a possible signal from lower-certainty studies 
 ### Level I Evidence
 Systematic review evidence should have appeared before lower-level evidence [2].
 
-## Discussion
+## 5. Discussion
 The interpretation should be proportional to the evidence base and its limitations [1] [2].
 
-## Conclusions
+## 6. Conclusions
 Higher-level evidence should be presented before lower-level evidence.
 
-## References
+## 7. References
 [1] Test AB. Observational ESPB study. Journal. 2023.
 [2] Test CD. Systematic review of ESPB. Journal. 2024.
 """
@@ -254,16 +254,16 @@ def make_ordered_evidence_report_with_late_prose_reference() -> str:
     )
     return f"""# Research Report
 
-## Executive Summary
+## 1. Executive Summary
 ESPB may reduce pain after cardiac surgery, with certainty varying by design [1].
 
-## Background
+## 2. Background
 The review compares regional analgesia with PCA-only strategies for cardiac surgery pain.
 
-## Methods
+## 3. Methods
 The search reviewed PubMed and ranked evidence by relevance and study quality.
 
-## Results
+## 4. Results/Findings
 ### Level I Evidence
 Systematic review evidence provides the highest-level context for ESPB and regional analgesia [1].
 
@@ -275,13 +275,13 @@ Randomized trial evidence directly informs postoperative pain outcomes [2].
 Observational evidence provides lower-certainty supportive context [1].
 The Level I systematic review remains important context even when discussing lower-level evidence later in the section [1].
 
-## Discussion
+## 5. Discussion
 The interpretation should be proportional to the evidence base and its limitations [1] [2].
 
-## Conclusions
+## 6. Conclusions
 ESPB may reduce pain, but confidence depends on study design and directness.
 
-## References
+## 7. References
 [1] Test AB. Systematic review of ESPB. Journal. 2024.
 [2] Test CD. Randomized ESPB trial. Journal. 2024.
 """
@@ -615,6 +615,42 @@ class AnthropicRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Report quality gate failed", result["error"])
         self.assertNotIn("submitted_report", bridge._intermediate)
         self.assertIsNone(bridge._result)
+
+    async def test_submit_report_rejects_missing_title(self) -> None:
+        bridge = AgenticEventBridge()
+        bridge.search_results.append(
+            SearchProviderResult(
+                source="PubMed",
+                query="cardiac surgery ESPB PCA pain",
+                studies=[make_ranked_study()],
+            )
+        )
+        bridge.ranked_studies = [make_ranked_study()]
+        report = make_valid_report().replace("# Research Report\n\n", "", 1)
+
+        result = await tool_submit_report(make_request(), bridge, report)
+
+        self.assertIn("error", result)
+        self.assertTrue(any("level-1 markdown title" in issue for issue in result["issues"]))
+        self.assertNotIn("submitted_report", bridge._intermediate)
+
+    async def test_submit_report_rejects_unnumbered_sections(self) -> None:
+        bridge = AgenticEventBridge()
+        bridge.search_results.append(
+            SearchProviderResult(
+                source="PubMed",
+                query="cardiac surgery ESPB PCA pain",
+                studies=[make_ranked_study()],
+            )
+        )
+        bridge.ranked_studies = [make_ranked_study()]
+        report = make_valid_report().replace("## 1. Executive Summary", "## Executive Summary", 1)
+
+        result = await tool_submit_report(make_request(), bridge, report)
+
+        self.assertIn("error", result)
+        self.assertTrue(any("numbered top-level sections" in issue for issue in result["issues"]))
+        self.assertNotIn("submitted_report", bridge._intermediate)
 
     async def test_submit_report_rejects_out_of_order_evidence_levels(self) -> None:
         bridge = AgenticEventBridge()

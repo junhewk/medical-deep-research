@@ -25,7 +25,7 @@ def _render_methods(plan: QueryPlan, results: list[SearchProviderResult]) -> lis
         total_hits += len(matched.studies)
         searched.append(f"{source} ({len(matched.studies)})")
     lines = [
-        "## Methods",
+        "## 3. Methods",
         "",
         f"The query was handled as a {plan.query_type.upper()} question in the {plan.domain} domain. "
         f"The search used the main concepts: {', '.join(plan.keywords[:10]) or 'none'}.",
@@ -54,7 +54,7 @@ def render_report(
     lines = [
         "# Research Report",
         "",
-        "## Executive Summary",
+        "## 1. Executive Summary",
         "",
     ]
     del runtime_name, provider
@@ -70,9 +70,9 @@ def render_report(
             "The evidence workflow completed, but no retrievable studies were ranked. The search should be revised before drawing conclusions."
         )
 
-    lines.extend(["", "## Background", "", f"Research question: {query}"])
+    lines.extend(["", "## 2. Background", "", f"Research question: {query}"])
     lines.extend(_render_methods(plan, search_results))
-    lines.extend(["", "## Results/Findings", ""])
+    lines.extend(["", "## 4. Results/Findings", ""])
 
     if top_studies:
         for study in top_studies:
@@ -92,7 +92,7 @@ def render_report(
     lines.extend(
         [
             "",
-            "## Discussion",
+            "## 5. Discussion",
             "",
             "The ranked evidence should be interpreted with attention to indirectness, study design, and the amount of full text available for appraisal. "
             "Automated ranking is not a substitute for duplicate human screening or a formal risk-of-bias review.",
@@ -107,14 +107,14 @@ def render_report(
     lines.extend(
         [
             "",
-            "## Conclusions",
+            "## 6. Conclusions",
             "",
             "The available evidence should be treated as a mapped evidence base for review and follow-up screening. "
             "Conclusions should be strengthened only after full-text review of the key studies and explicit certainty appraisal.",
         ]
     )
 
-    lines.extend(["", "## References", ""])
+    lines.extend(["", "## 7. References", ""])
     for study in top_studies:
         citation_parts = [f"[{study.reference_number}] {study.title}"]
         if study.journal:
@@ -128,7 +128,7 @@ def render_report(
         lines.append(". ".join(citation_parts) + ".")
 
     if plan.notes:
-        lines.extend(["", "## Notes", ""])
+        lines.extend(["", "Notes:"])
         lines.extend(f"- {note}" for note in plan.notes)
 
     return "\n".join(lines)

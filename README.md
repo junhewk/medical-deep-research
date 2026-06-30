@@ -20,7 +20,7 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 | Feature | Description |
 |---------|-------------|
 | **Architecture** | Agentic loop — LLM calls literature, evidence, full-text, and workspace tools via shared-state bridge |
-| **Providers** | Anthropic (Claude), OpenAI, DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
+| **Providers** | Anthropic (Claude), OpenAI, OpenAI Codex (ChatGPT OAuth), DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
 | **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, ClinicalTrials.gov, Semantic Scholar, Scopus, citation snowballing — up to 25 results per source |
 | **Ranking** | Agent-driven: evidence-level pre-ranking, tiered/paged triage, PICO/PCC screening, EBM ranking, and GRADE-style appraisal |
@@ -40,7 +40,7 @@ Pre-built desktop apps for macOS and Windows are available on the [Releases](htt
 | macOS | `Medical-Deep-Research-*-macOS.dmg` |
 | Windows | `Medical-Deep-Research-*-Windows.zip` |
 
-API keys are configured in the app's **API Keys** panel (stored locally in SQLite).
+API keys are configured in the app's **API Keys** panel (stored locally in SQLite). OpenAI Codex uses the **Codex ChatGPT Auth** controls in that same panel and stores OAuth state under the app data directory, not the user's global Codex profile.
 
 ### Anthropic Runtime
 
@@ -93,12 +93,13 @@ open "/Applications/Medical Deep Research.app"
 
 ```bash
 # Install with the standard desktop/provider extras
-uv sync --extra anthropic --extra openai --extra deepseek --extra google --extra langchain --extra pdf
+uv sync --extra anthropic --extra openai --extra codex --extra deepseek --extra google --extra langchain --extra pdf
 
 # Or pick your provider
 uv sync --extra anthropic   # Claude via LangChain/Anthropic
 uv sync --extra claude-sdk   # Optional legacy Claude SDK mode
 uv sync --extra openai      # OpenAI Agents SDK
+uv sync --extra codex       # OpenAI Codex SDK with ChatGPT OAuth
 uv sync --extra deepseek    # DeepSeek via OpenAI-compatible Chat API
 uv sync --extra google      # Gemini via LangChain/Google GenAI
 uv sync --extra langchain   # Local LLMs (Ollama, LM Studio, llama-server)
@@ -130,6 +131,9 @@ ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 DEEPSEEK_API_KEY=sk-...
 GOOGLE_API_KEY=...
+
+# Codex subscription auth is configured in-app with ChatGPT OAuth.
+# Tokens are stored under MDR data_dir/codex-home/auth.json.
 
 # Local LLM endpoint (Ollama, LM Studio, and llama-server roots are normalized to /v1)
 MDR_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
@@ -175,11 +179,12 @@ The system prompt adapts to the query domain:
 |----------|-----|---------------|---------|
 | Anthropic | `langchain-anthropic` | claude-haiku-4-5 | Yes |
 | OpenAI | `openai-agents` | gpt-5-mini | Yes |
+| OpenAI Codex | `openai-codex` | gpt-5.4-mini | Yes |
 | DeepSeek | `langchain-openai` | deepseek-v4-pro | Yes |
 | Google | `langchain-google-genai` | gemini-2.5-flash | Yes |
 | Local | `langchain` + `langgraph` | qwen3.5-27b | Yes |
 
-All providers fall back to a deterministic pipeline if SDK/credentials are unavailable. Anthropic also falls back if the SDK route starts but never reaches a search tool.
+All providers fall back to a deterministic pipeline if SDK/credentials are unavailable. Codex uses ChatGPT OAuth subscription auth through the embedded Codex SDK/runtime; no user-installed `codex` CLI is required. Anthropic also falls back if the SDK route starts but never reaches a search tool.
 
 ### Search Databases
 
@@ -221,7 +226,7 @@ src/medical_deep_research/
 ├── persistence.py          # SQLite database layer
 ├── progress.py             # Monotonic progress and phase pass tracking
 ├── service.py              # Run orchestration + push-based UI updates
-├── runtime.py              # Provider runtimes (Anthropic, OpenAI, Google, Local)
+├── runtime.py              # Provider runtimes (Anthropic, OpenAI, Codex, Google, Local)
 ├── agentic_tools.py        # Shared tool logic + system prompts + translation
 ├── research/
 │   ├── fulltext.py         # Europe PMC JATS XML full-text retrieval
@@ -254,7 +259,7 @@ scripts/
 ## Development
 
 ```bash
-uv sync --extra anthropic --extra openai --extra deepseek --extra google --extra langchain --extra pdf --extra dev
+uv sync --extra anthropic --extra openai --extra codex --extra deepseek --extra google --extra langchain --extra pdf --extra dev
 uv run ruff check src/
 uv run python -m unittest discover -s tests -v
 
@@ -272,7 +277,7 @@ MIT License — see [LICENSE](LICENSE)
 - PubMed/MeSH: [NCBI/NLM](https://www.ncbi.nlm.nih.gov/)
 - Open access: [Unpaywall](https://unpaywall.org/), [PubMed Central](https://pmc.ncbi.nlm.nih.gov/)
 - PDF parsing: [pdfminer.six](https://github.com/pdfminer/pdfminer.six)
-- Agent SDKs: [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code/sdk), [OpenAI Agents](https://openai.github.io/openai-agents-python/), [Google GenAI](https://googleapis.github.io/python-genai/), [LangChain](https://python.langchain.com/)
+- Agent SDKs: [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code/sdk), [OpenAI Agents](https://openai.github.io/openai-agents-python/), [OpenAI Codex](https://github.com/openai/codex/tree/main/sdk/python), [Google GenAI](https://googleapis.github.io/python-genai/), [LangChain](https://python.langchain.com/)
 - UI framework: [PySide6 (Qt for Python)](https://doc.qt.io/qtforpython-6/), [qasync](https://github.com/CabbageDevelopment/qasync)
 - UI font: [Pretendard](https://github.com/orioncactus/pretendard), bundled under its included license
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlmodel import col, desc, select
 
+from .codex_auth import CodexAuthManager, CodexAuthStatus
 from .models import (
     ApprovalRequest,
     ApprovalStatus,
@@ -27,6 +28,7 @@ from .runtime import RunRequest, build_runtime, describe_provider_runtime
 
 DEFAULT_MODELS = {
     "openai": "gpt-5-mini",
+    "codex": "gpt-5.4-mini",
     "anthropic": "claude-haiku-4-5-20251001",
     "deepseek": DEEPSEEK_DEFAULT_MODEL,
     "google": "gemini-2.5-flash",
@@ -39,6 +41,7 @@ _UICallback = Callable[[str, str], None]  # (run_id, change_type)
 class ResearchService:
     def __init__(self, database: AppDatabase) -> None:
         self.database = database
+        self.codex_auth = CodexAuthManager(database.settings)
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._ui_listeners: list[_UICallback] = []
 
@@ -162,6 +165,24 @@ class ResearchService:
                 session.add(ApiKey(service=service, api_key=api_key))
             session.commit()
 
+    def has_codex_auth_cache(self) -> bool:
+        return self.codex_auth.cache_present()
+
+    async def get_codex_auth_status(self, *, refresh: bool = False) -> CodexAuthStatus:
+        return await self.codex_auth.status(refresh=refresh)
+
+    async def login_codex_browser(self, open_url: Callable[[str], None] | None = None) -> CodexAuthStatus:
+        return await self.codex_auth.login_browser(open_url=open_url)
+
+    async def login_codex_device_code(
+        self,
+        on_code: Callable[[str, str], None] | None = None,
+    ) -> CodexAuthStatus:
+        return await self.codex_auth.login_device_code(on_code=on_code)
+
+    async def logout_codex(self) -> CodexAuthStatus:
+        return await self.codex_auth.logout()
+
     def get_provider_diagnostics(self) -> list[dict[str, Any]]:
         api_keys = self.get_api_keys()
         offline_mode = self.database.settings.offline_mode
@@ -173,6 +194,7 @@ class ResearchService:
                     api_keys=api_keys,
                     offline_mode=offline_mode,
                     default_model=default_model,
+                    codex_home_path=str(self.database.settings.codex_home_path),
                 ).model_dump()
             )
         return diagnostics
@@ -187,6 +209,19 @@ class ResearchService:
             (event for event in reversed(events) if event.event_type == EventType.RUN_COMPLETED.value),
             None,
         )
+        failed_event = next(
+            (event for event in reversed(events) if event.event_type == EventType.RUN_FAILED.value),
+            None,
+        )
+        failure_tool_event = next(
+            (
+                event for event in reversed(events)
+                if event.event_type == EventType.TOOL_RESULT.value
+                and event.payload_json
+                and "sdk_error_type" in event.payload_json
+            ),
+            None,
+        )
 
         def parse_payload(raw: str | None) -> dict[str, Any]:
             if not raw:
@@ -199,11 +234,15 @@ class ResearchService:
 
         start_payload = parse_payload(start_event.payload_json if start_event else None)
         completed_payload = parse_payload(completed_event.payload_json if completed_event else None)
-        payload = {**start_payload, **completed_payload}
+        failed_payload = parse_payload(failed_event.payload_json if failed_event else None)
+        failure_tool_payload = parse_payload(failure_tool_event.payload_json if failure_tool_event else None)
+        payload = {**start_payload, **completed_payload, **failure_tool_payload, **failed_payload}
         execution_mode = payload.get("execution_mode")
         if not execution_mode and start_event:
             lowered = start_event.message.lower()
-            if lowered.startswith("starting native"):
+            if run.provider == "codex" and "codex" in lowered:
+                execution_mode = "codex_sdk"
+            elif lowered.startswith("starting native"):
                 execution_mode = "native_sdk"
             elif "deterministic" in lowered:
                 execution_mode = "deterministic_fallback"
@@ -220,6 +259,8 @@ class ResearchService:
             "provider_credentials_present": payload.get("provider_credentials_present"),
             "search_credentials_present": payload.get("search_credentials_present"),
             "fallback_reason": payload.get("fallback_reason"),
+            "startup_error": payload.get("startup_error"),
+            "error": payload.get("error"),
             "ranked_results": payload.get("ranked_results"),
             "tool_calls": payload.get("tool_calls"),
             "had_error": payload.get("had_error"),
@@ -356,6 +397,7 @@ class ResearchService:
             recent_years_lookback=self.get_recent_years_lookback(),
             scopus_view=self.get_scopus_view(),
             database_path=str(self.database.settings.db_path),
+            codex_home_path=str(self.database.settings.codex_home_path),
         )
 
         with self.database.session() as session:

@@ -134,6 +134,29 @@ def _scopus_keyed_skip(query: str, error: str) -> SearchProviderResult:
     return SearchProviderResult(source="Scopus", query=query, skipped=True, error=error)
 
 
+async def _ncbi_get_with_retries(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    params: dict[str, object],
+    attempts: int = 3,
+) -> httpx.Response:
+    response: httpx.Response | None = None
+    for attempt in range(attempts):
+        response = await client.get(url, params=params)
+        if response.status_code not in {429, 500, 502, 503, 504}:
+            return response
+        if attempt < attempts - 1:
+            retry_after = response.headers.get("retry-after")
+            try:
+                delay = float(retry_after) if retry_after else 1.0 + attempt
+            except ValueError:
+                delay = 1.0 + attempt
+            await asyncio.sleep(min(delay, 5.0))
+    assert response is not None
+    return response
+
+
 def _get_text(element: ET.Element | None) -> str:
     if element is None:
         return ""
@@ -219,13 +242,19 @@ async def search_pubmed(
         "retmax": str(max_results),
         "retmode": "json",
         "sort": "relevance",
+        "tool": "medical-deep-research",
+        "email": POLITE_EMAIL,
     }
     if api_key:
         params["api_key"] = api_key
 
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            search_response = await client.get(f"{NCBI_BASE_URL}/esearch.fcgi", params=params)
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
+            search_response = await _ncbi_get_with_retries(
+                client,
+                f"{NCBI_BASE_URL}/esearch.fcgi",
+                params=params,
+            )
             search_response.raise_for_status()
             ids = search_response.json().get("esearchresult", {}).get("idlist", [])
             if not ids:
@@ -235,10 +264,16 @@ async def search_pubmed(
                 "db": "pubmed",
                 "id": ",".join(ids),
                 "retmode": "xml",
+                "tool": "medical-deep-research",
+                "email": POLITE_EMAIL,
             }
             if api_key:
                 fetch_params["api_key"] = api_key
-            fetch_response = await client.get(f"{NCBI_BASE_URL}/efetch.fcgi", params=fetch_params)
+            fetch_response = await _ncbi_get_with_retries(
+                client,
+                f"{NCBI_BASE_URL}/efetch.fcgi",
+                params=fetch_params,
+            )
             fetch_response.raise_for_status()
 
         root = ET.fromstring(fetch_response.text)
@@ -301,11 +336,16 @@ async def search_pubmed(
             ]
             doi = None
             pmcid = None
-            for item in article.findall(".//ArticleIdList/ArticleId"):
+            for item in article.findall("./PubmedData/ArticleIdList/ArticleId"):
                 if item.attrib.get("IdType") == "doi":
                     doi = _get_text(item)
                 elif item.attrib.get("IdType") == "pmc":
                     pmcid = _get_text(item)
+            if not doi:
+                for item in article.findall(".//Article/ELocationID"):
+                    if item.attrib.get("EIdType") == "doi":
+                        doi = _get_text(item)
+                        break
             studies.append(
                 EvidenceStudy(
                     source="pubmed",
@@ -518,10 +558,10 @@ async def search_cochrane(
     offline_mode: bool = False,
     start_year: int | None = None,
 ) -> SearchProviderResult:
-    del api_key
     result = await search_pubmed(
-        f'{query} AND ("Cochrane Database Syst Rev"[Journal])',
+        f'({query}) AND "Cochrane Database Syst Rev"[Journal]',
         max_results=max_results,
+        api_key=api_key,
         offline_mode=offline_mode,
         start_year=start_year,
     )
@@ -552,36 +592,39 @@ async def search_pmc(
         "retmax": str(max_results),
         "retmode": "json",
         "sort": "relevance",
+        "tool": "medical-deep-research",
+        "email": POLITE_EMAIL,
     }
     if api_key:
         params["api_key"] = api_key
 
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
-            search_response = await client.get(f"{NCBI_BASE_URL}/esearch.fcgi", params=params)
+            search_response = await _ncbi_get_with_retries(
+                client,
+                f"{NCBI_BASE_URL}/esearch.fcgi",
+                params=params,
+            )
             search_response.raise_for_status()
             ids = search_response.json().get("esearchresult", {}).get("idlist", [])
             if not ids:
                 return SearchProviderResult(source="PMC", query=query, studies=[])
 
-            common_params = {"db": "pmc", "id": ",".join(ids), "retmode": "json"}
+            common_params = {
+                "db": "pmc",
+                "id": ",".join(ids),
+                "retmode": "json",
+                "tool": "medical-deep-research",
+                "email": POLITE_EMAIL,
+            }
             if api_key:
                 common_params["api_key"] = api_key
-            summary_response = await client.get(f"{NCBI_BASE_URL}/esummary.fcgi", params=common_params)
-            summary_response.raise_for_status()
-            link_response = await client.get(
-                f"{NCBI_BASE_URL}/elink.fcgi",
-                params={"dbfrom": "pmc", "db": "pubmed", "id": ",".join(ids), "retmode": "json"},
+            summary_response = await _ncbi_get_with_retries(
+                client,
+                f"{NCBI_BASE_URL}/esummary.fcgi",
+                params=common_params,
             )
-
-        pmc_to_pubmed: dict[str, str] = {}
-        if link_response.status_code < 400:
-            for linkset in link_response.json().get("linksets", []):
-                pmc_id = (linkset.get("ids") or [None])[0]
-                for linkdb in linkset.get("linksetdbs") or []:
-                    if linkdb.get("dbto") == "pubmed" and linkdb.get("links"):
-                        pmc_to_pubmed[str(pmc_id)] = str(linkdb["links"][0])
-                        break
+            summary_response.raise_for_status()
 
         result = summary_response.json().get("result", {})
         studies: list[EvidenceStudy] = []
@@ -597,8 +640,11 @@ async def search_pmc(
             pubdate = str(summary.get("pubdate") or "")
             year_match = re.search(r"\b(\d{4})\b", pubdate)
             publication_types = [str(value) for value in summary.get("pubtype") or []]
+            pmid = _summary_article_id(summary, "pmid")
             doi = _normalize_doi(_summary_article_id(summary, "doi") or str(summary.get("elocationid") or ""))
-            pmcid = f"PMC{pmc_id}" if not str(pmc_id).upper().startswith("PMC") else str(pmc_id)
+            pmcid = _summary_article_id(summary, "pmcid")
+            if not pmcid:
+                pmcid = f"PMC{pmc_id}" if not str(pmc_id).upper().startswith("PMC") else str(pmc_id)
             studies.append(
                 EvidenceStudy(
                     source="pmc",
@@ -610,7 +656,7 @@ async def search_pmc(
                     publication_date=pubdate or None,
                     publication_year=year_match.group(1) if year_match else None,
                     doi=doi,
-                    pmid=pmc_to_pubmed.get(str(pmc_id)),
+                    pmid=pmid,
                     pmcid=pmcid,
                     citation_count=0,
                     url=f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/",

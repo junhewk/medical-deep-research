@@ -51,6 +51,19 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(runtime.runtime_engine, "langchain_google_genai")
         self.assertEqual(runtime.sdk_module, "langchain_google_genai")
 
+    def test_codex_display_label_normalizes_to_codex_model_id(self) -> None:
+        self.assertEqual(
+            normalize_model_id("codex", "GPT-5.4 Mini Codex"),
+            "gpt-5.4-mini",
+        )
+
+    def test_codex_runtime_is_distinct_from_openai_agents(self) -> None:
+        runtime = build_runtime("codex")
+
+        self.assertEqual(runtime.runtime_name, "OpenAI Codex SDK")
+        self.assertEqual(runtime.runtime_engine, "openai_codex")
+        self.assertEqual(runtime.sdk_module, "openai_codex")
+
 
 if __name__ == "__main__":
     unittest.main()

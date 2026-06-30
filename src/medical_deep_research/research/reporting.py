@@ -90,32 +90,42 @@ def render_reference_entries(studies: list[ScoredStudy]) -> str:
 
 
 def render_reference_list(studies: list[ScoredStudy]) -> str:
-    """Render a complete '## References' section from structured metadata."""
+    """Render a complete numbered references section from structured metadata."""
     body = render_reference_entries(studies)
-    return "## References\n\n" + body if body else "## References\n"
+    return "## 7. References\n\n" + body if body else "## 7. References\n"
 
 
 def _render_methods(plan: QueryPlan, results: list[SearchProviderResult]) -> list[str]:
-    lines = [
-        "## Methods",
-        "",
-        f"- Query type: `{plan.query_type}`",
-        f"- Domain: `{plan.domain}`",
-        f"- Keywords: {', '.join(plan.keywords) or 'None'}",
-        "- Database plan:",
-    ]
+    searched = []
+    skipped = []
+    failed = []
+    total_hits = 0
     for source in plan.databases:
-        query = plan.source_queries.get(source, plan.normalized_query)
         matched = next((result for result in results if result.source == source), None)
         if matched is None:
-            lines.append(f"  - {source}: not executed")
+            skipped.append(source)
             continue
         if matched.skipped:
-            lines.append(f"  - {source}: skipped ({matched.error})")
-        elif matched.error:
-            lines.append(f"  - {source}: failed ({matched.error})")
-        else:
-            lines.append(f"  - {source}: {len(matched.studies)} hits using `{query}`")
+            skipped.append(source)
+            continue
+        if matched.error:
+            failed.append(source)
+            continue
+        total_hits += len(matched.studies)
+        searched.append(f"{source} ({len(matched.studies)})")
+    lines = [
+        "## 3. Methods",
+        "",
+        f"The query was handled as a {plan.query_type.upper()} question in the {plan.domain} domain. "
+        f"The search used the main concepts: {', '.join(plan.keywords[:10]) or 'none'}.",
+        "",
+        f"Searches returned {total_hits} source records before deduplication and ranking. "
+        f"Executed sources: {', '.join(searched) or 'none'}.",
+    ]
+    if skipped:
+        lines.append(f"Sources not executed or skipped: {', '.join(skipped)}.")
+    if failed:
+        lines.append(f"Sources with errors: {', '.join(failed)}.")
     return lines
 
 
@@ -131,29 +141,27 @@ def render_report(
 ) -> str:
     top_studies = ranked_studies[:MAX_REPORT_STUDIES]
     lines = [
-        f"# Research Report: {query[:120]}",
+        "# Research Report",
         "",
-        f"- Runtime: `{runtime_name}`",
-        f"- Provider: `{provider}`",
-        f"- Results reviewed: {len(ranked_studies)}",
-        "",
-        "## Executive Summary",
+        "## 1. Executive Summary",
         "",
     ]
+    del runtime_name, provider
 
     if top_studies:
         lines.append(
-            f"The deterministic pipeline found {len(ranked_studies)} ranked studies across {len(plan.databases)} planned sources. "
-            f"The highest-ranked evidence includes {top_studies[0].title} and {top_studies[min(1, len(top_studies) - 1)].title if len(top_studies) > 1 else top_studies[0].title}."
+            f"The evidence workflow identified {len(ranked_studies)} ranked studies relevant to the question. "
+            f"The leading evidence includes {top_studies[0].title}"
+            f"{' and ' + top_studies[1].title if len(top_studies) > 1 else ''}."
         )
     else:
         lines.append(
-            "The deterministic pipeline completed, but no retrievable studies were ranked. Review the source errors and query plan before trusting a synthesized answer."
+            "The evidence workflow completed, but no retrievable studies were ranked. The search should be revised before drawing conclusions."
         )
 
-    lines.append("")
+    lines.extend(["", "## 2. Background", "", f"Research question: {query}"])
     lines.extend(_render_methods(plan, search_results))
-    lines.extend(["", "## Ranked Evidence", ""])
+    lines.extend(["", "## 4. Results/Findings", ""])
 
     if top_studies:
         for study in top_studies:
@@ -173,11 +181,13 @@ def render_report(
     lines.extend(
         [
             "",
-            "## Verification",
+            "## 5. Discussion",
             "",
-            f"- Verified PMIDs: {verification.verified_pmids}",
-            f"- Missing PMIDs: {verification.missing_pmids}",
-            f"- Missing from PubMed: {verification.missing_from_pubmed}",
+            "The ranked evidence should be interpreted with attention to indirectness, study design, and the amount of full text available for appraisal. "
+            "Automated ranking is not a substitute for duplicate human screening or a formal risk-of-bias review.",
+            "",
+            f"Identifier verification checked the highest-ranked PMID-bearing records: {verification.verified_pmids} PMIDs verified, "
+            f"{verification.missing_pmids} records without PMIDs in the checked set, and {verification.missing_from_pubmed} records missing from PubMed.",
         ]
     )
     if verification.notes:
@@ -186,18 +196,19 @@ def render_report(
     lines.extend(
         [
             "",
-            "## Certainty of Evidence",
+            "## 6. Conclusions",
             "",
-            "- Study screening and GRADE certainty appraisal require an LLM runtime and were not performed in this deterministic pipeline.",
+            "The available evidence should be treated as a mapped evidence base for review and follow-up screening. "
+            "Conclusions should be strengthened only after full-text review of the key studies and explicit certainty appraisal.",
         ]
     )
 
-    lines.extend(["", "## References", ""])
+    lines.extend(["", "## 7. References", ""])
     if top_studies:
         lines.append(render_reference_entries(top_studies))
 
     if plan.notes:
-        lines.extend(["", "## Notes", ""])
+        lines.extend(["", "Notes:"])
         lines.extend(f"- {note}" for note in plan.notes)
 
     return "\n".join(lines)

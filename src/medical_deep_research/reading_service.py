@@ -226,6 +226,7 @@ class ReadingService:
             language=run.language,
             api_keys=api_keys,
             database_path=str(self.database.settings.db_path),
+            codex_home_path=str(self.database.settings.codex_home_path),
         )
 
         try:

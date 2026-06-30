@@ -114,7 +114,15 @@ class DiagnosticsTab(QWidget):
         if diag.get("search_sources_executed"):
             details.append("Search sources: " + ", ".join(diag["search_sources_executed"]))
         warnings = []
-        for key in ("error_message", "post_submit_error_message", "sdk_stderr_tail", "fallback_reason", "translation_error"):
+        for key in (
+            "error",
+            "error_message",
+            "startup_error",
+            "post_submit_error_message",
+            "sdk_stderr_tail",
+            "fallback_reason",
+            "translation_error",
+        ):
             val = diag.get(key)
             if val:
                 warnings.append(f"⚠ {key.replace('_', ' ')}: {val}")

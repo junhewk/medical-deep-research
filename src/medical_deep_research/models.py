@@ -181,6 +181,7 @@ class RunRequest(SQLModel):
     recent_years_lookback: int = Field(default=5)
     scopus_view: str = Field(default="STANDARD")
     database_path: str | None = None
+    codex_home_path: str | None = None
 
     @property
     def search_start_year(self) -> int:

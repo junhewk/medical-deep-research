@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 openai = ["openai-agents"]
+codex = ["openai-codex @ git+https://github.com/openai/codex.git@bdd282f3bbd55df3a869a5438519cd948c134d4d#subdirectory=sdk/python"]
 anthropic = ["anthropic", "langchain", "langchain-anthropic"]
 claude-sdk = ["claude-agent-sdk"]
 deepseek = ["langchain-core", "langchain-openai", "langgraph"]
@@ -38,6 +39,9 @@ medical-deep-research-mcp = "medical_deep_research.mcp.servers:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/medical_deep_research"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/medical_deep_research/assets/fonts/PretendardVariable.ttf" = "medical_deep_research/assets/fonts/PretendardVariable.ttf"

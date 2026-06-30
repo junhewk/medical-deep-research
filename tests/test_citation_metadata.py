@@ -289,7 +289,7 @@ class ReferenceInjectionTests(unittest.TestCase):
     def test_appends_references_when_absent(self) -> None:
         study = _scored(reference_number=1, title="T", journal_abbrev="J", publication_year="2024", pmid="5")
         out = _inject_reference_list("# Report\n\n## Results\nFinding [1].", [study])
-        self.assertIn("## References", out)
+        self.assertIn("## 7. References", out)
         self.assertIn("[1] T. J. 2024. PMID: 5.", out)
 
 

@@ -200,26 +200,26 @@ def make_valid_report() -> str:
     )
     return f"""# Research Report
 
-## Executive Summary
+## 1. Executive Summary
 ESPB after cardiac surgery was evaluated against PCA in the searched evidence [1].
 
-## Background
+## 2. Background
 Postoperative pain after cardiac surgery affects mobilization and pulmonary recovery.
 
-## Methods
+## 3. Methods
 The agent searched PubMed and screened the retrieved study for population, intervention, comparator, and outcome alignment.
 
-## Results
+## 4. Results/Findings
 {synthesis}
 
-## Discussion
+## 5. Discussion
 The evidence should be interpreted cautiously because the available ranked set is small [1].
 The overall GRADE certainty of evidence for the pain outcome is Low, rated down for imprecision [1].
 
-## Conclusions
+## 6. Conclusions
 ESPB may be a useful analgesic adjunct after cardiac surgery.
 
-## References
+## 7. References
 
 [1] Erector spinae plane block after cardiac surgery randomized trial. Journal of Clinical Anesthesia. 2024. PMID: 12345678.
 """
@@ -281,10 +281,33 @@ class LocalRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("error", submit_results[0].extra["full_tool_output"])
         self.assertFalse(final.extra["had_error"])
         self.assertEqual(final.extra["report_source"], "recovered_agentic_state")
-        self.assertIn("Local LLM (fallback)", final.report_markdown or "")
+        self.assertIn("## 4. Results/Findings", final.report_markdown or "")
+        self.assertIn("Erector spinae plane block", final.report_markdown or "")
 
 
 class NewToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    def _codex_pcc_request(self) -> RunRequest:
+        return RunRequest(
+            run_id="codex-pcc-ai-communication",
+            query=(
+                "Population: health professions learners, trainees, clinicians, educators; "
+                "Concept: AI-supported education, training, simulation, coaching, assessment, feedback; "
+                "Context: shared decision making education, communication training, patient-centered decision conversations"
+            ),
+            query_type="pcc",
+            mode="detailed",
+            provider="codex",
+            model="gpt-5.4-mini",
+            language="en",
+            api_keys={},
+            offline_mode=False,
+            query_payload={
+                "population": "health professions learners, trainees, clinicians, educators",
+                "concept": "AI-supported education, training, simulation, coaching, assessment, feedback",
+                "context": "shared decision making education, communication training, patient-centered decision conversations",
+            },
+        )
+
     def _build_tools(self) -> list[object]:
         from medical_deep_research.agentic_tools import AgenticEventBridge
         from medical_deep_research.runtime import _build_langchain_tools
@@ -332,6 +355,56 @@ class NewToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["studies"]), STUDY_PAGE_SIZE)
         self.assertEqual(sum(result["counts_by_evidence_level"].values()), 20)
 
+    async def test_codex_pcc_requires_core_source_attempts_before_triage(self) -> None:
+        from medical_deep_research.agentic_tools import AgenticEventBridge, tool_get_studies
+
+        request = self._codex_pcc_request()
+        bridge = AgenticEventBridge()
+        bridge.search_results.append(SearchProviderResult(source="PubMed", query="q", error="HTTP 502"))
+
+        result = await tool_get_studies(request, bridge, context="clinical")
+
+        self.assertIn("error", result)
+        self.assertIn("PMC", result["missing_sources"])
+        self.assertIn("OpenAlex", result["missing_sources"])
+        self.assertIn("PubMed", result["attempted_sources"])
+
+    async def test_codex_pcc_source_attempt_errors_still_allow_triage(self) -> None:
+        from medical_deep_research.agentic_tools import AgenticEventBridge, tool_get_studies
+
+        request = self._codex_pcc_request()
+        bridge = AgenticEventBridge()
+        bridge.search_results.extend(
+            [
+                SearchProviderResult(source="PubMed", query="q", error="HTTP 502"),
+                SearchProviderResult(source="PMC", query="q", error="HTTP 502"),
+                SearchProviderResult(source="Europe PMC", query="q", studies=[]),
+                SearchProviderResult(
+                    source="OpenAlex",
+                    query="q",
+                    studies=[
+                        EvidenceStudy(
+                            source="openalex",
+                            source_id="direct",
+                            title="AI virtual patient communication skills training",
+                            abstract="A simulated patient supported communication skills training for medical students.",
+                            publication_year="2026",
+                            evidence_level="Level III",
+                            sources=["openalex"],
+                        )
+                    ],
+                ),
+                SearchProviderResult(source="Crossref", query="q", studies=[]),
+                SearchProviderResult(source="ClinicalTrials.gov", query="q", studies=[]),
+            ]
+        )
+
+        result = await tool_get_studies(request, bridge, context="clinical")
+
+        self.assertNotIn("missing_sources", result)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["studies"][0]["title"], "AI virtual patient communication skills training")
+
     async def test_browse_before_get_studies_errors(self) -> None:
         import json
 
@@ -370,8 +443,6 @@ class NewToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all("OpenAlex" in s["sources"] for s in by_source["studies"]))
 
     async def test_browse_does_not_reset_screening(self) -> None:
-        import json
-
         tools, bridge = self._build_tools_with_bridge()
         await self._seed_multi(tools)
         await call_fake_tool(tools, "screen_studies", included_indices=[1, 2])

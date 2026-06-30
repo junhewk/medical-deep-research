@@ -8,7 +8,13 @@ from unittest.mock import patch
 
 from sqlmodel import select
 
-from medical_deep_research.agentic_tools import AgenticEventBridge, tool_await_user_pdfs, tool_fetch_fulltext, tool_parse_pdf
+from medical_deep_research.agentic_tools import (
+    AgenticEventBridge,
+    tool_await_user_pdfs,
+    tool_fetch_fulltext,
+    tool_parse_pdf,
+    tool_synthesize_report,
+)
 from medical_deep_research.config import Settings
 from medical_deep_research.models import (
     ApprovalRequest,
@@ -101,6 +107,277 @@ class PdfCheckpointTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["status"], "ok")
                 self.assertEqual(result["uploaded_ranks"], [1])
                 self.assertEqual(result["missing_ranks"], [])
+            finally:
+                database.close()
+
+    async def test_fetch_fulltext_requests_upload_for_ranked_study_without_identifiers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
+            database = AppDatabase(settings)
+            try:
+                database.create_all()
+                service = ResearchService(database)
+                with database.session() as session:
+                    session.add(
+                        ResearchRun(
+                            id="run-no-id-fulltext",
+                            query="AI communication training",
+                            query_type="free",
+                            provider="openai",
+                            model="gpt-5-mini",
+                            runtime_name="test",
+                        )
+                    )
+                    session.commit()
+
+                bridge = AgenticEventBridge()
+                bridge.ranked_studies = [
+                    ScoredStudy(
+                        source="scopus",
+                        source_id="S1",
+                        title="AI communication training study without identifiers",
+                        journal="Test Journal",
+                        publication_year="2026",
+                        evidence_level="Level II",
+                        citation_count=5,
+                        sources=["scopus"],
+                        evidence_level_score=0.8,
+                        citation_score=0.2,
+                        recency_score=0.9,
+                        relevance_score=0.8,
+                        composite_score=0.7,
+                        reference_number=1,
+                    )
+                ]
+                request = RunRequest(
+                    run_id="run-no-id-fulltext",
+                    query="AI communication training",
+                    query_type="free",
+                    mode="detailed",
+                    provider="openai",
+                    model="gpt-5-mini",
+                    database_path=str(settings.db_path),
+                )
+
+                task = asyncio.create_task(tool_fetch_fulltext(request, bridge))
+                tool_event = await asyncio.wait_for(bridge.queue.get(), timeout=1)
+                self.assertEqual(tool_event.event_type, EventType.TOOL_CALLED)
+                self.assertEqual(tool_event.tool_name, "await_user_pdfs")
+                approval_event = await asyncio.wait_for(bridge.queue.get(), timeout=1)
+                self.assertEqual(approval_event.event_type, EventType.APPROVAL_REQUESTED)
+                self.assertEqual(approval_event.extra["missing_pdf_ranks"], [1])
+
+                with database.session() as session:
+                    approval = session.exec(select(ApprovalRequest)).one()
+                    session.add(
+                        ResearchArtifact(
+                            run_id="run-no-id-fulltext",
+                            artifact_type=ArtifactType.FULLTEXT_UPLOAD.value,
+                            name="fulltext_study_1",
+                            content_text="uploaded no-id full text",
+                        )
+                    )
+                    session.commit()
+                    approval_id = approval.id
+
+                service.resolve_approval(approval_id, approved=True)
+                checkpoint_result = await asyncio.wait_for(bridge.queue.get(), timeout=2)
+                self.assertEqual(checkpoint_result.event_type, EventType.TOOL_RESULT)
+                self.assertEqual(checkpoint_result.tool_name, "await_user_pdfs")
+                result = await asyncio.wait_for(task, timeout=2)
+
+                self.assertEqual(result["candidate_studies"], 1)
+                self.assertEqual(result["auto_fetchable_studies"], 0)
+                self.assertEqual(result["requested_upload_ranks"], [1])
+                self.assertEqual(result["unavailable_pdf_ranks"], [])
+                self.assertEqual(result["pdfs_found"], 1)
+            finally:
+                database.close()
+
+    async def test_fetch_fulltext_uses_top_ranked_when_no_level_i_ii_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
+            database = AppDatabase(settings)
+            try:
+                database.create_all()
+                service = ResearchService(database)
+                with database.session() as session:
+                    session.add(
+                        ResearchRun(
+                            id="run-no-high-evidence-fulltext",
+                            query="AI communication training",
+                            query_type="free",
+                            provider="openai",
+                            model="gpt-5-mini",
+                            runtime_name="test",
+                        )
+                    )
+                    session.commit()
+
+                bridge = AgenticEventBridge()
+                bridge.ranked_studies = [
+                    ScoredStudy(
+                        source="crossref",
+                        source_id="C1",
+                        title="Feasibility study without identifiers",
+                        journal="Test Journal",
+                        publication_year="2026",
+                        evidence_level="Level III",
+                        citation_count=3,
+                        sources=["crossref"],
+                        evidence_level_score=0.5,
+                        citation_score=0.1,
+                        recency_score=0.9,
+                        relevance_score=0.8,
+                        composite_score=0.6,
+                        reference_number=1,
+                    )
+                ]
+                request = RunRequest(
+                    run_id="run-no-high-evidence-fulltext",
+                    query="AI communication training",
+                    query_type="free",
+                    mode="detailed",
+                    provider="openai",
+                    model="gpt-5-mini",
+                    database_path=str(settings.db_path),
+                )
+
+                task = asyncio.create_task(tool_fetch_fulltext(request, bridge))
+                tool_event = await asyncio.wait_for(bridge.queue.get(), timeout=1)
+                self.assertEqual(tool_event.tool_name, "await_user_pdfs")
+                approval_event = await asyncio.wait_for(bridge.queue.get(), timeout=1)
+                self.assertEqual(approval_event.event_type, EventType.APPROVAL_REQUESTED)
+
+                with database.session() as session:
+                    approval_id = session.exec(select(ApprovalRequest)).one().id
+                service.resolve_approval(approval_id, approved=False)
+                _checkpoint_result = await asyncio.wait_for(bridge.queue.get(), timeout=2)
+                result = await asyncio.wait_for(task, timeout=2)
+
+                self.assertEqual(result["level_I_II_studies"], 0)
+                self.assertEqual(result["candidate_studies"], 1)
+                self.assertEqual(result["requested_upload_ranks"], [1])
+                self.assertEqual(result["unavailable_pdf_ranks"], [1])
+                self.assertEqual(result["pdfs_found"], 0)
+            finally:
+                database.close()
+
+    async def test_fetch_fulltext_includes_top_direct_studies_when_level_i_exists(self) -> None:
+        bridge = AgenticEventBridge()
+        bridge.ranked_studies = [
+            ScoredStudy(
+                source="crossref",
+                source_id="direct",
+                title="LLM virtual patient for communication training",
+                journal="Test Journal",
+                publication_year="2026",
+                evidence_level="Level III",
+                citation_count=3,
+                sources=["crossref"],
+                evidence_level_score=0.6,
+                citation_score=0.1,
+                recency_score=0.9,
+                relevance_score=0.9,
+                composite_score=0.8,
+                reference_number=1,
+            ),
+            ScoredStudy(
+                source="pubmed",
+                source_id="review",
+                title="Broad systematic review of AI in health professions education",
+                journal="Review Journal",
+                publication_year="2026",
+                evidence_level="Level I",
+                citation_count=30,
+                sources=["pubmed"],
+                evidence_level_score=1.0,
+                citation_score=0.6,
+                recency_score=0.9,
+                relevance_score=0.4,
+                composite_score=0.7,
+                reference_number=2,
+            ),
+        ]
+        request = RunRequest(
+            run_id="run-mixed-fulltext-pool",
+            query="AI communication training",
+            query_type="pcc",
+            mode="detailed",
+            provider="codex",
+            model="gpt-5.4-mini",
+        )
+
+        result = await tool_fetch_fulltext(request, bridge, allow_user_checkpoint=False)
+
+        self.assertEqual(result["level_I_II_studies"], 1)
+        self.assertEqual(result["candidate_studies"], 2)
+        self.assertEqual(result["missing_pdf_ranks"], [1, 2])
+
+    async def test_synthesize_report_includes_stored_fulltext_excerpts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
+            database = AppDatabase(settings)
+            try:
+                database.create_all()
+                with database.session() as session:
+                    session.add(
+                        ResearchRun(
+                            id="run-synthesis-fulltext",
+                            query="AI communication training",
+                            query_type="pcc",
+                            provider="codex",
+                            model="gpt-5.4-mini",
+                            runtime_name="test",
+                        )
+                    )
+                    session.add(
+                        ResearchArtifact(
+                            run_id="run-synthesis-fulltext",
+                            artifact_type=ArtifactType.FULLTEXT_UPLOAD.value,
+                            name="fulltext_study_1",
+                            content_text="Full text evidence about AI communication feedback and learner performance.",
+                            content_json='{"source":"europe_pmc_xml"}',
+                        )
+                    )
+                    session.commit()
+
+                bridge = AgenticEventBridge()
+                bridge.ranked_studies = [
+                    ScoredStudy(
+                        source="pubmed",
+                        source_id="123",
+                        title="AI communication feedback study",
+                        abstract="Abstract about AI communication feedback.",
+                        journal="Test Journal",
+                        publication_year="2026",
+                        evidence_level="Level III",
+                        citation_count=5,
+                        sources=["pubmed"],
+                        evidence_level_score=0.6,
+                        citation_score=0.2,
+                        recency_score=0.9,
+                        relevance_score=0.8,
+                        composite_score=0.7,
+                        reference_number=1,
+                    )
+                ]
+                request = RunRequest(
+                    run_id="run-synthesis-fulltext",
+                    query="AI communication training",
+                    query_type="pcc",
+                    mode="detailed",
+                    provider="codex",
+                    model="gpt-5.4-mini",
+                    database_path=str(settings.db_path),
+                )
+
+                result = await tool_synthesize_report(request, bridge)
+
+                self.assertEqual(result["fulltext"]["available_ranks"], [1])
+                self.assertEqual(result["fulltext"]["excerpts"][0]["source"], "europe_pmc_xml")
+                self.assertIn("AI communication feedback", result["fulltext"]["excerpts"][0]["excerpt"])
+                self.assertIn("full-text excerpts", result["instructions"])
             finally:
                 database.close()
 

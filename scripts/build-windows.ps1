@@ -23,6 +23,7 @@ Write-Host "--- Installing dependencies ---"
 uv sync `
     --extra anthropic `
     --extra openai `
+    --extra codex `
     --extra deepseek `
     --extra google `
     --extra langchain `

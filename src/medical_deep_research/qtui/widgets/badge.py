@@ -73,8 +73,10 @@ def status_badge_kind(status: str) -> str:
 
 
 def exec_badge_kind(mode: str | None) -> str:
-    if mode in {"native_sdk", "native_sdk_agentic"}:
+    if mode in {"native_sdk", "native_sdk_agentic", "codex_sdk"}:
         return "success"
+    if mode == "codex_unavailable":
+        return "danger"
     if mode in {"deterministic_fallback", "deterministic"}:
         return "warn"
     return "neutral"
@@ -84,6 +86,8 @@ def exec_label(mode: str | None) -> str:
     mapping = {
         "native_sdk": "Native SDK",
         "native_sdk_agentic": "Agentic",
+        "codex_sdk": "Codex SDK",
+        "codex_unavailable": "Unavailable",
         "deterministic_fallback": "Fallback",
         "deterministic": "Deterministic",
     }

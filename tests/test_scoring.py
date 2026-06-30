@@ -61,6 +61,51 @@ class ScoringTests(unittest.TestCase):
         self.assertGreaterEqual(ranked[0].relevance_score, 0.7)
         self.assertLess(ranked[1].relevance_score, 0.35)
 
+    def test_pcc_context_promotes_direct_ai_communication_training(self) -> None:
+        query_payload = {
+            "population": "health professions learners and clinicians",
+            "concept": "AI-supported education training simulation feedback",
+            "context": "communication training shared decision making patient-centered conversations",
+        }
+        studies = [
+            EvidenceStudy(
+                source="openalex",
+                source_id="broad",
+                title="Artificial intelligence in undergraduate health professions education",
+                abstract="A systematic review of AI tools for assessment and clinical reasoning in medical education.",
+                publication_year="2026",
+                doi="10.1000/broad",
+                evidence_level="Level I",
+                citation_count=30,
+            ),
+            EvidenceStudy(
+                source="pubmed",
+                source_id="direct",
+                title="Large language model virtual patient for communication skills training",
+                abstract=(
+                    "Medical students practiced medical interview, empathy, and shared decision making "
+                    "with an AI simulated patient and received feedback."
+                ),
+                publication_year="2026",
+                doi="10.1000/direct",
+                evidence_level="Level III",
+                citation_count=2,
+            ),
+        ]
+
+        ranked = score_and_rank_results(
+            studies,
+            context="clinical",
+            query=(
+                "AI-supported education for health professions learners in communication training "
+                "and shared decision making"
+            ),
+            query_payload=query_payload,
+        )
+
+        self.assertEqual(ranked[0].source_id, "direct")
+        self.assertGreater(ranked[0].relevance_score, ranked[1].relevance_score)
+
 
 if __name__ == "__main__":
     unittest.main()

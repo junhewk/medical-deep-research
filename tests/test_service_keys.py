@@ -48,6 +48,28 @@ class ServiceKeyTests(unittest.TestCase):
             finally:
                 database.close()
 
+    def test_codex_auth_cache_enables_codex_provider_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
+            settings.codex_home_path.mkdir(parents=True, exist_ok=True)
+            settings.codex_home_path.joinpath("auth.json").write_text("{}", encoding="utf-8")
+            database = AppDatabase(settings)
+            try:
+                database.create_all()
+                service = ResearchService(database)
+
+                codex = next(
+                    diag for diag in service.get_provider_diagnostics()
+                    if diag["provider"] == "codex"
+                )
+
+                self.assertEqual(codex["default_model"], "gpt-5.4-mini")
+                self.assertEqual(codex["runtime_engine"], "openai_codex")
+                self.assertTrue(codex["provider_credentials_present"])
+                self.assertNotEqual(codex["fallback_reason"], "Codex ChatGPT OAuth is not configured.")
+            finally:
+                database.close()
+
 
 if __name__ == "__main__":
     unittest.main()

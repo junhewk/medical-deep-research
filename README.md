@@ -68,6 +68,12 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
+### v2.9.7 — Codex Runtime & PCC Evidence Quality
+
+- Added **OpenAI Codex as a first-class provider** using ChatGPT OAuth, with app-managed auth state, provider-specific diagnostics, and runtime progress reporting.
+- Improved Codex evidence synthesis for **PCC/scoping-review questions** with stricter numbered report sections, richer full-text use, broader study triage, and quality gates that prevent short status summaries from being accepted as reports.
+- Hardened PubMed/PMC evidence retrieval paths, including NCBI-friendly user-agent/versioning, PMID/PMCID/OA lookup handling, and tests around citation metadata, report scope, Codex schema, and MCP search behavior.
+
 ### v2.9.6 — Verified Citations
 
 - The References section is now **rendered deterministically from verified bibliographic metadata** instead of being written freehand by the model, so fabricated authors, journals, volumes, issues, pages, and years are no longer possible (a frequent failure with local LLM runtimes).

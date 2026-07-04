@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlmodel import col, desc, select
 
-from .codex_auth import CodexAuthManager, CodexAuthStatus
+from .codex_auth import CodexAuthManager, CodexAuthStatus, CodexRuntimeStatus
 from .models import (
     ApprovalRequest,
     ApprovalStatus,
@@ -167,6 +167,9 @@ class ResearchService:
 
     def has_codex_auth_cache(self) -> bool:
         return self.codex_auth.cache_present()
+
+    def get_codex_runtime_status(self) -> CodexRuntimeStatus:
+        return self.codex_auth.runtime_status()
 
     async def get_codex_auth_status(self, *, refresh: bool = False) -> CodexAuthStatus:
         return await self.codex_auth.status(refresh=refresh)

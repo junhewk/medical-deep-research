@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from medical_deep_research.codex_auth import CodexRuntimeStatus
 from scripts import desktop_entry
 from scripts.desktop_entry import _safe_download_target
 
@@ -28,6 +29,36 @@ class DesktopEntryTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(routed_argv, ["Medical Deep Research", "literature", "--transport", "stdio"])
         mcp_main.assert_called_once_with()
+        desktop_main.assert_not_called()
+
+    def test_codex_runtime_check_invocation_returns_success_without_desktop_main(self) -> None:
+        argv = ["Medical Deep Research", "--mdr-check-codex-runtime"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch(
+                "medical_deep_research.codex_auth.check_codex_runtime",
+                return_value=CodexRuntimeStatus(available=True, codex_bin_path="C:/app/codex.exe"),
+            ),
+            patch("medical_deep_research.main.main") as desktop_main,
+        ):
+            exit_code = desktop_entry.main()
+
+        self.assertEqual(exit_code, 0)
+        desktop_main.assert_not_called()
+
+    def test_codex_runtime_check_invocation_returns_failure_without_desktop_main(self) -> None:
+        argv = ["Medical Deep Research", "--mdr-check-codex-runtime"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch(
+                "medical_deep_research.codex_auth.check_codex_runtime",
+                return_value=CodexRuntimeStatus(available=False, error="missing codex.exe"),
+            ),
+            patch("medical_deep_research.main.main") as desktop_main,
+        ):
+            exit_code = desktop_entry.main()
+
+        self.assertEqual(exit_code, 1)
         desktop_main.assert_not_called()
 
     def test_safe_download_target_uses_downloads_and_avoids_overwrite(self) -> None:

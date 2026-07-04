@@ -3,6 +3,7 @@ from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
 import importlib.util as _importlib_util
+import os
 
 datas = [('src/medical_deep_research', 'medical_deep_research')]
 binaries = []
@@ -53,6 +54,29 @@ hiddenimports += collect_submodules('medical_deep_research')
 tmp_ret = collect_all('qasync')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+def _collect_package(_pkg, *, required=False):
+    if _importlib_util.find_spec(_pkg) is None:
+        if required:
+            raise RuntimeError(f"Required package for desktop bundle is missing: {_pkg}")
+        return
+    tmp_ret = collect_all(_pkg)
+    if _pkg == 'codex_cli_bin':
+        _paths = [
+            str(_src).replace('\\', '/')
+            for _src, _dest in [*tmp_ret[0], *tmp_ret[1]]
+        ]
+        _codex_exe = 'codex.exe' if os.name == 'nt' else 'codex'
+        for _required in ('codex-package.json', f'bin/{_codex_exe}'):
+            if not any(_path.endswith(_required) for _path in _paths):
+                raise RuntimeError(f"codex_cli_bin collection is missing {_required}")
+    datas.extend(tmp_ret[0])
+    binaries.extend(tmp_ret[1])
+    hiddenimports.extend(tmp_ret[2])
+
+
+for _pkg in ('openai_codex', 'codex_cli_bin'):
+    _collect_package(_pkg, required=True)
+
 for _pkg in (
     'anthropic',
     'langchain',
@@ -60,15 +84,10 @@ for _pkg in (
     'langchain_openai',
     'langchain_google_genai',
     'langgraph',
-    'openai_codex',
-    'codex_cli_bin',
     'pdfminer',
     'unpywall',
 ):
-    if _importlib_util.find_spec(_pkg) is None:
-        continue
-    tmp_ret = collect_all(_pkg)
-    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+    _collect_package(_pkg)
 
 if _importlib_util.find_spec('google.genai') is not None:
     hiddenimports.append('google.genai')

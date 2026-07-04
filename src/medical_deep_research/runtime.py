@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator, Iterator, TypeVar
 from pydantic import BaseModel
 from sqlmodel import Field
 
+from .codex_auth import check_codex_runtime
 from .models import ArtifactType, EventType, RunRequest, RuntimeEventPayload
 from .provider_config import (
     DEEPSEEK_BASE_URL,
@@ -399,6 +400,9 @@ def provider_fallback_reason(runtime: ResearchRuntime, request: RunRequest) -> s
     if request.offline_mode:
         return "Offline mode is enabled."
     if not runtime.sdk_available:
+        if runtime.provider == "codex":
+            runtime_status = check_codex_runtime()
+            return runtime_status.error or f"{runtime.runtime_name} is not installed."
         return f"{runtime.runtime_name} is not installed."
     if runtime.runtime_engine == "claude_sdk_legacy":
         dependency_reason = _legacy_claude_sdk_dependency_reason()
@@ -3547,8 +3551,7 @@ class CodexRuntime(DeterministicRuntime):
 
     @property
     def sdk_available(self) -> bool:
-        required = ("openai_codex", "codex_cli_bin")
-        return all(importlib.util.find_spec(module) is not None for module in required)
+        return check_codex_runtime().available
 
     def _execution_mode(self, request: RunRequest) -> str:
         del request

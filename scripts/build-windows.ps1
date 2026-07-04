@@ -37,11 +37,19 @@ Write-Host "--- Running PyInstaller ---"
 uv run python -m PyInstaller --noconfirm --clean "Medical Deep Research.spec"
 
 $ExePath = "dist\$AppName\$AppName.exe"
+if (-not (Test-Path $ExePath)) {
+    throw "Expected EXE was not created: $ExePath"
+}
+
+Write-Host "--- Verifying bundled Codex runtime ---"
+& $ExePath --mdr-check-codex-runtime
+if ($LASTEXITCODE -ne 0) {
+    throw "Bundled Codex runtime check failed with exit code $LASTEXITCODE"
+}
+
 Write-Host "--- Build complete ---"
 Write-Host "EXE: $ExePath"
-if (Test-Path $ExePath) {
-    Get-Item $ExePath | Format-List FullName, Length
-}
+Get-Item $ExePath | Format-List FullName, Length
 
 if ($Zip) {
     $ZipName = "Medical-Deep-Research-$Version-Windows.zip"

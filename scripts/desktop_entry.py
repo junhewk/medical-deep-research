@@ -13,17 +13,22 @@ from pathlib import Path
 multiprocessing.freeze_support()
 
 _MCP_SERVER_ARG = "--mdr-mcp-server"
+_CODEX_RUNTIME_CHECK_ARG = "--mdr-check-codex-runtime"
 
 
 def _is_mcp_server_invocation() -> bool:
     return len(sys.argv) > 1 and sys.argv[1] == _MCP_SERVER_ARG
 
 
+def _is_codex_runtime_check_invocation() -> bool:
+    return len(sys.argv) > 1 and sys.argv[1] == _CODEX_RUNTIME_CHECK_ARG
+
+
 if getattr(sys, "frozen", False):
     bundle_dir = os.path.dirname(sys.executable)
     if bundle_dir not in sys.path:
         sys.path.insert(0, bundle_dir)
-    if not _is_mcp_server_invocation():
+    if not _is_mcp_server_invocation() and not _is_codex_runtime_check_invocation():
         # When launched from Finder, CWD is "/" — change to a writable user directory
         os.chdir(os.path.expanduser("~"))
 
@@ -73,6 +78,17 @@ def main() -> int:
         sys.argv = [sys.argv[0], *sys.argv[2:]]
         _mcp_main()
         return 0
+
+    if _is_codex_runtime_check_invocation():
+        from medical_deep_research.codex_auth import check_codex_runtime
+
+        status = check_codex_runtime()
+        if status.available:
+            path = status.codex_bin_path or "unknown"
+            print(f"Codex runtime available: {path}")
+            return 0
+        print(status.error or "Codex runtime unavailable.", file=sys.stderr)
+        return 1
 
     from medical_deep_research.main import main as _main
     return _main()

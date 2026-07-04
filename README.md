@@ -68,6 +68,12 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
+### v2.9.8 — Windows Codex Bundle Fix
+
+- Fixed Windows desktop builds so the bundled OpenAI Codex SDK/runtime is treated as a required package and validated during packaging, preventing builds that omit `codex.exe`.
+- Added an internal bundled-runtime health check used by build validation, Codex provider diagnostics, and ChatGPT auth status.
+- Added a Codex auth recovery state in the UI: when the bundled runtime is missing, login controls are disabled and a **Download latest build** button opens the latest release page.
+
 ### v2.9.7 — Codex Runtime & PCC Evidence Quality
 
 - Added **OpenAI Codex as a first-class provider** using ChatGPT OAuth, with app-managed auth state, provider-specific diagnostics, and runtime progress reporting.

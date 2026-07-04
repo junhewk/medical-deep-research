@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from medical_deep_research.codex_auth import CodexRuntimeStatus
 from medical_deep_research.config import Settings
 from medical_deep_research.persistence import AppDatabase
 from medical_deep_research.service import ResearchService
@@ -58,15 +60,44 @@ class ServiceKeyTests(unittest.TestCase):
                 database.create_all()
                 service = ResearchService(database)
 
-                codex = next(
-                    diag for diag in service.get_provider_diagnostics()
-                    if diag["provider"] == "codex"
-                )
+                with patch(
+                    "medical_deep_research.runtime.check_codex_runtime",
+                    return_value=CodexRuntimeStatus(available=True, codex_bin_path="/tmp/codex"),
+                ):
+                    codex = next(
+                        diag for diag in service.get_provider_diagnostics()
+                        if diag["provider"] == "codex"
+                    )
 
                 self.assertEqual(codex["default_model"], "gpt-5.4-mini")
                 self.assertEqual(codex["runtime_engine"], "openai_codex")
                 self.assertTrue(codex["provider_credentials_present"])
                 self.assertNotEqual(codex["fallback_reason"], "Codex ChatGPT OAuth is not configured.")
+            finally:
+                database.close()
+
+    def test_codex_provider_diagnostics_report_missing_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
+            settings.codex_home_path.mkdir(parents=True, exist_ok=True)
+            settings.codex_home_path.joinpath("auth.json").write_text("{}", encoding="utf-8")
+            database = AppDatabase(settings)
+            try:
+                database.create_all()
+                service = ResearchService(database)
+
+                with patch(
+                    "medical_deep_research.runtime.check_codex_runtime",
+                    return_value=CodexRuntimeStatus(available=False, error="missing codex.exe"),
+                ):
+                    codex = next(
+                        diag for diag in service.get_provider_diagnostics()
+                        if diag["provider"] == "codex"
+                    )
+
+                self.assertFalse(codex["sdk_available"])
+                self.assertEqual(codex["active_execution_path"], "codex_unavailable")
+                self.assertEqual(codex["fallback_reason"], "missing codex.exe")
             finally:
                 database.close()
 

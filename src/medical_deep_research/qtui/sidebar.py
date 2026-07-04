@@ -111,6 +111,9 @@ class WorkspaceTabs(QTabWidget):
         self._codex_login_btn: QPushButton | None = None
         self._codex_device_btn: QPushButton | None = None
         self._codex_logout_btn: QPushButton | None = None
+        self._codex_download_btn: QPushButton | None = None
+        self._codex_runtime_available = True
+        self._codex_runtime_download_url: str | None = None
 
         self._install_corner_file_menu()
 
@@ -733,13 +736,17 @@ class WorkspaceTabs(QTabWidget):
         self._codex_login_btn = QPushButton(self._t("codex_login_browser"))
         self._codex_device_btn = QPushButton(self._t("codex_login_device"))
         self._codex_logout_btn = QPushButton(self._t("codex_logout"))
+        self._codex_download_btn = QPushButton(self._t("codex_download_runtime"))
         self._codex_login_btn.clicked.connect(self._on_codex_login_browser)
         self._codex_device_btn.clicked.connect(self._on_codex_login_device)
         self._codex_logout_btn.clicked.connect(self._on_codex_logout)
+        self._codex_download_btn.clicked.connect(self._on_codex_download_runtime)
         row.addWidget(self._codex_login_btn)
         row.addWidget(self._codex_device_btn)
         row.addWidget(self._codex_logout_btn)
+        row.addWidget(self._codex_download_btn)
         row.addStretch(1)
+        self._codex_download_btn.setVisible(False)
         parent.addLayout(row)
         self._refresh_codex_auth_status()
 
@@ -756,14 +763,26 @@ class WorkspaceTabs(QTabWidget):
     def _set_codex_auth_buttons_enabled(self, enabled: bool) -> None:
         for button in (self._codex_login_btn, self._codex_device_btn):
             if button is not None:
-                button.setEnabled(enabled)
+                button.setEnabled(enabled and self._codex_runtime_available)
         if self._codex_logout_btn is not None:
-            self._codex_logout_btn.setEnabled(enabled and self._service.has_codex_auth_cache())
+            self._codex_logout_btn.setEnabled(
+                enabled and self._codex_runtime_available and self._service.has_codex_auth_cache()
+            )
+        if self._codex_download_btn is not None:
+            self._codex_download_btn.setEnabled(bool(self._codex_runtime_download_url))
 
     def _apply_codex_auth_status(self, status: Any) -> None:
         if self._codex_status_label is None:
             return
-        if status.error:
+        self._codex_runtime_available = bool(getattr(status, "runtime_available", True))
+        self._codex_runtime_download_url = getattr(status, "runtime_download_url", None)
+        if self._codex_download_btn is not None:
+            self._codex_download_btn.setVisible(not self._codex_runtime_available)
+        if not self._codex_runtime_available:
+            error = getattr(status, "runtime_error", None) or getattr(status, "error", None) or "unknown"
+            text = self._t("codex_runtime_missing").format(error=error)
+            self._codex_status_label.setStyleSheet(f"color: {ERROR}; font-size: 12px;")
+        elif status.error:
             text = self._t("codex_auth_error").format(error=status.error)
             self._codex_status_label.setStyleSheet(f"color: {ERROR}; font-size: 12px;")
         elif status.account_email:
@@ -777,30 +796,22 @@ class WorkspaceTabs(QTabWidget):
             text = self._t("codex_auth_missing")
             self._codex_status_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         self._codex_status_label.setText(text)
-        if self._codex_logout_btn is not None:
-            self._codex_logout_btn.setEnabled(bool(status.configured))
+        self._set_codex_auth_buttons_enabled(True)
 
     def _codex_error_status(self, exc: Exception) -> SimpleNamespace:
+        runtime_status = self._service.get_codex_runtime_status()
         return SimpleNamespace(
             configured=self._service.has_codex_auth_cache(),
             account_email=None,
             plan_type=None,
             error=f"{type(exc).__name__}: {exc}",
+            runtime_available=runtime_status.available,
+            runtime_error=runtime_status.error,
+            runtime_download_url=runtime_status.download_url,
         )
 
     def _refresh_codex_auth_status(self, *, force: bool = False) -> None:
-        if self._service.has_codex_auth_cache() and not force:
-            self._apply_codex_auth_status(
-                SimpleNamespace(
-                    configured=True,
-                    account_email=None,
-                    plan_type=None,
-                    error=None,
-                )
-            )
-            self._refresh_provider_status_cards()
-            self._refresh_model_combo()
-            return
+        del force
         if self._codex_status_label is not None:
             self._codex_status_label.setText(self._t("codex_auth_checking"))
         self._schedule_async(self._load_codex_auth_status())
@@ -819,6 +830,10 @@ class WorkspaceTabs(QTabWidget):
 
     def _on_codex_logout(self) -> None:
         self._schedule_async(self._logout_codex())
+
+    def _on_codex_download_runtime(self) -> None:
+        if self._codex_runtime_download_url:
+            QDesktopServices.openUrl(QUrl(self._codex_runtime_download_url))
 
     async def _login_codex_browser(self) -> None:
         self._set_codex_auth_buttons_enabled(False)
@@ -906,6 +921,8 @@ class WorkspaceTabs(QTabWidget):
             self._codex_device_btn.setText(self._t("codex_login_device"))
         if self._codex_logout_btn is not None:
             self._codex_logout_btn.setText(self._t("codex_logout"))
+        if self._codex_download_btn is not None:
+            self._codex_download_btn.setText(self._t("codex_download_runtime"))
         self._settings_title_label.setText(self._t("research_settings"))
         self._years_label.setText(self._t("years_lookback"))
         self._years_desc_label.setText(self._t("years_lookback_desc"))

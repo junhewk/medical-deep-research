@@ -46,7 +46,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --extra openai --extra anthropic --extra pdf --extra langchain --extra google
+          uv sync --extra openai --extra codex --extra anthropic --extra pdf --extra langchain --extra google
           uv pip install pyinstaller
 
       - name: Read version

@@ -56,6 +56,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("PMC", plan.databases)
         self.assertIn("Europe PMC", plan.databases)
         self.assertIn("Crossref", plan.databases)
+        self.assertNotIn("ClinicalTrials.gov", plan.databases)
         self.assertNotIn("arXiv", plan.databases)
         self.assertNotIn("medRxiv", plan.databases)
         self.assertNotIn("bioRxiv", plan.databases)

@@ -22,18 +22,10 @@ from .models import (
     utcnow,
 )
 from .persistence import AppDatabase
-from .provider_config import DEEPSEEK_DEFAULT_MODEL, normalize_model_id
+from .model_catalog import DEFAULT_MODELS, provider_model_options
+from .provider_config import normalize_model_id
 from .runtime import RunRequest, build_runtime, describe_provider_runtime
 
-
-DEFAULT_MODELS = {
-    "openai": "gpt-5-mini",
-    "codex": "gpt-5.4-mini",
-    "anthropic": "claude-haiku-4-5-20251001",
-    "deepseek": DEEPSEEK_DEFAULT_MODEL,
-    "google": "gemini-2.5-flash",
-    "local": "qwen3.5-27b",
-}
 
 _UICallback = Callable[[str, str], None]  # (run_id, change_type)
 
@@ -201,6 +193,9 @@ class ResearchService:
                 ).model_dump()
             )
         return diagnostics
+
+    def get_model_options(self, provider: str) -> dict[str, str]:
+        return provider_model_options(provider)
 
     def get_run_diagnostics(self, run_id: str) -> dict[str, Any] | None:
         run = self.get_run(run_id)

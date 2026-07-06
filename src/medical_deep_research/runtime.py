@@ -29,6 +29,8 @@ from .provider_config import (
     normalize_model_id,
 )
 from .research import (
+    build_audit_report,
+    build_prisma_summary,
     build_query_plan,
     empty_verification_summary,
     flatten_studies,
@@ -36,6 +38,7 @@ from .research import (
     render_verification_report,
     score_and_rank_results,
     search_source,
+    source_catalog,
     verify_studies,
 )
 from .progress import ProgressTracker
@@ -860,6 +863,23 @@ class DeterministicRuntime(ResearchRuntime):
             artifact_name="Search Plan",
             artifact_json=plan.model_dump(),
         )
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "planning",
+            "Saved literature source catalog",
+            artifact_type=ArtifactType.SOURCE_CATALOG,
+            artifact_name="Literature Source Catalog",
+            artifact_json={
+                "sources": [
+                    entry.model_dump()
+                    for entry in source_catalog(
+                        request.api_keys,
+                        offline_mode=request.offline_mode,
+                    )
+                ]
+            },
+        )
 
         yield _ev(
             tracker,
@@ -960,6 +980,20 @@ class DeterministicRuntime(ResearchRuntime):
             artifact_name="Ranked Results",
             artifact_json={"studies": [study.model_dump() for study in ranked]},
         )
+        prisma = build_prisma_summary(
+            provider_results,
+            ranked,
+            final_synthesis_limit=MAX_REPORT_STUDIES,
+        )
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "ranking",
+            "Saved PRISMA flow summary",
+            artifact_type=ArtifactType.PRISMA_FLOW,
+            artifact_name="PRISMA Flow Summary",
+            artifact_json=prisma.model_dump(),
+        )
         yield _ev(
             tracker,
             EventType.AGENT_STARTED,
@@ -1030,6 +1064,22 @@ class DeterministicRuntime(ResearchRuntime):
             "synthesizing",
             "Report body updated from ranked evidence",
             report_markdown=final_report,
+        )
+        audit = build_audit_report(
+            final_report,
+            provider_results,
+            ranked,
+            verification,
+            final_synthesis_limit=MAX_REPORT_STUDIES,
+        )
+        yield _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "verifying",
+            "Saved deterministic audit report",
+            artifact_type=ArtifactType.AUDIT_REPORT,
+            artifact_name="Audit Report",
+            artifact_json=audit.model_dump(),
         )
         yield _ev(
             tracker,
@@ -1316,7 +1366,7 @@ class NativeSDKRuntime(DeterministicRuntime):
                 "Rewind only when another search pass is likely to materially improve coverage or reduce obvious noise.",
                 "Reasons to rewind include: too few relevant studies, source failures, poor verification coverage, or queries that are clearly too narrow.",
                 "Also rewind when screening left fewer than 3 included studies (broaden the queries),",
-                "or when no High/Moderate-certainty evidence exists for the core outcome (target RCTs, systematic reviews, or registered trials).",
+                "or when no High/Moderate-certainty evidence exists for the core outcome (target RCTs or systematic reviews).",
                 "If no rewind is needed, set should_rewind to false and leave source_queries empty.",
                 "If rewind is needed, only update source_queries for the affected sources.",
             ]
@@ -2116,8 +2166,6 @@ async def _maybe_translate_report(
         bridge._intermediate["translation_error"] = "Offline mode is enabled."
         return report, []
     if request.provider == "codex":
-        bridge._intermediate["translation_status"] = "skipped"
-        bridge._intermediate["translation_error"] = "Codex reports are requested in the target language during generation."
         return report, []
     if request.provider != "local" and not _has_native_credentials(
         request.provider,
@@ -2195,6 +2243,37 @@ def _agentic_debug_trace_event(
     )
 
 
+def _fulltext_excerpts_from_payload(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    fulltext = payload.get("fulltext")
+    if isinstance(fulltext, dict):
+        excerpts = fulltext.get("excerpts")
+        if isinstance(excerpts, list):
+            return [item for item in excerpts if isinstance(item, dict)]
+    parsed_fulltext = payload.get("parsed_fulltext")
+    if isinstance(parsed_fulltext, list):
+        return [item for item in parsed_fulltext if isinstance(item, dict)]
+    return []
+
+
+def _fulltext_assessed_count(*payloads: Any) -> int:
+    for payload in payloads:
+        excerpts = _fulltext_excerpts_from_payload(payload)
+        if excerpts:
+            return len(excerpts)
+        if not isinstance(payload, dict):
+            continue
+        for key in ("parsed_fulltext", "available", "available_ranks"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return len(value)
+        parsed_count = payload.get("fulltext_parsed_count")
+        if isinstance(parsed_count, int):
+            return parsed_count
+    return 0
+
+
 def _agentic_final_events(
     runtime: ResearchRuntime,
     request: RunRequest,
@@ -2246,7 +2325,65 @@ def _agentic_final_events(
         completion_extra["post_submit_error_message"] = str(post_submit_error)
         completion_extra["post_submit_error_type"] = bridge._intermediate.get("post_submit_error_type")
 
+    synthesis_payload = bridge._intermediate.get("synthesize_report")
+    fetch_payload = bridge._intermediate.get("fetch_fulltext")
+    fulltext_excerpts = _fulltext_excerpts_from_payload(synthesis_payload)
+    fulltext_count = _fulltext_assessed_count(synthesis_payload, fetch_payload)
+    verification = bridge.verification or empty_verification_summary("Verification was not run.")
+    prisma = build_prisma_summary(
+        bridge.search_results,
+        bridge.ranked_studies,
+        screening=bridge.screening,
+        full_text_assessed=fulltext_count,
+        final_synthesis_limit=MAX_REPORT_STUDIES,
+    )
+    audit = build_audit_report(
+        final_report,
+        bridge.search_results,
+        bridge.ranked_studies,
+        verification,
+        screening=bridge.screening,
+        appraisal=bridge.appraisal,
+        fulltext_excerpts=fulltext_excerpts,
+        final_synthesis_limit=MAX_REPORT_STUDIES,
+    )
+
     return [
+        _ev(
+            bridge.progress,
+            EventType.ARTIFACT_CREATED,
+            "complete",
+            "Saved literature source catalog",
+            artifact_type=ArtifactType.SOURCE_CATALOG,
+            artifact_name="Literature Source Catalog",
+            artifact_json={
+                "sources": [
+                    entry.model_dump()
+                    for entry in source_catalog(
+                        request.api_keys,
+                        offline_mode=request.offline_mode,
+                    )
+                ]
+            },
+        ),
+        _ev(
+            bridge.progress,
+            EventType.ARTIFACT_CREATED,
+            "complete",
+            "Saved PRISMA flow summary",
+            artifact_type=ArtifactType.PRISMA_FLOW,
+            artifact_name="PRISMA Flow Summary",
+            artifact_json=prisma.model_dump(),
+        ),
+        _ev(
+            bridge.progress,
+            EventType.ARTIFACT_CREATED,
+            "complete",
+            "Saved deterministic audit report",
+            artifact_type=ArtifactType.AUDIT_REPORT,
+            artifact_name="Audit Report",
+            artifact_json=audit.model_dump(),
+        ),
         _ev(
             bridge.progress,
             EventType.REPORT_DELTA,
@@ -2319,7 +2456,6 @@ _SEARCH_SOURCES = {
     "search_cochrane": "Cochrane",
     "search_semantic_scholar": "Semantic Scholar",
     "search_scopus": "Scopus",
-    "search_clinical_trials": "ClinicalTrials.gov",
     "search_preprints": "Preprints",
 }
 
@@ -3125,7 +3261,7 @@ def _codex_local_tool_catalog() -> str:
         "write_todos {\"items\": string[]}",
         "update_progress {\"phase\": string, \"message\": string}",
         "search_pubmed/search_pmc/search_europe_pmc/search_openalex/search_crossref/"
-        "search_cochrane/search_semantic_scholar/search_scopus/search_clinical_trials/search_preprints "
+        "search_cochrane/search_semantic_scholar/search_scopus/search_preprints "
         "{\"query\": string, \"max_results\": integer}",
         "get_studies {\"context\": string}",
         "browse_studies {\"page\": integer, \"evidence_level\": string|null, \"source\": string|null, "
@@ -3163,6 +3299,9 @@ def _codex_agentic_instructions(request: RunRequest, runtime_name: str) -> str:
         f"You have at most {CODEX_AGENTIC_MAX_TOOL_TURNS} local tool-decision turns. "
         "Do not spend extra turns on optional browsing once the evidence base is sufficient; "
         "move to ranking, appraisal, synthesis, and submit_report.\n"
+        f"`submit_report.report_markdown` must be written in {request.language}. "
+        "When writing non-English prose, preserve citation numbers, PMID/DOI values, "
+        "journal names, and reference formatting.\n"
         "After `fetch_fulltext`, if the result asks for user PDFs, wait for that tool to return; "
         "then parse the uploaded/available full texts before appraisal when possible.\n\n"
         "Available local tools and argument JSON shapes:\n"
@@ -3411,6 +3550,25 @@ def _native_output_artifact_events(
             artifact_json=output.plan.model_dump(),
         )
     )
+    events.append(
+        _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "planning",
+            "Saved literature source catalog",
+            artifact_type=ArtifactType.SOURCE_CATALOG,
+            artifact_name="Literature Source Catalog",
+            artifact_json={
+                "sources": [
+                    entry.model_dump()
+                    for entry in source_catalog(
+                        request.api_keys,
+                        offline_mode=request.offline_mode,
+                    )
+                ]
+            },
+        )
+    )
     if output.plan.todos:
         events.append(
             _ev(
@@ -3478,6 +3636,29 @@ def _native_output_artifact_events(
             artifact_json={"studies": [study.model_dump() for study in output.ranked_studies[:MAX_REPORT_STUDIES]]},
         )
     )
+    fulltext_count = 0
+    if completion_extra:
+        try:
+            fulltext_count = int(completion_extra.get("fulltext_parsed_count") or 0)
+        except (TypeError, ValueError):
+            fulltext_count = 0
+    prisma = build_prisma_summary(
+        output.search_results,
+        output.ranked_studies,
+        full_text_assessed=fulltext_count,
+        final_synthesis_limit=MAX_REPORT_STUDIES,
+    )
+    events.append(
+        _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "ranking",
+            "Saved PRISMA flow summary",
+            artifact_type=ArtifactType.PRISMA_FLOW,
+            artifact_name="PRISMA Flow Summary",
+            artifact_json=prisma.model_dump(),
+        )
+    )
     events.append(
         _ev(
             tracker,
@@ -3487,6 +3668,24 @@ def _native_output_artifact_events(
             artifact_type=ArtifactType.VERIFICATION_REPORT,
             artifact_name="Verification Report",
             artifact_text=render_verification_report(output.verification),
+        )
+    )
+    audit = build_audit_report(
+        output.final_report,
+        output.search_results,
+        output.ranked_studies,
+        output.verification,
+        final_synthesis_limit=MAX_REPORT_STUDIES,
+    )
+    events.append(
+        _ev(
+            tracker,
+            EventType.ARTIFACT_CREATED,
+            "verifying",
+            "Saved deterministic audit report",
+            artifact_type=ArtifactType.AUDIT_REPORT,
+            artifact_name="Audit Report",
+            artifact_json=audit.model_dump(),
         )
     )
     events.append(

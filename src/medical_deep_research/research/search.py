@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 import re
 import xml.etree.ElementTree as ET
 
 import httpx
 
+from .connectors import canonical_source_name, is_rankable_evidence_study
+from .http import RateLimit, get_json
 from .models import EvidenceStudy, SearchProviderResult
 
 
@@ -23,7 +26,7 @@ SEMANTIC_SCHOLAR_FIELDS = (
 )
 HTTP_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 POLITE_EMAIL = "medical-deep-research@users.noreply.github.com"
-USER_AGENT = f"MedicalDeepResearch/2.9.7 (mailto:{POLITE_EMAIL})"
+USER_AGENT = f"MedicalDeepResearch/2.9.9 (mailto:{POLITE_EMAIL})"
 LANDMARK_JOURNALS = {
     "new england journal of medicine",
     "nejm",
@@ -400,10 +403,15 @@ async def search_openalex(
         "Accept": "application/json",
     }
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers=headers) as client:
-            response = await client.get(OPENALEX_BASE_URL, params=params)
-            response.raise_for_status()
-        works = response.json().get("results", [])
+        payload = await get_json(
+            OPENALEX_BASE_URL,
+            params=params,
+            headers=headers,
+            timeout=HTTP_TIMEOUT,
+            rate_limit=RateLimit(0.1),
+            looks_valid=lambda data: isinstance(data, dict) and "results" in data,
+        )
+        works = payload.get("results", []) if isinstance(payload, dict) else []
         studies: list[EvidenceStudy] = []
         for work in works:
             ids = work.get("ids", {}) if isinstance(work.get("ids"), dict) else {}
@@ -817,10 +825,17 @@ async def search_crossref(
         "mailto": POLITE_EMAIL,
     }
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
-            response = await client.get(CROSSREF_BASE_URL, params=params)
-            response.raise_for_status()
-        items = response.json().get("message", {}).get("items", [])
+        payload = await get_json(
+            CROSSREF_BASE_URL,
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=HTTP_TIMEOUT,
+            rate_limit=RateLimit(0.1),
+            looks_valid=lambda data: isinstance(data, dict)
+            and isinstance(data.get("message"), dict),
+        )
+        message = payload.get("message", {}) if isinstance(payload, dict) else {}
+        items = message.get("items", []) if isinstance(message, dict) else []
         studies: list[EvidenceStudy] = []
         for item in items:
             doi = _normalize_doi(item.get("DOI"))
@@ -1058,6 +1073,214 @@ async def search_clinical_trials(
         return _network_error("ClinicalTrials.gov", query, exc)
 
 
+SearchSourceHandler = Callable[
+    [str, dict[str, str], int, bool, str | None, int | None, str],
+    Awaitable[SearchProviderResult],
+]
+
+
+async def _search_pubmed_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del domain, scopus_view
+    return await search_pubmed(
+        query,
+        max_results=max_results,
+        api_key=key_map.get("ncbi"),
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+async def _search_pmc_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del domain, scopus_view
+    return await search_pmc(
+        query,
+        max_results=max_results,
+        api_key=key_map.get("ncbi"),
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+async def _search_europe_pmc_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del key_map, domain, scopus_view
+    return await search_europe_pmc(
+        query,
+        max_results=max_results,
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+async def _search_openalex_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del key_map, domain, scopus_view
+    return await search_openalex(
+        query,
+        max_results=max_results,
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+async def _search_crossref_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del key_map, domain, scopus_view
+    return await search_crossref(
+        query,
+        max_results=max_results,
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+async def _search_semantic_scholar_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del scopus_view
+    fields = "Medicine" if domain == "clinical" else None
+    return await search_semantic_scholar(
+        query,
+        max_results=max_results,
+        api_key=key_map.get("semantic_scholar") or key_map.get("semanticscholar"),
+        fields_of_study=fields,
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+async def _search_cochrane_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del domain, scopus_view
+    return await search_cochrane(
+        query,
+        max_results=max_results,
+        api_key=key_map.get("cochrane") or key_map.get("ncbi"),
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+async def _search_scopus_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del domain
+    return await search_scopus(
+        query,
+        max_results=max_results,
+        api_key=key_map.get("scopus"),
+        offline_mode=offline_mode,
+        start_year=start_year,
+        scopus_view=scopus_view,
+    )
+
+
+async def _search_clinical_trials_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del key_map, domain, scopus_view
+    return await search_clinical_trials(
+        query,
+        max_results=max_results,
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+async def _search_preprints_source(
+    query: str,
+    key_map: dict[str, str],
+    max_results: int,
+    offline_mode: bool,
+    domain: str | None,
+    start_year: int | None,
+    scopus_view: str,
+) -> SearchProviderResult:
+    del key_map, domain, scopus_view
+    return await search_preprints(
+        query,
+        max_results=max_results,
+        offline_mode=offline_mode,
+        start_year=start_year,
+    )
+
+
+_SEARCH_SOURCE_HANDLERS: dict[str, SearchSourceHandler] = {
+    "PubMed": _search_pubmed_source,
+    "PMC": _search_pmc_source,
+    "Europe PMC": _search_europe_pmc_source,
+    "OpenAlex": _search_openalex_source,
+    "Crossref": _search_crossref_source,
+    "Semantic Scholar": _search_semantic_scholar_source,
+    "Cochrane": _search_cochrane_source,
+    "Scopus": _search_scopus_source,
+    "ClinicalTrials.gov": _search_clinical_trials_source,
+    "Preprints": _search_preprints_source,
+}
+
+
 async def search_source(
     source: str,
     query: str,
@@ -1070,89 +1293,30 @@ async def search_source(
     scopus_view: str = "STANDARD",
 ) -> SearchProviderResult:
     key_map = api_keys or {}
-    if source == "PubMed":
-        return await search_pubmed(
-            query,
-            max_results=max_results,
-            api_key=key_map.get("ncbi"),
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    if source == "PMC":
-        return await search_pmc(
-            query,
-            max_results=max_results,
-            api_key=key_map.get("ncbi"),
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    if source == "Europe PMC":
-        return await search_europe_pmc(
-            query,
-            max_results=max_results,
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    if source == "OpenAlex":
-        return await search_openalex(
-            query,
-            max_results=max_results,
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    if source == "Crossref":
-        return await search_crossref(
-            query,
-            max_results=max_results,
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    if source == "Semantic Scholar":
-        fields = "Medicine" if domain == "clinical" else None
-        return await search_semantic_scholar(
-            query,
-            max_results=max_results,
-            api_key=key_map.get("semantic_scholar") or key_map.get("semanticscholar"),
-            fields_of_study=fields,
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    if source == "Cochrane":
-        return await search_cochrane(
-            query,
-            max_results=max_results,
-            api_key=key_map.get("cochrane"),
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    if source == "Scopus":
-        return await search_scopus(
-            query,
-            max_results=max_results,
-            api_key=key_map.get("scopus"),
-            offline_mode=offline_mode,
-            start_year=start_year,
-            scopus_view=scopus_view,
-        )
-    if source == "ClinicalTrials.gov":
-        return await search_clinical_trials(
-            query,
-            max_results=max_results,
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    if source == "Preprints":
-        return await search_preprints(
-            query,
-            max_results=max_results,
-            offline_mode=offline_mode,
-            start_year=start_year,
-        )
-    return SearchProviderResult(source=source, query=query, skipped=True, error="Unsupported source")
+    canonical = canonical_source_name(source)
+    handler = _SEARCH_SOURCE_HANDLERS.get(canonical or "")
+    if handler is None:
+        return SearchProviderResult(source=source, query=query, skipped=True, error="Unsupported source")
+    return await handler(
+        query,
+        key_map,
+        max_results,
+        offline_mode,
+        domain,
+        start_year,
+        scopus_view,
+    )
 
 
-def flatten_studies(results: list[SearchProviderResult]) -> list[EvidenceStudy]:
+def flatten_studies(
+    results: list[SearchProviderResult],
+    *,
+    rankable_only: bool = True,
+) -> list[EvidenceStudy]:
     studies: list[EvidenceStudy] = []
     for result in results:
-        studies.extend(result.studies)
+        if rankable_only:
+            studies.extend(study for study in result.studies if is_rankable_evidence_study(study))
+        else:
+            studies.extend(result.studies)
     return studies

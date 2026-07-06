@@ -53,6 +53,22 @@ class SearchProviderResult(BaseModel):
     skipped: bool = False
 
 
+class SourceCatalogEntry(BaseModel):
+    id: str
+    name: str
+    domain: str
+    description: str
+    source_type: str = "literature"
+    requires_api_key: bool = False
+    api_key_names: list[str] = Field(default_factory=list)
+    credential_status: str = "not_required"
+    enabled: bool = True
+    included_by_default: bool = True
+    ranked_evidence: bool = True
+    peer_reviewed: bool = True
+    notes: list[str] = Field(default_factory=list)
+
+
 class ScoredStudy(EvidenceStudy):
     relevance_score: float = 0.0
     evidence_level_score: float
@@ -77,4 +93,34 @@ class VerificationSummary(BaseModel):
     missing_from_pubmed: int
     offline_mode: bool = False
     details: list[VerificationDetail] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class PrismaSummary(BaseModel):
+    records_identified_by_source: dict[str, int] = Field(default_factory=dict)
+    records_identified_total: int = 0
+    records_after_deduplication: int = 0
+    records_screened: int = 0
+    records_excluded: int = 0
+    studies_included: int = 0
+    full_text_assessed: int = 0
+    final_synthesis_set: int = 0
+    excluded_records: list[dict[str, object]] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class AuditFinding(BaseModel):
+    code: str
+    severity: str
+    claim: str | None = None
+    issue: str
+    evidence: str | None = None
+
+
+class AuditReport(BaseModel):
+    status: str
+    findings: list[AuditFinding] = Field(default_factory=list)
+    checked_citations: int = 0
+    checked_references: int = 0
+    checked_counts: int = 0
     notes: list[str] = Field(default_factory=list)

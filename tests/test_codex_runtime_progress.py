@@ -14,6 +14,7 @@ from medical_deep_research.runtime import (
     CODEX_AGENTIC_MAX_TOOL_TURNS,
     CODEX_FULLTEXT_PARSE_LIMIT,
     CodexRuntime,
+    _codex_agentic_instructions,
     _codex_decision_prompt,
     _codex_fetch_fulltext_for_ranked_studies,
     _codex_mcp_completion_extra,
@@ -22,7 +23,7 @@ from medical_deep_research.runtime import (
 )
 
 
-def make_request() -> RunRequest:
+def make_request(*, language: str = "en") -> RunRequest:
     return RunRequest(
         run_id="test-codex-progress",
         query="Population: clinicians; Concept: AI education; Context: training",
@@ -30,7 +31,7 @@ def make_request() -> RunRequest:
         mode="detailed",
         provider="codex",
         model="gpt-5.4",
-        language="en",
+        language=language,
     )
 
 
@@ -100,6 +101,25 @@ class FailingCodexRuntime(CodexRuntime):
             await bridge.queue.put(None)
 
 
+class KoreanCodexRuntime(CodexRuntime):
+    @property
+    def sdk_available(self) -> bool:
+        return True
+
+    async def _run_codex_tool_agent(
+        self,
+        request: RunRequest,
+        bridge: AgenticEventBridge,
+    ) -> None:
+        try:
+            report = "# 연구 보고서\n\n" + ("이 보고서는 생성 시 대상 언어로 작성된 문장입니다. " * 45)
+            await bridge.on_tool_start("submit_report", {"length": len(report), "language": request.language})
+            result = await runtime_module.tool_submit_report(request, bridge, report)
+            await bridge.on_tool_end("submit_report", result)
+        finally:
+            await bridge.queue.put(None)
+
+
 class CodexRuntimeProgressTests(unittest.IsolatedAsyncioTestCase):
     async def test_codex_tool_turn_budget_covers_required_local_workflow(self) -> None:
         self.assertGreaterEqual(
@@ -117,6 +137,10 @@ class CodexRuntimeProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"of {CODEX_AGENTIC_MAX_TOOL_TURNS}", prompt)
         self.assertIn("near the tool-turn limit", prompt)
 
+        instructions = _codex_agentic_instructions(make_request(language="ko"), "OpenAI Codex SDK")
+        self.assertIn("submit_report.report_markdown", instructions)
+        self.assertIn("must be written in ko", instructions)
+
     async def test_codex_stream_emits_tool_progress_while_native_task_runs(self) -> None:
         with (
             patch("medical_deep_research.runtime.provider_fallback_reason", return_value=None),
@@ -131,6 +155,19 @@ class CodexRuntimeProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("search_pubmed", tool_events[0].message)
         self.assertEqual(events[-1].event_type, EventType.RUN_COMPLETED)
         self.assertEqual(events[-1].progress, 100)
+
+    async def test_codex_target_language_generation_does_not_emit_translation_error(self) -> None:
+        with (
+            patch("medical_deep_research.runtime.provider_fallback_reason", return_value=None),
+            patch.object(runtime_module, "CODEX_AGENTIC_HEARTBEAT_SECONDS", 0.01),
+            patch.object(runtime_module, "CODEX_AGENTIC_TIMEOUT_SECONDS", 1.0),
+        ):
+            events = [event async for event in KoreanCodexRuntime().stream_run(make_request(language="ko"))]
+
+        final = [event for event in events if event.event_type == EventType.RUN_COMPLETED][-1]
+        self.assertIn("대상 언어", final.report_markdown)
+        self.assertNotIn("translation_status", final.extra)
+        self.assertNotIn("translation_error", final.extra)
 
     async def test_codex_stream_fails_without_deterministic_fallback(self) -> None:
         events = []

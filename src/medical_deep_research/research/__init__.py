@@ -1,7 +1,20 @@
 """Research planning, search, scoring, verification, and reporting tools."""
 
-from .models import EvidenceStudy, QueryPlan, ScoredStudy, SearchProviderResult, VerificationSummary
+from .audit import build_audit_report
+from .connectors import source_catalog
+from .models import (
+    AuditFinding,
+    AuditReport,
+    EvidenceStudy,
+    PrismaSummary,
+    QueryPlan,
+    ScoredStudy,
+    SearchProviderResult,
+    SourceCatalogEntry,
+    VerificationSummary,
+)
 from .planning import build_query_plan
+from .prisma import build_prisma_summary
 from .reporting import (
     MAX_REPORT_STUDIES,
     format_vancouver_citation,
@@ -21,12 +34,18 @@ from .verification import (
 
 __all__ = [
     "MAX_REPORT_STUDIES",
+    "AuditFinding",
+    "AuditReport",
     "EvidenceStudy",
+    "PrismaSummary",
     "QueryPlan",
     "ScoredStudy",
     "SearchProviderResult",
+    "SourceCatalogEntry",
     "VerificationSummary",
+    "build_audit_report",
     "build_query_plan",
+    "build_prisma_summary",
     "deduplicate_studies",
     "empty_verification_summary",
     "enrich_report_citations",
@@ -41,5 +60,6 @@ __all__ = [
     "search_preprints",
     "search_source",
     "snowball",
+    "source_catalog",
     "verify_studies",
 ]

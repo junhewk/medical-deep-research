@@ -520,10 +520,17 @@ class WorkspaceTabs(QTabWidget):
             self._model = model
             self._model_by_provider[self._provider] = model
 
+    def _provider_models(self) -> dict[str, str]:
+        try:
+            models = self._service.get_model_options(self._provider)
+        except Exception:
+            models = {}
+        return models or PROVIDER_MODELS.get(self._provider, {})
+
     def _current_model_id(self) -> str:
         text = self._model_combo.currentText().strip()
         data = self._model_combo.currentData()
-        models = PROVIDER_MODELS.get(self._provider, {})
+        models = self._provider_models()
 
         if isinstance(data, str) and data in models and text in {data, models[data]}:
             return data
@@ -537,7 +544,7 @@ class WorkspaceTabs(QTabWidget):
     def _refresh_model_combo(self) -> None:
         self._model_combo.blockSignals(True)
         self._model_combo.clear()
-        models = PROVIDER_MODELS.get(self._provider, {})
+        models = self._provider_models()
         api_keys = self._service.get_api_keys()
         if self._provider == "codex":
             has_key = self._service.has_codex_auth_cache()

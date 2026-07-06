@@ -22,12 +22,13 @@ Built with Python and PySide6 (Qt), packaged as a native desktop app for macOS a
 | **Architecture** | Agentic loop — LLM calls literature, evidence, full-text, and workspace tools via shared-state bridge |
 | **Providers** | Anthropic (Claude), OpenAI, OpenAI Codex (ChatGPT OAuth), DeepSeek, Google (Gemini), Local LLMs (Ollama, LM Studio, llama-server) |
 | **Query Framework** | PICO (clinical) + PCC (scoping reviews) + Free-form (auto-classified) |
-| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, ClinicalTrials.gov, Semantic Scholar, Scopus, citation snowballing — up to 25 results per source |
+| **Search** | PubMed, PMC, Europe PMC, Crossref, Cochrane, OpenAlex, Semantic Scholar, Scopus, citation snowballing — up to 25 literature records per source |
 | **Ranking** | Agent-driven: evidence-level pre-ranking, tiered/paged triage, PICO/PCC screening, EBM ranking, and GRADE-style appraisal |
 | **Full-text** | Europe PMC XML + Unpaywall + PubMed Central OA lookup, Java-free PDF parsing, user PDF upload checkpoint |
-| **Evidence** | Level I–V classification, GRADE certainty notes, PMID verification against PubMed |
+| **Evidence** | Literature-only ranked evidence, Level I–V classification, GRADE certainty notes, PMID verification against PubMed |
+| **Auditability** | Source catalog, PRISMA flow summary, deterministic audit report, verified reference rendering |
 | **Check Studies** | Side-by-side paper reader + AI chat, Vancouver [#] reference linking with bibliography popover |
-| **i18n** | English / Korean UI, LLM-powered report translation |
+| **i18n** | English / Korean UI, LLM-powered report translation for non-Codex providers, target-language Codex generation |
 | **Desktop** | Native PySide6 (Qt) window, PyInstaller packaging, push-based UI, splitter-based layout |
 | **UI polish** | Bundled Pretendard sans font, PICO/PCC-first research form, report outline/search reader |
 
@@ -68,6 +69,12 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
+### v2.9.9 — Literature-Only EBM Audit
+
+- Removed non-literature sources from ranked evidence workflows; ClinicalTrials.gov is no longer exposed as ranked agent evidence and trial registry data is treated only as auxiliary context where used.
+- Added source-catalog, PRISMA-flow, and deterministic audit artifacts across deterministic/native/agentic runs so reports can be checked for source coverage, screening counts, citation support, and unsupported numeric claims.
+- Added a provider model catalog plus more resilient literature HTTP handling with retries, rate limits, and cache-aware requests; fixed Codex target-language runs so successful Korean reports no longer show a misleading skipped-translation diagnostic.
+
 ### v2.9.8 — Windows Codex Bundle Fix
 
 - Fixed Windows desktop builds so the bundled OpenAI Codex SDK/runtime is treated as a required package and validated during packaging, preventing builds that omit `codex.exe`.
@@ -98,7 +105,7 @@ open "/Applications/Medical Deep Research.app"
 - Run progress is now monotonic across repeated phases and rewinds, with pass labels in the trace and 100% reserved for completion.
 - The agent workflow now includes explicit `screen_studies` and `appraise_evidence` checkpoints before report writing.
 - Citation snowballing can expand ranked studies through Europe PMC references/citations and OpenAlex fallbacks, then merge and re-screen candidates.
-- Clinical questions now search ClinicalTrials.gov for registered, ongoing, and completed-but-unpublished trials to surface publication-bias signals.
+- Added ClinicalTrials.gov registry support for registered, ongoing, and completed-but-unpublished trial context.
 - Full-text retrieval tries Europe PMC JATS XML before PDF routes and keeps user PDF checkpoints connected to downstream parsing and appraisal.
 
 ## Quick Start (from source)
@@ -162,7 +169,7 @@ The agent autonomously executes a multi-step research workflow:
 
 ```
  1. plan_search        → Build search strategy (keywords, databases, queries)
- 2. search_*           → Search 3–5 databases plus ClinicalTrials.gov (up to 25 results per source)
+ 2. search_*           → Search literature databases (up to 25 records per source)
  3. get_studies        → Deduplicate and pre-score into evidence-level tiers (I→V)
  4. browse_studies     → Page/filter the scored pool by evidence level or source
  5. screen_studies     → PICO include/exclude — whitelist, only included studies survive
@@ -173,7 +180,8 @@ The agent autonomously executes a multi-step research workflow:
 10. verify_studies     → Validate PMIDs against PubMed
 11. synthesize_report  → Collect structured evidence data
 12. submit_report      → Agent writes and submits the final synthesis report
-13. [translate]        → If language is Korean, translate via LLM (English preserved as artifact)
+13. audit/prisma       → Save PRISMA flow and deterministic audit artifacts
+14. [translate]        → Non-Codex providers can translate after generation; Codex writes in the target language
 ```
 
 The LLM drives the workflow — it decides what to search, screens and ranks evidence by EBM quality, grades certainty, and writes the synthesis. Tools use a **shared-state bridge** so the agent never passes large JSON blobs as arguments.
@@ -208,10 +216,11 @@ All providers fall back to a deterministic pipeline if SDK/credentials are unava
 | Crossref | Free | DOI metadata and publisher coverage |
 | Cochrane | Free (via PubMed) | Systematic reviews only |
 | OpenAlex | Free | Broad academic coverage and citation fallback |
-| ClinicalTrials.gov | Free | Registered/ongoing trials, phase/status, posted-results flag |
 | Semantic Scholar | API key required | Medicine field filter; skipped without key |
 | Scopus | API key required | Citation counts, broader coverage; STANDARD/COMPLETE view toggle |
 | Snowballing | Free | Europe PMC references/citations with OpenAlex DOI fallback |
+
+ClinicalTrials.gov is intentionally not ranked as EBM literature evidence. Registry information may be used only as auxiliary context for publication-bias or ongoing-study signals.
 
 The publication-year window is configurable per-app in **New Research** (default: last 5 years).
 
@@ -240,10 +249,15 @@ src/medical_deep_research/
 ├── service.py              # Run orchestration + push-based UI updates
 ├── runtime.py              # Provider runtimes (Anthropic, OpenAI, Codex, Google, Local)
 ├── agentic_tools.py        # Shared tool logic + system prompts + translation
+├── model_catalog.py        # Provider model catalog discovery and static fallbacks
 ├── research/
+│   ├── audit.py            # Deterministic report/evidence audit artifacts
+│   ├── connectors.py       # Source catalog and rankable literature-source policy
 │   ├── fulltext.py         # Europe PMC JATS XML full-text retrieval
+│   ├── http.py             # Retried/rate-limited/cache-aware HTTP helper
 │   ├── planning.py         # Query planning, keyword extraction, domain classification
-│   ├── search.py           # PubMed, PMC, Europe PMC, Crossref, ClinicalTrials.gov, OpenAlex, Scopus
+│   ├── prisma.py           # PRISMA flow summary artifacts
+│   ├── search.py           # PubMed, PMC, Europe PMC, Crossref, OpenAlex, Semantic Scholar, Scopus
 │   ├── scoring.py          # Evidence level scoring, composite ranking
 │   ├── snowball.py         # Europe PMC/OpenAlex citation-graph traversal
 │   ├── verification.py     # PMID verification via NCBI

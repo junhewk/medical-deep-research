@@ -498,7 +498,6 @@ _PCC_AI_COMMUNICATION_REQUIRED_SOURCES = (
     "Europe PMC",
     "OpenAlex",
     "Crossref",
-    "ClinicalTrials.gov",
 )
 
 
@@ -574,7 +573,7 @@ def _missing_required_source_attempts(request: RunRequest, bridge: AgenticEventB
         return []
     required = [
         source for source in _PCC_AI_COMMUNICATION_REQUIRED_SOURCES
-        if source in plan.databases or source == "ClinicalTrials.gov"
+        if source in plan.databases
     ]
     attempted = _source_attempts(bridge)
     return [source for source in required if source not in attempted]
@@ -943,19 +942,6 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
             "skipped": r.skipped,
         }
 
-    registry_trials = [
-        {
-            "rank": s.reference_number,
-            "title": s.title,
-            "nct_id": s.source_id,
-            "status": s.trial_status,
-            "phase": s.trial_phase,
-            "has_published_results": s.has_published_results,
-        }
-        for s in bridge.ranked_studies
-        if s.source == "clinicaltrials"
-    ]
-
     data: dict[str, Any] = {
         "query": request.query,
         "query_type": request.query_type,
@@ -982,8 +968,6 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         data["screening"] = bridge.screening
     if bridge.appraisal:
         data["appraisal"] = bridge.appraisal
-    if registry_trials:
-        data["registry_trials"] = registry_trials
 
     fulltext_excerpts: list[dict[str, Any]] = []
     for s in bridge.ranked_studies[:MAX_REPORT_STUDIES]:
@@ -1046,11 +1030,6 @@ async def tool_synthesize_report(request: RunRequest, bridge: AgenticEventBridge
         "Number references sequentially as [1], [2], [3] with no gaps, and use only those same numbers in text citations. "
         "Write in the language specified by the query language setting."
     )
-    if registry_trials:
-        instructions += (
-            " In the Discussion, compare the registered trials against the published evidence and explicitly "
-            "flag any completed-but-unpublished trials (has_published_results = false) as potential publication bias."
-        )
     data["instructions"] = instructions
     bridge._intermediate["synthesize_report"] = data
     return data
@@ -1859,7 +1838,7 @@ async def _download_pdf_bytes(rank: int, urls: list[str]) -> tuple[bytes | None,
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(30.0, connect=5.0),
                     follow_redirects=True,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.7; academic-research)"},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.9; academic-research)"},
                 ) as client:
                     resp = await client.get(url)
                     resp.raise_for_status()
@@ -2503,7 +2482,7 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
 ## Tools
 
 **Planning**: plan_search, suggest_databases, write_todos, update_progress
-**Search** (one call each): search_pubmed, search_pmc, search_europe_pmc, search_openalex, search_crossref, search_cochrane, search_semantic_scholar, search_scopus{", search_clinical_trials" if is_clinical else ""}, search_preprints
+**Search** (one call each): search_pubmed, search_pmc, search_europe_pmc, search_openalex, search_crossref, search_cochrane, search_semantic_scholar, search_scopus, search_preprints
 **Snowballing** (citation-graph traversal on ranked studies):
 - get_references(reference_number) — fetch the reference list of a ranked study [n] (backward)
 - get_citations(reference_number) — fetch papers citing a ranked study [n] (forward)
@@ -2524,7 +2503,7 @@ def agentic_system_prompt(request: RunRequest, provider_name: str = "Research Ag
 ## Workflow (follow exactly)
 
 1. Call `plan_search` with the query.
-2. Call search tools (one per database, use queries from the plan). Search 3-5 databases{" — include search_clinical_trials for registered/ongoing trials" if is_clinical else ""}.
+2. Call search tools (one per database, use queries from the plan). Search 3-5 literature databases.
 3. Call `get_studies` with context="{"clinical" if is_clinical else "general"}". \
 It returns a pre-ranked TOP TIER grouped by evidence level I->V (with facet counts and total). \
 Carefully review EVERY abstract shown. If `has_more` is true and you need wider coverage before screening, call `browse_studies(page=2)` or filter with `browse_studies(evidence_level=...)` / `browse_studies(source=...)`. Assess relevance to the query, study design, evidence level, and quality.
@@ -2608,7 +2587,6 @@ Search multiple databases for comprehensive coverage:
 - OpenAlex (broad academic coverage, free)
 - Semantic Scholar (Medicine-filtered, free)
 - Scopus (if API key available — citation counts)
-- ClinicalTrials.gov (registered/ongoing trials; flags whether results were posted)
 
 ## Evidence Classification
 
@@ -2656,7 +2634,6 @@ Do not present Level IV/V evidence before Level I/II evidence.
 - Address population-specific considerations
 - Clinical implications and applicability
 - Limitations of the available evidence (including whether appraisal was abstract-only)
-- Compare registered trials (ClinicalTrials.gov) against the published evidence; explicitly flag completed-but-unpublished trials as potential publication bias
 - Note how many studies were screened out and why
 - Gaps in the literature
 
@@ -2790,7 +2767,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "search_cochrane": "Search Cochrane for systematic reviews.",
     "search_semantic_scholar": "Search Semantic Scholar for academic papers.",
     "search_scopus": "Search Scopus for academic citations.",
-    "search_clinical_trials": "Search the ClinicalTrials.gov registry (API v2). Returns trials with status/phase and whether results were posted — use for ongoing trials and publication-bias awareness.",
+    "search_clinical_trials": "Search the ClinicalTrials.gov registry (API v2). Registry records are auxiliary context only and are excluded from EBM evidence ranking.",
     "search_preprints": "Search preprint servers (medRxiv/bioRxiv) via Europe PMC. Use ONLY when peer-reviewed evidence is sparse or the topic is very recent; results are labeled preprints and rated Level V.",
     "get_references": "Backward snowballing: fetch the reference list of a ranked study [n]. Candidates merge into the pool on the next get_studies call.",
     "get_citations": "Forward snowballing: fetch papers that cite a ranked study [n]. Candidates merge into the pool on the next get_studies call.",

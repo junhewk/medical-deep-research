@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from ..model_catalog import BUILTIN_PROVIDER_MODELS
+
+PROVIDER_MODELS = BUILTIN_PROVIDER_MODELS
+
 
 _I18N: dict[str, dict[str, str]] = {
     "en": {
@@ -241,41 +245,6 @@ _I18N: dict[str, dict[str, str]] = {
 
 def t(lang: str, key: str) -> str:
     return _I18N.get(lang, _I18N["en"]).get(key, _I18N["en"].get(key, key))
-
-
-PROVIDER_MODELS: dict[str, dict[str, str]] = {
-    "anthropic": {
-        "claude-sonnet-4-6": "Claude Sonnet 4.6",
-        "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
-    },
-    "openai": {
-        "gpt-4.1-mini": "GPT-4.1 Mini",
-        "gpt-5-mini": "GPT-5 Mini",
-        "gpt-5": "GPT-5",
-        "gpt-5.2": "GPT-5.2",
-    },
-    "codex": {
-        "gpt-5.4-mini": "GPT-5.4 Mini Codex",
-        "gpt-5.4": "GPT-5.4 Codex",
-        "gpt-5.3-codex-spark": "GPT-5.3 Codex Spark",
-    },
-    "deepseek": {
-        "deepseek-v4-pro": "DeepSeek V4 Pro",
-        "deepseek-v4-flash": "DeepSeek V4 Flash",
-    },
-    "google": {
-        "gemini-2.5-flash": "Gemini 2.5 Flash",
-        "gemini-2.5-pro": "Gemini 2.5 Pro",
-        "gemini-3-flash-preview": "Gemini 3.0 Flash Preview",
-        "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview",
-    },
-    "local": {
-        "qwen3.5-27b": "Qwen 3.5 27B",
-        "qwen2.5:14b": "Qwen 2.5 14B",
-        "llama3.1:8b": "Llama 3.1 8B",
-        "mistral-small": "Mistral Small",
-    },
-}
 
 
 PROVIDER_LABELS = {

@@ -809,7 +809,7 @@ wheels = [
 
 [[package]]
 name = "medical-deep-research"
-version = "2.9.8"
+version = "2.9.9"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

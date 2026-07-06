@@ -12,6 +12,8 @@ from ..config import load_settings
 from ..persistence import AppDatabase
 from ..research import (
     MAX_REPORT_STUDIES,
+    build_audit_report,
+    build_prisma_summary,
     build_query_plan,
     deduplicate_studies,
     empty_verification_summary,
@@ -20,6 +22,7 @@ from ..research import (
     render_verification_report,
     score_and_rank_results,
     search_source,
+    source_catalog,
     verify_studies,
 )
 from ..research.models import EvidenceStudy, ScoredStudy, SearchProviderResult, VerificationSummary
@@ -103,6 +106,11 @@ def _parse_verification_summary(verification_json: str | dict[str, object] | Non
     if not payload:
         return empty_verification_summary("Verification was not provided to the MCP report tool.")
     return VerificationSummary.model_validate(payload)
+
+
+def _parse_optional_dict(payload_json: str | dict[str, object] | None) -> dict[str, object] | None:
+    payload = _decode_payload(payload_json)
+    return payload if isinstance(payload, dict) else None
 
 
 def _source_queries_for_text(plan: Any, text: str, fields: dict[str, str] | None = None) -> dict[str, str]:
@@ -338,6 +346,39 @@ def create_literature_server() -> FastMCP:
     def databases(query: str, provider: str = "openai") -> list[str]:
         """Suggest database coverage for the current query."""
         return suggest_databases(query, provider)
+
+    @server.tool()
+    def list_sources(
+        ncbi_api_key: str | None = None,
+        scopus_api_key: str | None = None,
+        semantic_scholar_api_key: str | None = None,
+        offline_mode: bool | None = None,
+        include_auxiliary: bool = False,
+    ) -> dict[str, object]:
+        """List literature source catalog entries and credential status."""
+        api_keys = {
+            key: value
+            for key, value in {
+                "ncbi": _resolve_secret(ncbi_api_key, "MDR_NCBI_API_KEY"),
+                "scopus": _resolve_secret(scopus_api_key, "MDR_SCOPUS_API_KEY"),
+                "semantic_scholar": _resolve_secret(
+                    semantic_scholar_api_key,
+                    "MDR_SEMANTIC_SCHOLAR_API_KEY",
+                ),
+            }.items()
+            if value
+        }
+        return {
+            "literature_only": not include_auxiliary,
+            "sources": [
+                entry.model_dump()
+                for entry in source_catalog(
+                    api_keys,
+                    offline_mode=_resolve_offline_mode(offline_mode),
+                    include_auxiliary=include_auxiliary,
+                )
+            ],
+        }
 
     @server.tool()
     async def search_pubmed(
@@ -580,6 +621,13 @@ def create_literature_server() -> FastMCP:
         flattened = deduplicate_studies(flatten_studies(results))
         return {
             "plan": plan.model_dump(),
+            "source_catalog": [
+                entry.model_dump()
+                for entry in source_catalog(
+                    api_keys,
+                    offline_mode=resolved_offline_mode,
+                )
+            ],
             "results": [result.model_dump() for result in results],
             "studies": [study.model_dump() for study in flattened],
             "counts": {result.source: len(result.studies) for result in results},
@@ -662,6 +710,58 @@ def create_evidence_server() -> FastMCP:
             offline_mode=_resolve_offline_mode(offline_mode),
         )
         return {"summary": summary.model_dump(), "markdown": render_verification_report(summary)}
+
+    @server.tool()
+    def prisma_flow(
+        search_results_json: str | list[dict[str, object]],
+        ranked_studies_json: str | list[dict[str, object]],
+        screening_json: str | dict[str, object] | None = None,
+        full_text_assessed: int = 0,
+    ) -> dict[str, object]:
+        """Build a deterministic PRISMA-style flow summary."""
+        summary = build_prisma_summary(
+            _parse_search_results(search_results_json),
+            _parse_scored_studies(ranked_studies_json),
+            screening=_parse_optional_dict(screening_json),
+            full_text_assessed=full_text_assessed,
+            final_synthesis_limit=MAX_REPORT_STUDIES,
+        )
+        return summary.model_dump()
+
+    @server.tool()
+    def audit_report(
+        report_markdown: str,
+        search_results_json: str | list[dict[str, object]],
+        ranked_studies_json: str | list[dict[str, object]],
+        verification_json: str | dict[str, object] | None = None,
+        screening_json: str | dict[str, object] | None = None,
+        appraisal_json: str | dict[str, object] | None = None,
+        fulltext_json: str | dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Audit a report against stored citations, counts, verification, and source text."""
+        fulltext_payload = _parse_optional_dict(fulltext_json)
+        fulltext_excerpts = []
+        if isinstance(fulltext_payload, dict):
+            fulltext = fulltext_payload.get("fulltext")
+            if isinstance(fulltext, dict) and isinstance(fulltext.get("excerpts"), list):
+                fulltext_excerpts = [
+                    item for item in fulltext["excerpts"] if isinstance(item, dict)
+                ]
+            elif isinstance(fulltext_payload.get("excerpts"), list):
+                fulltext_excerpts = [
+                    item for item in fulltext_payload["excerpts"] if isinstance(item, dict)
+                ]
+        audit = build_audit_report(
+            report_markdown,
+            _parse_search_results(search_results_json),
+            _parse_scored_studies(ranked_studies_json),
+            _parse_verification_summary(verification_json),
+            screening=_parse_optional_dict(screening_json),
+            appraisal=_parse_optional_dict(appraisal_json),
+            fulltext_excerpts=fulltext_excerpts,
+            final_synthesis_limit=MAX_REPORT_STUDIES,
+        )
+        return audit.model_dump()
 
     @server.tool()
     def synthesize_report(

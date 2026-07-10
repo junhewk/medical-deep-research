@@ -61,31 +61,56 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       # --- macOS Build ---
-      - name: Build macOS app
+      - name: Import Apple Developer ID certificate
         if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
         run: |
-          # Icons are pre-built in assets/icon.icns (committed)
-          # Run PyInstaller (spec file handles Qt module stripping)
-          uv run python -m PyInstaller --noconfirm --clean "Medical Deep Research.spec"
+          if [[ -z "${APPLE_DEVELOPER_ID_CERTIFICATE_BASE64}" || -z "${APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD}" ]]; then
+            echo "::error::Missing APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 or APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD secret."
+            exit 1
+          fi
 
-          # Ad-hoc sign the bundle so macOS does not treat nested unsigned
-          # PyInstaller binaries as a damaged app. Full notarization requires
-          # Developer ID credentials, but this fixes broken internal signatures.
-          codesign --force --deep --sign - "dist/Medical Deep Research.app"
-          codesign --verify --deep --strict --verbose=2 "dist/Medical Deep Research.app"
+          CERTIFICATE_PATH="${RUNNER_TEMP}/developer-id.p12"
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
 
-          echo "App bundle size: $(du -sh 'dist/Medical Deep Research.app' | cut -f1)"
+          if ! printf '%s' "${APPLE_DEVELOPER_ID_CERTIFICATE_BASE64}" | base64 --decode > "${CERTIFICATE_PATH}" 2>/dev/null; then
+            printf '%s' "${APPLE_DEVELOPER_ID_CERTIFICATE_BASE64}" | base64 -D > "${CERTIFICATE_PATH}"
+          fi
 
-      - name: Create macOS DMG
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERTIFICATE_PATH}" \
+            -k "${KEYCHAIN_PATH}" \
+            -P "${APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security list-keychains -d user -s "${KEYCHAIN_PATH}"
+          security default-keychain -s "${KEYCHAIN_PATH}"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+
+      - name: Build signed and notarized macOS DMG
         if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          BUNDLE_ID: ${{ vars.MACOS_BUNDLE_ID }}
+          CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
         run: |
-          DMG_NAME="Medical-Deep-Research-${{ steps.version.outputs.version }}-macOS.dmg"
-          hdiutil create -volname "Medical Deep Research" \
-            -srcfolder "dist/Medical Deep Research.app" \
-            -ov -format UDZO \
-            "dist/${DMG_NAME}"
-          codesign --force --sign - "dist/${DMG_NAME}"
-          codesign --verify --verbose=2 "dist/${DMG_NAME}"
+          for name in APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD CODESIGN_IDENTITY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing ${name} secret for macOS signing/notarization."
+              exit 1
+            fi
+          done
+          ./scripts/build-macos.sh --dmg --notarize
 
       - name: Upload macOS artifact
         if: matrix.platform == 'macos'
@@ -136,8 +161,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || format('manual-{0}', github.run_number) }}
-          name: "${{ github.ref_name || format('Build No.{0}', github.run_number) }}"
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('manual-{0}', github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('Build No.{0}', github.run_number) }}
           draft: false
           files: artifacts/**/*
           generate_release_notes: true

@@ -4,8 +4,22 @@ from PyInstaller.utils.hooks import collect_all
 
 import importlib.util as _importlib_util
 import os
+from pathlib import Path
 
-datas = [('src/medical_deep_research', 'medical_deep_research')]
+def _collect_data_tree(_source, _dest):
+    _source_path = Path(_source)
+    _items = []
+    for _path in _source_path.rglob('*'):
+        if not _path.is_file():
+            continue
+        _rel = _path.relative_to(_source_path)
+        if '__pycache__' in _rel.parts or _path.suffix in {'.pyc', '.pyo'}:
+            continue
+        _items.append((str(_path), str(Path(_dest) / _rel.parent)))
+    return _items
+
+
+datas = _collect_data_tree('src/medical_deep_research', 'medical_deep_research')
 binaries = []
 hiddenimports = [
     'medical_deep_research',
@@ -143,9 +157,11 @@ coll = COLLECT(
     upx_exclude=[],
     name='Medical Deep Research',
 )
+BUNDLE_IDENTIFIER = os.environ.get('BUNDLE_ID', 'com.junhewk.medical-deep-research')
+
 app = BUNDLE(
     coll,
     name='Medical Deep Research.app',
     icon='assets/icon.icns',
-    bundle_identifier='com.junhewk.medical-deep-research',
+    bundle_identifier=BUNDLE_IDENTIFIER,
 )

@@ -102,7 +102,7 @@ def _extract_models(provider: str, data: dict[str, Any]) -> dict[str, str]:
 def _fetch_models_dev(timeout_seconds: float = 3.0) -> dict[str, dict[str, str]]:
     request = Request(
         MODELS_DEV_URL,
-        headers={"User-Agent": "MedicalDeepResearch/2.9.9"},
+        headers={"User-Agent": "MedicalDeepResearch/2.9.10"},
     )
     with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - fixed public catalog URL.
         raw = response.read(2_000_000)

@@ -26,7 +26,7 @@ SEMANTIC_SCHOLAR_FIELDS = (
 )
 HTTP_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 POLITE_EMAIL = "medical-deep-research@users.noreply.github.com"
-USER_AGENT = f"MedicalDeepResearch/2.9.9 (mailto:{POLITE_EMAIL})"
+USER_AGENT = f"MedicalDeepResearch/2.9.10 (mailto:{POLITE_EMAIL})"
 LANDMARK_JOURNALS = {
     "new england journal of medicine",
     "nejm",

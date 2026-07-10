@@ -55,19 +55,11 @@ MDR_ANTHROPIC_RUNTIME=claude_sdk uv run medical-deep-research
 
 Legacy Claude SDK mode may require Git on macOS/Linux and Git for Windows/Git Bash on Windows.
 
-### macOS Gatekeeper
+### v2.9.10 — macOS Release Automation
 
-The macOS build is ad-hoc signed but not Apple-notarized. If macOS says the DMG or app is from an unidentified developer, open it with one of these methods:
-
-1. Control-click the DMG or **Medical Deep Research.app**, choose **Open**, then choose **Open** again.
-2. Or go to **System Settings → Privacy & Security** and choose **Open Anyway** for Medical Deep Research.
-
-If macOS reports that the app is "damaged", copy **Medical Deep Research.app** to `/Applications`, then run:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
-open "/Applications/Medical Deep Research.app"
-```
+- Added Developer ID signing and notarization support to the macOS build script, including recursive signing for bundled PyInstaller binaries.
+- Updated the desktop build workflow to produce signed macOS DMG artifacts from GitHub Actions.
+- Switched the release bundle identifier to the configurable `BUNDLE_ID` build setting.
 
 ### v2.9.9 — Literature-Only EBM Audit
 

@@ -256,7 +256,7 @@ if [[ "${CREATE_DMG}" == true ]]; then
     if [[ "${NOTARIZE}" == true ]]; then
         submit_notarization "dist/${DMG_NAME}"
         staple_path "dist/${DMG_NAME}"
-        spctl --assess --type open --verbose=4 "dist/${DMG_NAME}"
+        spctl --assess --type open --context context:primary-signature --verbose=4 "dist/${DMG_NAME}"
     fi
     echo "DMG: dist/${DMG_NAME}"
 fi

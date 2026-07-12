@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QStackedWidget,
     QStatusBar,
@@ -21,10 +23,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..config import Settings, load_settings
 from ..persistence import AppDatabase
 from ..reading_service import ReadingService
 from ..service import ResearchService
+from ..updates import (
+    GitHubUpdateService,
+    RELEASES_URL,
+    UpdateStatus,
+    acknowledge_updated_startup,
+    clear_update_status,
+)
 from .i18n import t as _translate
 from .sidebar import WorkspaceTabs
 from .tabs.artifacts_tab import ArtifactsTab
@@ -42,6 +52,7 @@ from .theme import (
     default_font,
     load_embedded_fonts,
 )
+from .update_dialog import UpdateAvailableDialog
 from .widgets.badge import BadgePill, status_badge_kind
 
 
@@ -131,6 +142,9 @@ class MainWindow(QMainWindow):
         self._lang = service.get_language()
         self._selected_run_id: str | None = None
         self._refresh_pending = False
+        self._update_service = GitHubUpdateService(settings.data_dir)
+        self._update_task: asyncio.Task[Any] | None = None
+        self._install_restarting = False
 
         self.setWindowTitle(settings.app_name)
         self.resize(1280, 860)
@@ -146,6 +160,8 @@ class MainWindow(QMainWindow):
         self._refresh_run_list()
         self._render_detail_placeholder()
         self._status.showMessage(self._t("ready"))
+        QTimer.singleShot(0, self._report_update_result)
+        QTimer.singleShot(1200, self._schedule_automatic_update_check)
 
     # ---- translation helper ----
     def _t(self, key: str) -> str:
@@ -168,6 +184,9 @@ class MainWindow(QMainWindow):
         self._workspace_tabs.runSelected.connect(self._on_run_selected_from_workspace)
         self._workspace_tabs.runsRefreshRequested.connect(self._refresh_run_list)
         self._workspace_tabs.quitRequested.connect(self.close)
+        self._workspace_tabs.checkUpdatesRequested.connect(self._on_manual_update_check)
+        self._workspace_tabs.autoUpdatesChanged.connect(self._on_auto_updates_changed)
+        self._workspace_tabs.set_auto_updates_supported(self._update_service.context.can_self_update)
         outer.addWidget(self._workspace_tabs, 1)
 
         # Run detail tab
@@ -339,6 +358,164 @@ class MainWindow(QMainWindow):
         self._main_holder.setCurrentWidget(self._detail_page)
         self._workspace_tabs.setCurrentWidget(self._main_holder)
 
+    # ---- application updates ----
+
+    def _create_update_task(self, coro) -> None:
+        if self._update_task is not None and not self._update_task.done():
+            close = getattr(coro, "close", None)
+            if callable(close):
+                close()
+            return
+        self._update_task = asyncio.create_task(coro)
+
+    def _on_manual_update_check(self) -> None:
+        self._create_update_task(self._check_for_updates(manual=True))
+
+    def _on_auto_updates_changed(self, enabled: bool) -> None:
+        self._service.set_auto_updates_enabled(enabled)
+        if enabled:
+            self._schedule_automatic_update_check()
+
+    def _schedule_automatic_update_check(self) -> None:
+        if not self._service.auto_updates_enabled() or not self._update_service.context.can_self_update:
+            return
+        raw = self._service.get_update_setting("last_update_check_at")
+        if raw:
+            try:
+                last_check = datetime.fromisoformat(raw)
+                if last_check.tzinfo is None:
+                    last_check = last_check.replace(tzinfo=UTC)
+                if datetime.now(UTC) - last_check < timedelta(hours=24):
+                    return
+            except ValueError:
+                pass
+        self._create_update_task(self._check_for_updates(manual=False))
+
+    async def _check_for_updates(self, *, manual: bool) -> None:
+        if manual:
+            self._status.showMessage(self._t("checking_updates"))
+        else:
+            self._service.set_update_setting("last_update_check_at", datetime.now(UTC).isoformat())
+        result = await self._update_service.check()
+        if result.status == UpdateStatus.ERROR:
+            if manual:
+                QMessageBox.warning(
+                    self,
+                    self._t("update_available"),
+                    self._t("update_check_failed").format(error=result.message),
+                )
+            self._status.showMessage(self._t("ready"))
+            return
+        if result.status == UpdateStatus.UP_TO_DATE:
+            if manual:
+                QMessageBox.information(self, self._t("app_title"), self._t("up_to_date"))
+            self._status.showMessage(self._t("ready"))
+            return
+        release = result.release
+        if release is None:
+            return
+        if result.status == UpdateStatus.UNSUPPORTED:
+            if manual:
+                QMessageBox.information(self, self._t("update_available"), self._t("update_requires_packaged"))
+                QDesktopServices.openUrl(QUrl(release.html_url or RELEASES_URL))
+            else:
+                self._status.showMessage(
+                    self._t("update_version_summary").format(current=__version__, latest=release.version)
+                )
+            return
+        skipped = self._service.get_update_setting("skipped_update_version")
+        if not manual and skipped == str(release.version):
+            return
+        self._show_update_dialog(release)
+
+    def _show_update_dialog(self, release) -> None:
+        dialog = UpdateAvailableDialog(release, __version__, self._t, self)
+        dialog.releaseRequested.connect(
+            lambda: QDesktopServices.openUrl(QUrl(release.html_url or RELEASES_URL))
+        )
+
+        def skip() -> None:
+            self._service.set_update_setting("skipped_update_version", str(release.version))
+            dialog.accept()
+
+        def install() -> None:
+            active = any(not task.done() for task in self._service._tasks.values())
+            if active:
+                answer = QMessageBox.warning(
+                    self,
+                    self._t("update_active_runs_title"),
+                    self._t("update_active_runs_message"),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+            dialog.accept()
+            self._create_update_task(self._download_and_install_update(release))
+
+        dialog.skipRequested.connect(skip)
+        dialog.installRequested.connect(install)
+        dialog.open()
+
+    async def _download_and_install_update(self, release) -> None:
+        progress = QProgressDialog(
+            self._t("downloading_update"),
+            self._t("cancel"),
+            0,
+            max(1, release.asset.size),
+            self,
+        )
+        progress.setWindowTitle(self._t("update_available"))
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+
+        def update_progress(downloaded: int, total: int) -> None:
+            if progress.wasCanceled():
+                raise asyncio.CancelledError
+            if total > 0 and progress.maximum() != total:
+                progress.setMaximum(total)
+            progress.setValue(downloaded)
+
+        try:
+            staged = await self._update_service.download_and_stage(release, progress=update_progress)
+            progress.setValue(progress.maximum())
+            self._update_service.launch_installer(release, staged)
+            self._install_restarting = True
+        except asyncio.CancelledError:
+            progress.cancel()
+            return
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                self._t("update_available"),
+                self._t("update_download_failed").format(error=exc),
+            )
+            return
+        finally:
+            progress.close()
+        self.close()
+
+    def _report_update_result(self) -> None:
+        status = acknowledge_updated_startup(self._settings.data_dir)
+        if not status:
+            return
+        state = status.get("status")
+        if state == "failed":
+            QMessageBox.warning(
+                self,
+                self._t("update_available"),
+                self._t("update_install_failed").format(error=status.get("message") or "Unknown error"),
+            )
+            clear_update_status(self._settings.data_dir)
+        elif state in {"pending", "succeeded"}:
+            version = status.get("version") or __version__
+            QMessageBox.information(
+                self,
+                self._t("app_title"),
+                self._t("update_installed").format(version=version),
+            )
+            QTimer.singleShot(3000, lambda: clear_update_status(self._settings.data_dir))
+
     # ---- language ----
 
     def _on_language_changed(self, new_lang: str) -> None:
@@ -367,6 +544,8 @@ class MainWindow(QMainWindow):
     # ---- shutdown ----
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if not self._install_restarting and self._update_task is not None and not self._update_task.done():
+            self._update_task.cancel()
         # Cancel any in-flight research tasks so the loop can stop cleanly.
         for task in list(self._service._tasks.values()):
             if not task.done():

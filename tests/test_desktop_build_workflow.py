@@ -16,3 +16,11 @@ class DesktopBuildWorkflowTests(unittest.TestCase):
             return
 
         self.assertIn("--extra codex", workflow)
+
+    def test_release_keeps_notarization_and_publishes_verified_update_assets(self) -> None:
+        workflow = (ROOT / ".github/workflows/python-desktop-build.yml").read_text()
+
+        self.assertIn("./scripts/build-macos.sh --dmg --notarize", workflow)
+        self.assertIn("Create macOS updater archive", workflow)
+        self.assertIn("*-macOS-update.zip", workflow)
+        self.assertIn("sha256sum Medical-Deep-Research-* > SHA256SUMS.txt", workflow)

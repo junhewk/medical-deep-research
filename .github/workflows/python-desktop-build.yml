@@ -59,6 +59,10 @@ jobs:
           print(p['project']['version'])
           ")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$VERSION" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match project version $VERSION" >&2
+            exit 1
+          fi
 
       # --- macOS Build ---
       - name: Import Apple Developer ID certificate
@@ -112,12 +116,22 @@ jobs:
           done
           ./scripts/build-macos.sh --dmg --notarize
 
+      - name: Create macOS updater archive
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          UPDATE_NAME="Medical-Deep-Research-${{ steps.version.outputs.version }}-macOS-update.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "dist/Medical Deep Research.app" "dist/${UPDATE_NAME}"
+
       - name: Upload macOS artifact
         if: matrix.platform == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/*-macOS-update.zip
           if-no-files-found: error
 
       # --- Windows Build ---
@@ -157,6 +171,12 @@ jobs:
 
       - name: List artifacts
         run: find artifacts -type f | head -20
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          cd artifacts
+          sha256sum Medical-Deep-Research-* > SHA256SUMS.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

@@ -10,6 +10,25 @@ from medical_deep_research.service import ResearchService
 
 
 class ServiceKeyTests(unittest.TestCase):
+    def test_update_preferences_default_enabled_and_persist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")
+            database = AppDatabase(settings)
+            try:
+                database.create_all()
+                service = ResearchService(database)
+
+                self.assertTrue(service.auto_updates_enabled())
+                service.set_auto_updates_enabled(False)
+                service.set_update_setting("skipped_update_version", "3.0.0")
+
+                self.assertFalse(service.auto_updates_enabled())
+                self.assertEqual(service.get_update_setting("skipped_update_version"), "3.0.0")
+                with self.assertRaises(ValueError):
+                    service.set_update_setting("unrelated", "value")
+            finally:
+                database.close()
+
     def test_blank_scopus_key_clears_stored_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             settings = Settings(data_dir=Path(tmp_dir), db_filename="test.sqlite")

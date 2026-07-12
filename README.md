@@ -40,6 +40,12 @@ Pre-built desktop apps for macOS and Windows are available on the [Releases](htt
 | macOS | `Medical-Deep-Research-*-macOS.dmg` |
 | Windows | `Medical-Deep-Research-*-Windows.zip` |
 
+Packaged apps check for stable updates from GitHub once per day by default. Use
+**File → Check for Updates…** to check immediately or disable automatic checks
+from the same menu. Updates are downloaded only after confirmation, verified
+against the release SHA-256 manifest, and installed when the app restarts.
+Source checkouts and read-only installations open the Releases page instead.
+
 API keys are configured in the app's **API Keys** panel (stored locally in SQLite). OpenAI Codex uses the **Codex ChatGPT Auth** controls in that same panel and stores OAuth state under the app data directory, not the user's global Codex profile.
 
 ### Anthropic Runtime
@@ -68,26 +74,14 @@ xattr -dr com.apple.quarantine "/Applications/Medical Deep Research.app"
 open "/Applications/Medical Deep Research.app"
 ```
 
-### v2.9.6 — Verified Citations
+### v2.9.11 — In-App Updates
 
-- The References section is now **rendered deterministically from verified bibliographic metadata** instead of being written freehand by the model, so fabricated authors, journals, volumes, issues, pages, and years are no longer possible (a frequent failure with local LLM runtimes).
-- Cited studies are re-fetched from their **authoritative record** — PubMed `esummary` (by PMID) and Crossref (by DOI) — and the canonical values win over search-time metadata, correcting wrong volumes/issues/pages, ISO journal abbreviations, publication years, and even mismatched DOIs.
-- The PubMed parser now captures **volume, issue, pages, and ISO journal abbreviation** (`EvidenceStudy` gained the corresponding fields), with a `MedlineDate` fallback for publication year.
+- Added daily automatic and on-demand GitHub release checks for packaged Windows and macOS apps.
+- Updates require confirmation, show release notes and download progress, and support skipping a release or disabling automatic checks.
+- Downloads are verified against release SHA-256 checksums before installation, with rollback if replacement or relaunch fails.
+- Release builds now publish a signed-app macOS update archive alongside the existing DMG and Windows ZIP.
 
-### v2.9.5 — Wider Search & Tiered Triage
-
-- Searches now return up to **25 results per source** (the agent previously self-limited to ~10), casting a wider net before triage.
-- `get_studies` returns a deterministically pre-ranked **top tier grouped by evidence level (I→V)** with facet counts; the new `browse_studies` tool pages or filters the full pool by evidence level or source without re-ranking or resetting screening.
-- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported as "not selected" in Methods. Up to 30 ranked studies now reach the synthesized report.
-- Fixed an evidence-level scoring bug where `"Level I"` matched II–V as a substring (scoring every level as the highest), so deterministic pre-ranking now reflects true Level I→V quality.
-
-### v2.9.4 — Screened Evidence Workflow
-
-- Run progress is now monotonic across repeated phases and rewinds, with pass labels in the trace and 100% reserved for completion.
-- The agent workflow now includes explicit `screen_studies` and `appraise_evidence` checkpoints before report writing.
-- Citation snowballing can expand ranked studies through Europe PMC references/citations and OpenAlex fallbacks, then merge and re-screen candidates.
-- Clinical questions now search ClinicalTrials.gov for registered, ongoing, and completed-but-unpublished trials to surface publication-bias signals.
-- Full-text retrieval tries Europe PMC JATS XML before PDF routes and keeps user PDF checkpoints connected to downstream parsing and appraisal.
+See [GitHub Releases](https://github.com/junhewk/medical-deep-research/releases) for previous version history.
 
 ## Quick Start (from source)
 

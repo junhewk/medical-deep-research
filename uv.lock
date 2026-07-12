@@ -809,12 +809,13 @@ wheels = [
 
 [[package]]
 name = "medical-deep-research"
-version = "2.9.6"
+version = "2.9.11"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "httpx" },
     { name = "mcp", extra = ["cli"] },
+    { name = "packaging" },
     { name = "pydantic-settings" },
     { name = "pyside6" },
     { name = "qasync" },
@@ -878,6 +879,7 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'langchain'" },
     { name = "mcp", extras = ["cli"] },
     { name = "openai-agents", marker = "extra == 'openai'" },
+    { name = "packaging", specifier = ">=24" },
     { name = "openai-codex", marker = "extra == 'codex'", git = "https://github.com/openai/codex.git?subdirectory=sdk%2Fpython&rev=bdd282f3bbd55df3a869a5438519cd948c134d4d" },
     { name = "pdfminer-six", marker = "extra == 'pdf'" },
     { name = "pydantic-settings" },

@@ -16,7 +16,26 @@ permissions:
   contents: write
 
 jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Read and validate version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$VERSION" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match project version $VERSION" >&2
+            exit 1
+          fi
+
   build:
+    needs: metadata
     strategy:
       fail-fast: false
       matrix:
@@ -49,17 +68,6 @@ jobs:
           uv sync --extra openai --extra anthropic --extra pdf --extra langchain --extra google
           uv pip install pyinstaller
 
-      - name: Read version
-        id: version
-        shell: bash
-        run: |
-          VERSION=$(uv run python -c "
-          import tomllib, pathlib
-          p = tomllib.loads(pathlib.Path('pyproject.toml').read_text())
-          print(p['project']['version'])
-          ")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       # --- macOS Build ---
       - name: Build macOS app
         if: matrix.platform == 'macos'
@@ -79,7 +87,10 @@ jobs:
       - name: Create macOS DMG
         if: matrix.platform == 'macos'
         run: |
-          DMG_NAME="Medical-Deep-Research-${{ steps.version.outputs.version }}-macOS.dmg"
+          UPDATE_NAME="Medical-Deep-Research-${{ needs.metadata.outputs.version }}-macOS-update.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "dist/Medical Deep Research.app" "dist/${UPDATE_NAME}"
+          DMG_NAME="Medical-Deep-Research-${{ needs.metadata.outputs.version }}-macOS.dmg"
           hdiutil create -volname "Medical Deep Research" \
             -srcfolder "dist/Medical Deep Research.app" \
             -ov -format UDZO \
@@ -92,7 +103,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/*-macOS-update.zip
           if-no-files-found: error
 
       # --- Windows Build ---
@@ -109,7 +122,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          7z a -tzip "Medical-Deep-Research-${{ steps.version.outputs.version }}-Windows.zip" "Medical Deep Research"
+          7z a -tzip "Medical-Deep-Research-${{ needs.metadata.outputs.version }}-Windows.zip" "Medical Deep Research"
 
       - name: Upload Windows artifact
         if: matrix.platform == 'windows'
@@ -121,7 +134,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release)
-    needs: build
+    needs: [metadata, build]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -133,11 +146,17 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | head -20
 
+      - name: Create checksums
+        shell: bash
+        run: |
+          cd artifacts
+          sha256sum Medical-Deep-Research-* > SHA256SUMS.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || format('manual-{0}', github.run_number) }}
-          name: "${{ github.ref_name || format('Build No.{0}', github.run_number) }}"
+          tag_name: v${{ needs.metadata.outputs.version }}
+          name: "v${{ needs.metadata.outputs.version }}"
           draft: false
           files: artifacts/**/*
           generate_release_notes: true

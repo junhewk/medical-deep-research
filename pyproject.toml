@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "medical-deep-research"
-version = "2.9.6"
+version = "2.9.11"
 description = "Python-first rewrite of the Medical Deep Research desktop application"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,6 +16,7 @@ dependencies = [
   "anyio",
   "httpx",
   "mcp[cli]",
+  "packaging>=24",
   "PySide6>=6.6",
   "qasync>=0.27",
   "pydantic-settings",

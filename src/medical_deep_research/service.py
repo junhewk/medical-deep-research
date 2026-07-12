@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlmodel import col, desc, select
@@ -102,6 +103,29 @@ class ResearchService:
             else:
                 session.add(Setting(key="language", value=language, category="general"))
             session.commit()
+
+    def get_update_setting(self, key: str, default: str = "") -> str:
+        with self.database.session() as session:
+            setting = session.get(Setting, key)
+            return setting.value if setting else default
+
+    def set_update_setting(self, key: str, value: str) -> None:
+        if key not in {"auto_update_enabled", "last_update_check_at", "skipped_update_version"}:
+            raise ValueError(f"Unsupported update setting: {key}")
+        with self.database.session() as session:
+            existing = session.get(Setting, key)
+            if existing:
+                existing.value = value
+                existing.updated_at = datetime.now(UTC)
+            else:
+                session.add(Setting(key=key, value=value, category="updates"))
+            session.commit()
+
+    def auto_updates_enabled(self) -> bool:
+        return self.get_update_setting("auto_update_enabled", "true").lower() == "true"
+
+    def set_auto_updates_enabled(self, enabled: bool) -> None:
+        self.set_update_setting("auto_update_enabled", "true" if enabled else "false")
 
     def get_recent_years_lookback(self) -> int:
         with self.database.session() as session:

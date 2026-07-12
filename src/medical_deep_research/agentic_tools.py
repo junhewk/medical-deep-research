@@ -1838,7 +1838,7 @@ async def _download_pdf_bytes(rank: int, urls: list[str]) -> tuple[bytes | None,
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(30.0, connect=5.0),
                     follow_redirects=True,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.10; academic-research)"},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; MedicalDeepResearch/2.9.12; academic-research)"},
                 ) as client:
                     resp = await client.get(url)
                     resp.raise_for_status()

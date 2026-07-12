@@ -69,6 +69,8 @@ class WorkspaceTabs(QTabWidget):
     runSelected = Signal(str)        # noqa: N815
     runsRefreshRequested = Signal()  # noqa: N815
     quitRequested = Signal()         # noqa: N815
+    checkUpdatesRequested = Signal()  # noqa: N815
+    autoUpdatesChanged = Signal(bool)  # noqa: N815
 
     def __init__(
         self,
@@ -143,6 +145,15 @@ class WorkspaceTabs(QTabWidget):
         self._file_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
         menu = QMenu(self._file_button)
+        self._check_updates_action = QAction(self._t("check_updates"), self)
+        self._check_updates_action.triggered.connect(self.checkUpdatesRequested.emit)
+        menu.addAction(self._check_updates_action)
+        self._auto_updates_action = QAction(self._t("auto_check_updates"), self)
+        self._auto_updates_action.setCheckable(True)
+        self._auto_updates_action.setChecked(self._service.auto_updates_enabled())
+        self._auto_updates_action.toggled.connect(self.autoUpdatesChanged.emit)
+        menu.addAction(self._auto_updates_action)
+        menu.addSeparator()
         self._quit_action = QAction(self._t("quit"), self)
         self._quit_action.setShortcut("Ctrl+Q")
         self._quit_action.triggered.connect(self.quitRequested.emit)
@@ -211,6 +222,9 @@ class WorkspaceTabs(QTabWidget):
 
     def refresh_provider_diagnostics(self) -> None:
         self._refresh_provider_status_cards()
+
+    def set_auto_updates_supported(self, supported: bool) -> None:
+        self._auto_updates_action.setEnabled(supported)
 
     # ---- New Research form ----
 
@@ -915,6 +929,8 @@ class WorkspaceTabs(QTabWidget):
         self.setTabText(self.indexOf(self._api_keys_page), self._t("api_keys"))
         self._file_button.setText(self._t("file_menu"))
         self._quit_action.setText(self._t("quit"))
+        self._check_updates_action.setText(self._t("check_updates"))
+        self._auto_updates_action.setText(self._t("auto_check_updates"))
         self._new_research_title_label.setText(self._t("new_research"))
         self._new_research_desc_label.setText(self._t("new_research_desc"))
         self._provider_label.setText(self._t("provider"))

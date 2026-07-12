@@ -41,6 +41,12 @@ Pre-built desktop apps for macOS and Windows are available on the [Releases](htt
 | macOS | `Medical-Deep-Research-*-macOS.dmg` |
 | Windows | `Medical-Deep-Research-*-Windows.zip` |
 
+Packaged apps check for stable updates from GitHub once per day by default. Use
+**File → Check for Updates…** to check immediately or disable automatic checks
+from the same menu. Updates are downloaded only after confirmation, verified
+against the release SHA-256 manifest, and installed when the app restarts.
+Source checkouts and read-only installations open the Releases page instead.
+
 API keys are configured in the app's **API Keys** panel (stored locally in SQLite). OpenAI Codex uses the **Codex ChatGPT Auth** controls in that same panel and stores OAuth state under the app data directory, not the user's global Codex profile.
 
 ### Anthropic Runtime
@@ -55,50 +61,14 @@ MDR_ANTHROPIC_RUNTIME=claude_sdk uv run medical-deep-research
 
 Legacy Claude SDK mode may require Git on macOS/Linux and Git for Windows/Git Bash on Windows.
 
-### v2.9.10 — macOS Release Automation
+### v2.9.12 — In-App Updates
 
-- Added Developer ID signing and notarization support to the macOS build script, including recursive signing for bundled PyInstaller binaries.
-- Updated the desktop build workflow to produce signed macOS DMG artifacts from GitHub Actions.
-- Switched the release bundle identifier to the configurable `BUNDLE_ID` build setting.
+- Added daily automatic and on-demand GitHub release checks for packaged Windows and macOS apps.
+- Updates require confirmation, show release notes and download progress, and support skipping a release or disabling automatic checks.
+- Downloads are verified against release SHA-256 checksums before installation, with rollback if replacement or relaunch fails.
+- Release builds now publish a notarized-app macOS update archive alongside the existing DMG and Windows ZIP.
 
-### v2.9.9 — Literature-Only EBM Audit
-
-- Removed non-literature sources from ranked evidence workflows; ClinicalTrials.gov is no longer exposed as ranked agent evidence and trial registry data is treated only as auxiliary context where used.
-- Added source-catalog, PRISMA-flow, and deterministic audit artifacts across deterministic/native/agentic runs so reports can be checked for source coverage, screening counts, citation support, and unsupported numeric claims.
-- Added a provider model catalog plus more resilient literature HTTP handling with retries, rate limits, and cache-aware requests; fixed Codex target-language runs so successful Korean reports no longer show a misleading skipped-translation diagnostic.
-
-### v2.9.8 — Windows Codex Bundle Fix
-
-- Fixed Windows desktop builds so the bundled OpenAI Codex SDK/runtime is treated as a required package and validated during packaging, preventing builds that omit `codex.exe`.
-- Added an internal bundled-runtime health check used by build validation, Codex provider diagnostics, and ChatGPT auth status.
-- Added a Codex auth recovery state in the UI: when the bundled runtime is missing, login controls are disabled and a **Download latest build** button opens the latest release page.
-
-### v2.9.7 — Codex Runtime & PCC Evidence Quality
-
-- Added **OpenAI Codex as a first-class provider** using ChatGPT OAuth, with app-managed auth state, provider-specific diagnostics, and runtime progress reporting.
-- Improved Codex evidence synthesis for **PCC/scoping-review questions** with stricter numbered report sections, richer full-text use, broader study triage, and quality gates that prevent short status summaries from being accepted as reports.
-- Hardened PubMed/PMC evidence retrieval paths, including NCBI-friendly user-agent/versioning, PMID/PMCID/OA lookup handling, and tests around citation metadata, report scope, Codex schema, and MCP search behavior.
-
-### v2.9.6 — Verified Citations
-
-- The References section is now **rendered deterministically from verified bibliographic metadata** instead of being written freehand by the model, so fabricated authors, journals, volumes, issues, pages, and years are no longer possible (a frequent failure with local LLM runtimes).
-- Cited studies are re-fetched from their **authoritative record** — PubMed `esummary` (by PMID) and Crossref (by DOI) — and the canonical values win over search-time metadata, correcting wrong volumes/issues/pages, ISO journal abbreviations, publication years, and even mismatched DOIs.
-- The PubMed parser now captures **volume, issue, pages, and ISO journal abbreviation** (`EvidenceStudy` gained the corresponding fields), with a `MedlineDate` fallback for publication year.
-
-### v2.9.5 — Wider Search & Tiered Triage
-
-- Searches now return up to **25 results per source** (the agent previously self-limited to ~10), casting a wider net before triage.
-- `get_studies` returns a deterministically pre-ranked **top tier grouped by evidence level (I→V)** with facet counts; the new `browse_studies` tool pages or filters the full pool by evidence level or source without re-ranking or resetting screening.
-- `screen_studies` is now a **whitelist** — only studies the agent explicitly includes survive; the rest are dropped and reported as "not selected" in Methods. Up to 30 ranked studies now reach the synthesized report.
-- Fixed an evidence-level scoring bug where `"Level I"` matched II–V as a substring (scoring every level as the highest), so deterministic pre-ranking now reflects true Level I→V quality.
-
-### v2.9.4 — Screened Evidence Workflow
-
-- Run progress is now monotonic across repeated phases and rewinds, with pass labels in the trace and 100% reserved for completion.
-- The agent workflow now includes explicit `screen_studies` and `appraise_evidence` checkpoints before report writing.
-- Citation snowballing can expand ranked studies through Europe PMC references/citations and OpenAlex fallbacks, then merge and re-screen candidates.
-- Added ClinicalTrials.gov registry support for registered, ongoing, and completed-but-unpublished trial context.
-- Full-text retrieval tries Europe PMC JATS XML before PDF routes and keeps user PDF checkpoints connected to downstream parsing and appraisal.
+See [GitHub Releases](https://github.com/junhewk/medical-deep-research/releases) for previous version history.
 
 ## Quick Start (from source)
 
